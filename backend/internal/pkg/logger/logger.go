@@ -31,7 +31,9 @@ const (
 	FieldEvent     = "event"
 	FieldSeverity  = "severity"
 	FieldClientIP  = "client_ip"
-	FieldTenantID  = "tenant_id"
+	FieldAppID     = "app_id"
+	FieldAPIKeyID  = "api_key_id"
+	FieldKeyHint   = "api_key_hint"
 	FieldLatencyMS = "latency_ms"
 )
 

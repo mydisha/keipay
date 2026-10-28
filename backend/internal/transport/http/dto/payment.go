@@ -12,6 +12,7 @@
 package dto
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
@@ -50,18 +51,22 @@ type CreatePaymentRequest struct {
 	Items                []OrderItemRequest `json:"items" binding:"omitempty,dive"`
 	Customer             *CustomerRequest   `json:"customer"`
 	ExpectedSettlementAt *time.Time         `json:"expected_settlement_at"`
+	Metadata             json.RawMessage    `json:"metadata"`
 }
 
 // PaymentResponse is the response body for payment endpoints.
 type PaymentResponse struct {
+	ID                   string               `json:"id"`
 	PaymentID            int64                `json:"payment_id"`
+	Reference            string               `json:"reference"`
 	OrderID              string               `json:"order_id"`
 	Status               domain.PaymentStatus `json:"status"`
 	Amount               int64                `json:"amount"`
 	Currency             string               `json:"currency"`
 	InvoiceURL           string               `json:"invoice_url"`
 	Items                []domain.OrderItem   `json:"items,omitempty"`
-	ExpiresAt            any                  `json:"expires_at,omitempty"`
+	Metadata             domain.Metadata      `json:"metadata"`
+	ExpiresAt            *time.Time           `json:"expires_at,omitempty"`
 	PaidAt               *time.Time           `json:"paid_at,omitempty"`
 	SettledAt            *time.Time           `json:"settled_at,omitempty"`
 	ExpectedSettlementAt *time.Time           `json:"expected_settlement_at,omitempty"`
@@ -101,20 +106,20 @@ func (r *CreatePaymentRequest) ToCustomer() *domain.Customer {
 
 // PaymentResponseFromDomain converts a domain Payment to PaymentResponse.
 func PaymentResponseFromDomain(p *domain.Payment) PaymentResponse {
-	resp := PaymentResponse{
+	return PaymentResponse{
+		ID:                   p.PublicID,
 		PaymentID:            p.ID,
+		Reference:            p.Reference(),
 		OrderID:              p.OrderID,
 		Status:               p.Status,
 		Amount:               p.Amount,
 		Currency:             p.Currency,
 		InvoiceURL:           p.InvoiceURL,
 		Items:                p.Items,
-		PaidAt:               p.PaidAt,
-		SettledAt:            p.SettledAt,
-		ExpectedSettlementAt: p.ExpectedSettlementAt,
+		Metadata:             p.Metadata,
+		ExpiresAt:            utcPtr(p.ExpiresAt),
+		PaidAt:               utcPtr(p.PaidAt),
+		SettledAt:            utcPtr(p.SettledAt),
+		ExpectedSettlementAt: utcPtr(p.ExpectedSettlementAt),
 	}
-	if p.ExpiresAt != nil {
-		resp.ExpiresAt = p.ExpiresAt
-	}
-	return resp
 }

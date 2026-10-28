@@ -70,29 +70,42 @@ type Customer struct {
 	MobileNumber string `json:"mobile_number,omitempty"`
 }
 
-// Payment is an invoice created on the shared Xendit account on behalf of a tenant.
+// Payment is an invoice created on the operator's Xendit account on behalf of
+// an app.
 type Payment struct {
-	ID              int64         `json:"id"`
-	TenantID        int64         `json:"tenant_id"`
-	OrderID         string        `json:"order_id"`
-	ExternalID      string        `json:"external_id"`
-	XenditInvoiceID string        `json:"xendit_invoice_id"`
-	Amount          int64         `json:"amount"`
-	Currency        string        `json:"currency"`
-	Status          PaymentStatus `json:"status"`
-	Description     string        `json:"description"`
-	InvoiceURL      string        `json:"invoice_url"`
-	PayerEmail      string        `json:"payer_email"`
-	Items           []OrderItem   `json:"items,omitempty"`
-	ExpiresAt       *time.Time    `json:"expires_at,omitempty"`
-	PaidAt          *time.Time    `json:"paid_at,omitempty"`
+	ID       int64
+	PublicID string
+	AppID    int64
+	// App is the owning app's summary; repositories fill it on every read.
+	App             AppSummary
+	OrderID         string
+	ExternalID      string
+	XenditInvoiceID string
+	Amount          int64
+	Currency        string
+	Status          PaymentStatus
+	Description     string
+	InvoiceURL      string
+	PayerEmail      string
+	Items           []OrderItem
+	Metadata        Metadata
+	// IdempotencyKey and IdempotencyFingerprint are empty when the request that
+	// created the payment sent no Idempotency-Key.
+	IdempotencyKey         string
+	IdempotencyFingerprint string
+	ExpiresAt              *time.Time
+	PaidAt                 *time.Time
 	// SettledAt is the actual time funds settled to the shared balance, sourced
 	// from Xendit's SETTLED callback. Nil until settlement is confirmed.
-	SettledAt *time.Time `json:"settled_at,omitempty"`
-	// ExpectedSettlementAt is the estimated settlement date the tenant can show
+	SettledAt *time.Time
+	// ExpectedSettlementAt is the estimated settlement date the app can show
 	// to the user before funds actually settle. Optional, set at creation time.
-	ExpectedSettlementAt *time.Time      `json:"expected_settlement_at,omitempty"`
+	ExpectedSettlementAt *time.Time
 	Raw                  json.RawMessage `json:"-"`
-	CreatedAt            time.Time       `json:"created_at"`
-	UpdatedAt            time.Time       `json:"updated_at"`
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
+
+// Reference is the gateway reference stored as external_id: "kp_" + public id
+// for new payments, "{slug}:{order_id}" for payments made before apps.
+func (p *Payment) Reference() string { return p.ExternalID }

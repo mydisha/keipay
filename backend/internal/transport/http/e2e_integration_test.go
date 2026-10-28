@@ -1,0 +1,335 @@
+package http
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
+
+	"github.com/mydisha/keipay/backend/internal/domain"
+	"github.com/mydisha/keipay/backend/internal/pkg/crypto"
+	"github.com/mydisha/keipay/backend/internal/pkg/hmac"
+	"github.com/mydisha/keipay/backend/internal/repository/postgres"
+	redisrepo "github.com/mydisha/keipay/backend/internal/repository/redis"
+	"github.com/mydisha/keipay/backend/internal/service"
+	"github.com/mydisha/keipay/backend/internal/testutil/pgtest"
+	"github.com/mydisha/keipay/backend/internal/transport/http/handler"
+	"github.com/mydisha/keipay/backend/internal/worker"
+)
+
+const (
+	legacyKey    = "kp_0123456789abcdef0123456789abcdef"
+	legacySecret = "sk_legacy_0123456789abcdef"
+)
+
+type noCache struct{}
+
+func (noCache) Seen(context.Context, string) bool { return false }
+func (noCache) Mark(context.Context, string)      {}
+
+type recordingEnqueuer struct {
+	mu  sync.Mutex
+	ids []int64
+}
+
+func (e *recordingEnqueuer) EnqueueWebhookForward(_ context.Context, id int64) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.ids = append(e.ids, id)
+	return nil
+}
+
+// runNonces scopes the shared Redis nonce store to one test run, since
+// requests repeat byte for byte across runs.
+type runNonces struct {
+	inner  *redisrepo.Idempotency
+	prefix string
+}
+
+func (n runNonces) Acquire(ctx context.Context, key string) bool {
+	return n.inner.Acquire(ctx, n.prefix+key)
+}
+
+// e2e is the real router over Postgres and Redis with a fake Xendit, on a
+// database migrated from phase 1 with one legacy tenant.
+type e2e struct {
+	router   *gin.Engine
+	appSvc   *service.AppService
+	payments *postgres.PaymentRepo
+	apps     *postgres.AppRepo
+	webhooks *postgres.WebhookRepo
+	webhook  *service.WebhookService
+	cipher   *crypto.Cipher
+	xendit   *stubXendit
+}
+
+func newE2E(t *testing.T) *e2e {
+	t.Helper()
+	addr := os.Getenv("KEI_TEST_REDIS_ADDR")
+	if addr == "" {
+		t.Skip("KEI_TEST_REDIS_ADDR not set")
+	}
+	db := pgtest.New(t, 6)
+	ctx := context.Background()
+	cipher, err := crypto.New("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool, err := postgres.NewPool(ctx, db.DSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	secretEnc, _ := cipher.Encrypt(legacySecret)
+	for _, q := range []string{
+		`INSERT INTO tenants (id, name, slug, api_key, api_secret_enc, active) VALUES (1, 'Acme', 'acme', '` + legacyKey + `', '` + secretEnc + `', true)`,
+		`SELECT setval(pg_get_serial_sequence('tenants', 'id'), 1)`,
+		`INSERT INTO payments (id, tenant_id, order_id, external_id, amount) VALUES (1, 1, 'ord-1', 'acme:ord-1', 1000)`,
+		`SELECT setval(pg_get_serial_sequence('payments', 'id'), 1)`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	if err := db.Migrate.Migrate(7); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	rdb, err := redisrepo.New(ctx, addr, "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rdb.Close() })
+
+	tx := postgres.NewTxManager(pool)
+	e := &e2e{
+		apps:     postgres.NewAppRepo(pool),
+		payments: postgres.NewPaymentRepo(pool),
+		webhooks: postgres.NewWebhookRepo(pool),
+		cipher:   cipher,
+		xendit:   &stubXendit{},
+	}
+	e.appSvc = service.NewAppService(e.apps, postgres.NewAPIKeyRepo(pool), cipher, tx,
+		service.NewAuditService(postgres.NewAuditRepo(pool)))
+	e.webhook = service.NewWebhookService(e.payments, postgres.NewLedgerRepo(pool), e.webhooks, tx, noCache{}, &recordingEnqueuer{})
+	gin.SetMode(gin.TestMode)
+	e.router = NewRouter(Deps{
+		Log:             zap.NewNop(),
+		AppResolver:     e.appSvc,
+		NonceStore:      runNonces{inner: redisrepo.NewIdempotency(rdb, 10*time.Minute), prefix: "it-" + strconv.FormatInt(time.Now().UnixNano(), 36) + ":"},
+		SecretDecryptor: cipher,
+		Payment:         handler.NewPaymentHandler(service.NewPaymentService(e.payments, e.xendit)),
+	})
+	return e
+}
+
+func (e *e2e) call(method, target, apiKey, secret, body string, headers ...string) *httptest.ResponseRecorder {
+	ts := strconv.FormatInt(time.Now().Unix()-v1Calls.Add(1)%240, 10)
+	req := httptest.NewRequest(method, target, strings.NewReader(body))
+	req.Header.Set("X-Api-Key", apiKey)
+	req.Header.Set("X-Timestamp", ts)
+	req.Header.Set("X-Signature", hmac.Sign(secret, []byte(ts+"."+body)))
+	for i := 0; i+1 < len(headers); i += 2 {
+		req.Header.Set(headers[i], headers[i+1])
+	}
+	w := httptest.NewRecorder()
+	e.router.ServeHTTP(w, req)
+	return w
+}
+
+// T-28 / AC-2, AC-7, AC-14, AC-15: a migrated integration keeps working end
+// to end, and references route callbacks to the right app.
+func TestIntegrationEndToEndMigratedApp(t *testing.T) {
+	e := newE2E(t)
+	ctx := context.Background()
+
+	// The legacy key and secret still authenticate, and see the legacy payment.
+	w := e.call(http.MethodGet, "/v1/payments/1", legacyKey, legacySecret, "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"reference":"acme:ord-1"`) {
+		t.Fatalf("legacy get: %d %s", w.Code, w.Body.String())
+	}
+	expectError(t, e.call(http.MethodGet, "/v1/payments/1", legacyKey, "wrong", ""), 401, domain.CodeInvalidSignature)
+
+	// Metadata and Idempotency-Key, with a replay.
+	body := `{"order_id":"ord-2","amount":2500,"metadata":{"channel":"mobile","n":12345678901234567890,"note":"ü 🌏"}}`
+	w = e.call(http.MethodPost, "/v1/payments", legacyKey, legacySecret, body, "Idempotency-Key", "idem-e2e")
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	var created struct {
+		ID        string `json:"id"`
+		Reference string `json:"reference"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &created)
+	w = e.call(http.MethodPost, "/v1/payments", legacyKey, legacySecret, body, "Idempotency-Key", "idem-e2e")
+	if w.Code != http.StatusCreated || w.Header().Get("Idempotent-Replayed") != "true" || !strings.Contains(w.Body.String(), created.ID) {
+		t.Fatalf("replay: %d %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(e.call(http.MethodGet, "/v1/payments/"+created.ID, legacyKey, legacySecret, "").Body.String(), `"n":12345678901234567890`) {
+		t.Fatal("metadata number changed in storage")
+	}
+
+	// Another app gets its own payment with the same order id.
+	other, err := e.appSvc.Create(domain.WithActor(ctx, domain.SystemActor("test")),
+		service.CreateAppInput{Name: "Globex", Slug: "globex", Environment: domain.EnvTest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = e.call(http.MethodPost, "/v1/payments", other.APIKey, other.APISecret, `{"order_id":"ord-2","amount":10}`, "Idempotency-Key", "idem-e2e")
+	if w.Code != http.StatusCreated || strings.Contains(w.Body.String(), created.ID) {
+		t.Fatalf("other app: %d %s", w.Code, w.Body.String())
+	}
+	var otherPay struct {
+		Reference string `json:"reference"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &otherPay)
+
+	// Callbacks for a legacy reference and both new references.
+	for _, cb := range []service.XenditInvoiceCallback{
+		{ID: "inv_legacy", ExternalID: "acme:ord-1", Status: "PAID", Amount: 1000},
+		{ID: "inv_new", ExternalID: created.Reference, Status: "PAID", Amount: 2500},
+		{ID: "inv_other", ExternalID: otherPay.Reference, Status: "PAID", Amount: 10},
+	} {
+		if err := e.webhook.Process(ctx, cb, []byte(`{}`)); err != nil {
+			t.Fatalf("%s: %v", cb.ExternalID, err)
+		}
+	}
+	ds, err := e.webhooks.ListDeliveries(ctx, domain.DeliveryFilter{})
+	if err != nil || len(ds) != 3 {
+		t.Fatalf("deliveries = %+v %v", ds, err)
+	}
+	byPayment := map[string]domain.WebhookDelivery{}
+	for _, d := range ds {
+		byPayment[d.PaymentPublicID] = d
+	}
+	if d := byPayment[created.ID]; d.App.Slug != "acme" || !strings.Contains(string(d.Payload), `"payment_public_id": "`+created.ID+`"`) ||
+		!strings.Contains(string(d.Payload), `"note": "ü 🌏"`) {
+		t.Fatalf("new delivery = %+v %s", d.App, d.Payload)
+	}
+	if d := byPayment[strings.TrimPrefix(otherPay.Reference, "kp_")]; d.App.PublicID != other.App.PublicID {
+		t.Fatalf("other delivery = %+v", d.App)
+	}
+
+	// The forward for the migrated app verifies with its original api_secret.
+	var mu sync.Mutex
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		defer mu.Unlock()
+		if hmac.Verify(legacySecret, b, r.Header.Get("X-Kei-Signature")) {
+			got = append(got, "ok")
+		} else {
+			got = append(got, "bad signature")
+		}
+	}))
+	defer srv.Close()
+	acme, _ := e.apps.GetByID(ctx, 1)
+	acme.WebhookURL = srv.URL
+	if err := e.apps.Update(ctx, acme); err != nil {
+		t.Fatal(err)
+	}
+	fwd := worker.NewForwarder(e.apps, e.webhooks, e.cipher, zap.NewNop(), 3)
+	for _, d := range ds {
+		if d.AppID != 1 {
+			continue
+		}
+		task, _ := worker.NewWebhookForwardTask(d.ID)
+		if err := fwd.HandleWebhookForward(ctx, task); err != nil {
+			t.Fatalf("forward %d: %v", d.ID, err)
+		}
+	}
+	if strings.Join(got, ",") != "ok,ok" {
+		t.Fatalf("forwards = %v", got)
+	}
+}
+
+// T-29 / AC-10, AC-15: concurrent duplicates make one payment, and
+// concurrent key creation never passes the limit.
+func TestIntegrationConcurrency(t *testing.T) {
+	e := newE2E(t)
+	ctx := context.Background()
+
+	const n = 20
+	var wg sync.WaitGroup
+	codes := make([]int, n)
+	ids := make([]string, n)
+	body := `{"order_id":"race-1","amount":777}`
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			w := e.call(http.MethodPost, "/v1/payments", legacyKey, legacySecret, body, "Idempotency-Key", "race-key")
+			codes[i] = w.Code
+			var p struct{ ID string }
+			_ = json.Unmarshal(w.Body.Bytes(), &p)
+			ids[i] = p.ID
+		}()
+	}
+	wg.Wait()
+	var rows int
+	res, err := e.payments.List(ctx, domain.PaymentFilter{}, domain.Page{Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range res.Items {
+		if p.OrderID == "race-1" {
+			rows++
+		}
+	}
+	if rows != 1 {
+		t.Fatalf("%d payment rows for one order", rows)
+	}
+	for i := range n {
+		if codes[i] != http.StatusCreated || ids[i] != ids[0] {
+			t.Fatalf("request %d: %d %s (first %s)", i, codes[i], ids[i], ids[0])
+		}
+	}
+
+	// 8 usable keys, then 12 concurrent creates: exactly 2 succeed.
+	actor := domain.WithActor(ctx, domain.SystemActor("test"))
+	app, err := e.appSvc.Create(actor, service.CreateAppInput{Name: "Keys", Slug: "keys", Environment: domain.EnvLive})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 7 {
+		if _, err := e.appSvc.CreateKey(actor, app.App.PublicID, service.CreateKeyInput{Label: "pre"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var ok, limited, other int
+	var mu sync.Mutex
+	for range 12 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := e.appSvc.CreateKey(actor, app.App.PublicID, service.CreateKeyInput{Label: "race"})
+			var coded *domain.Error
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case err == nil:
+				ok++
+			case errors.As(err, &coded) && coded.Code == domain.CodeValidationFailed:
+				limited++
+			default:
+				other++
+				t.Errorf("unexpected error: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	if ok != 2 || limited != 10 || other != 0 {
+		t.Fatalf("ok=%d limited=%d other=%d", ok, limited, other)
+	}
+}

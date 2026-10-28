@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// WebhookDeliveryStatus is the state of an outbound webhook forward to a tenant.
+// WebhookDeliveryStatus is the state of an outbound webhook forward to an app.
 type WebhookDeliveryStatus string
 
 const (
@@ -23,16 +23,27 @@ type WebhookEvent struct {
 }
 
 // WebhookDelivery is the source-of-truth audit record for forwarding a
-// normalized event to a tenant's webhook URL. Execution/retry is driven by asynq.
+// normalized event to an app's webhook URL. Execution/retry is driven by asynq.
 type WebhookDelivery struct {
-	ID        int64                 `json:"id"`
-	PaymentID int64                 `json:"payment_id"`
-	TenantID  int64                 `json:"tenant_id"`
-	EventType string                `json:"event_type"`
-	Payload   json.RawMessage       `json:"payload"`
-	Status    WebhookDeliveryStatus `json:"status"`
-	Attempts  int                   `json:"attempts"`
-	LastError string                `json:"last_error"`
-	CreatedAt time.Time             `json:"created_at"`
-	UpdatedAt time.Time             `json:"updated_at"`
+	ID        int64
+	PaymentID int64
+	AppID     int64
+	// PaymentPublicID and App are filled by list queries only.
+	PaymentPublicID string
+	App             AppSummary
+	EventType       string
+	Payload         json.RawMessage
+	Status          WebhookDeliveryStatus
+	Attempts        int
+	LastError       string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+// DeliveryFilter narrows delivery lists. AppPublicID is a canonical app_ id.
+type DeliveryFilter struct {
+	AppPublicID *string
+	Status      *WebhookDeliveryStatus
+	Limit       int
+	Offset      int
 }

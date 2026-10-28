@@ -17,15 +17,21 @@ import (
 	"github.com/mydisha/keipay/backend/internal/pkg/logger"
 )
 
-// SecretDecryptor recovers the plaintext tenant secret used to sign forwards.
+// SecretDecryptor recovers the plaintext webhook secret used to sign forwards.
 type SecretDecryptor interface {
 	Decrypt(ciphertext string) (string, error)
 }
 
+// AppGetter loads the app a delivery belongs to.
+type AppGetter interface {
+	GetByID(ctx context.Context, id int64) (*domain.App, error)
+}
+
 // Forwarder executes webhook:forward tasks: it POSTs the normalized event to the
-// tenant's webhook URL, HMAC-signed with the tenant secret. asynq drives retries.
+// app's webhook URL, HMAC-signed with the app's webhook secret. asynq drives
+// retries.
 type Forwarder struct {
-	tenants  domain.TenantRepository
+	apps     AppGetter
 	webhooks domain.WebhookRepository
 	cipher   SecretDecryptor
 	client   *http.Client
@@ -34,9 +40,9 @@ type Forwarder struct {
 }
 
 // NewForwarder constructs a Forwarder.
-func NewForwarder(tenants domain.TenantRepository, webhooks domain.WebhookRepository, cipher SecretDecryptor, log *zap.Logger, maxRetry int) *Forwarder {
+func NewForwarder(apps AppGetter, webhooks domain.WebhookRepository, cipher SecretDecryptor, log *zap.Logger, maxRetry int) *Forwarder {
 	return &Forwarder{
-		tenants:  tenants,
+		apps:     apps,
 		webhooks: webhooks,
 		cipher:   cipher,
 		client:   &http.Client{Timeout: 15 * time.Second},
@@ -61,21 +67,21 @@ func (f *Forwarder) HandleWebhookForward(ctx context.Context, task *asynq.Task) 
 		return nil // already delivered
 	}
 
-	t, err := f.tenants.GetByID(ctx, d.TenantID)
+	app, err := f.apps.GetByID(ctx, d.AppID)
 	if err != nil {
-		return fmt.Errorf("get tenant %d: %w", d.TenantID, err)
+		return fmt.Errorf("get app %d: %w", d.AppID, err)
 	}
-	if t.WebhookURL == "" {
-		_ = f.webhooks.MarkFailed(ctx, d.ID, d.Attempts+1, "tenant has no webhook_url")
-		return fmt.Errorf("tenant %d has no webhook_url: %w", t.ID, asynq.SkipRetry)
+	if app.WebhookURL == "" {
+		_ = f.webhooks.MarkFailed(ctx, d.ID, d.Attempts+1, "app has no webhook_url")
+		return fmt.Errorf("app %s has no webhook_url: %w", app.PublicID, asynq.SkipRetry)
 	}
 
-	// Sign the forward with the tenant's plaintext secret (decrypted at rest) so
-	// the tenant verifies using the same secret KeiPay issued to them.
-	secret, err := f.cipher.Decrypt(t.APISecretEnc)
+	// Signed with the app's webhook secret, not an API key secret, so rotating
+	// or revoking keys never changes how the app verifies webhooks.
+	secret, err := f.cipher.Decrypt(app.WebhookSecretEnc)
 	if err != nil {
 		_ = f.webhooks.MarkFailed(ctx, d.ID, d.Attempts+1, "secret decrypt failed")
-		return fmt.Errorf("decrypt tenant %d secret: %w", t.ID, asynq.SkipRetry)
+		return fmt.Errorf("decrypt app %s webhook secret: %w", app.PublicID, asynq.SkipRetry)
 	}
 	signature := hmac.Sign(secret, d.Payload)
 
@@ -83,15 +89,15 @@ func (f *Forwarder) HandleWebhookForward(ctx context.Context, task *asynq.Task) 
 	log := f.log.With(
 		zap.String(logger.FieldLogType, logger.LogTypeWebhook),
 		zap.Int64("delivery_id", d.ID),
-		zap.Int64(logger.FieldTenantID, t.ID),
-		zap.String("target_url", t.WebhookURL),
+		zap.String(logger.FieldAppID, app.PublicID),
+		zap.String("target_url", app.WebhookURL),
 		zap.String("event_type", d.EventType),
 		zap.Int("attempt", attempt),
 		zap.Int("max_retry", f.maxRetry),
 	)
 
 	start := time.Now()
-	statusCode, sendErr := f.post(ctx, t.WebhookURL, d.Payload, signature, d.EventType)
+	statusCode, sendErr := f.post(ctx, app.WebhookURL, d.Payload, signature, d.EventType)
 	latencyMS := time.Since(start).Milliseconds()
 	if sendErr != nil || statusCode < 200 || statusCode >= 300 {
 		lastErr := fmt.Sprintf("status=%d err=%v", statusCode, sendErr)

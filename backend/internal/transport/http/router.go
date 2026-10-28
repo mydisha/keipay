@@ -17,7 +17,7 @@ import (
 type Deps struct {
 	Log *zap.Logger
 
-	TenantResolver  middleware.TenantResolver
+	AppResolver     middleware.AppResolver
 	NonceStore      middleware.NonceStore
 	SecretDecryptor middleware.SecretDecryptor
 	CallbackToken   string
@@ -34,6 +34,7 @@ type Deps struct {
 	Payment *handler.PaymentHandler
 	Webhook *handler.WebhookHandler
 	Admin   *handler.AdminHandler
+	Apps    *handler.AppHandler
 	Auth    *handler.AuthHandler
 	Users   *handler.UserHandler
 
@@ -95,10 +96,16 @@ func adminRoutes(d Deps) []adminRoute {
 		permitted(http.MethodPost, "/users/:id/enable", domain.PermUsersManage, d.Users.Enable),
 		permitted(http.MethodPost, "/users/:id/reset-password", domain.PermUsersManage, d.Users.ResetPassword),
 
-		permitted(http.MethodGet, "/tenants", domain.PermTenantsRead, d.Admin.ListTenants),
-		permitted(http.MethodPost, "/tenants", domain.PermTenantsWrite, d.Admin.CreateTenant),
-		permitted(http.MethodPut, "/tenants/:id", domain.PermTenantsWrite, d.Admin.UpdateTenant),
-		permitted(http.MethodPost, "/tenants/:id/rotate", domain.PermTenantsWrite, d.Admin.RotateTenantCredentials),
+		permitted(http.MethodGet, "/apps", domain.PermAppsRead, d.Apps.List),
+		permitted(http.MethodPost, "/apps", domain.PermAppsWrite, d.Apps.Create),
+		permitted(http.MethodGet, "/apps/:id", domain.PermAppsRead, d.Apps.Get),
+		permitted(http.MethodPatch, "/apps/:id", domain.PermAppsWrite, d.Apps.Update),
+		permitted(http.MethodPost, "/apps/:id/disable", domain.PermAppsWrite, d.Apps.Disable),
+		permitted(http.MethodPost, "/apps/:id/enable", domain.PermAppsWrite, d.Apps.Enable),
+		permitted(http.MethodGet, "/apps/:id/keys", domain.PermAppsRead, d.Apps.ListKeys),
+		permitted(http.MethodPost, "/apps/:id/keys", domain.PermAppsWrite, d.Apps.CreateKey),
+		permitted(http.MethodPost, "/apps/:id/keys/:key_id/rotate", domain.PermAppsWrite, d.Apps.RotateKey),
+		permitted(http.MethodPost, "/apps/:id/keys/:key_id/revoke", domain.PermAppsWrite, d.Apps.RevokeKey),
 
 		permitted(http.MethodGet, "/payments", domain.PermPaymentsRead, d.Admin.ListPayments),
 		permitted(http.MethodGet, "/ledger", domain.PermPaymentsRead, d.Admin.ListLedger),
@@ -122,9 +129,9 @@ func NewRouter(d Deps) *gin.Engine {
 
 	r.GET("/healthz", handler.Health)
 
-	// Tenant-facing API: HMAC + timestamp + nonce replay protection.
+	// App-facing API: API key + HMAC + timestamp + nonce replay protection.
 	v1 := r.Group("/v1")
-	v1.Use(middleware.TenantAuth(d.TenantResolver, d.NonceStore, d.SecretDecryptor, d.Log))
+	v1.Use(middleware.AppAuth(d.AppResolver, d.NonceStore, d.SecretDecryptor, d.Log))
 
 	{
 		v1.POST("/payments", d.Payment.Create)

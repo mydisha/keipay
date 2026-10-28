@@ -1,8 +1,11 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -35,24 +38,31 @@ func (m *mockPaymentRepo) UpdateStatus(ctx context.Context, id int64, s domain.P
 	}
 	return nil
 }
-func (m *mockPaymentRepo) GetByID(context.Context, int64) (*domain.Payment, error) {
-	return nil, domain.ErrNotFound
-}
-func (m *mockPaymentRepo) GetByExternalID(_ context.Context, ext string) (*domain.Payment, error) {
-	if p, ok := m.byExternal[ext]; ok {
+func (m *mockPaymentRepo) GetByReferenceForUpdate(_ context.Context, ref string) (*domain.Payment, error) {
+	if p, ok := m.byExternal[ref]; ok {
 		return p, nil
 	}
 	return nil, domain.ErrNotFound
 }
-func (m *mockPaymentRepo) GetByExternalIDForUpdate(ctx context.Context, ext string) (*domain.Payment, error) {
-	return m.GetByExternalID(ctx, ext)
+func (m *mockPaymentRepo) GetByPublicID(context.Context, int64, string) (*domain.Payment, error) {
+	return nil, domain.ErrNotFound
 }
-func (m *mockPaymentRepo) List(context.Context, domain.PaymentFilter) ([]domain.Payment, int64, error) {
-	return nil, 0, nil
+func (m *mockPaymentRepo) GetByID(context.Context, int64, int64) (*domain.Payment, error) {
+	return nil, domain.ErrNotFound
+}
+func (m *mockPaymentRepo) GetByOrderID(context.Context, int64, string) (*domain.Payment, error) {
+	return nil, domain.ErrNotFound
+}
+func (m *mockPaymentRepo) GetByIdempotencyKey(context.Context, int64, string) (*domain.Payment, error) {
+	return nil, domain.ErrNotFound
+}
+func (m *mockPaymentRepo) List(context.Context, domain.PaymentFilter, domain.Page) (domain.PageResult[domain.Payment], error) {
+	return domain.PageResult[domain.Payment]{}, nil
 }
 
 type mockLedgerRepo struct {
 	created int
+	entries []domain.LedgerEntry
 	settled []time.Time
 }
 
@@ -62,9 +72,10 @@ func (m *mockLedgerRepo) MarkSettled(ctx context.Context, _ int64, at time.Time)
 	return nil
 }
 
-func (m *mockLedgerRepo) Create(ctx context.Context, _ *domain.LedgerEntry) error {
+func (m *mockLedgerRepo) Create(ctx context.Context, e *domain.LedgerEntry) error {
 	m.created++
-	onRollback(ctx, func() { m.created-- })
+	m.entries = append(m.entries, *e)
+	onRollback(ctx, func() { m.created--; m.entries = m.entries[:len(m.entries)-1] })
 	return nil
 }
 func (m *mockLedgerRepo) List(context.Context, domain.LedgerFilter) ([]domain.LedgerEntry, error) {
@@ -106,7 +117,7 @@ func (m *mockWebhookRepo) MarkDelivered(context.Context, int64, int) error { ret
 func (m *mockWebhookRepo) MarkFailed(context.Context, int64, int, string) error {
 	return nil
 }
-func (m *mockWebhookRepo) ListDeliveries(context.Context, *int64, *domain.WebhookDeliveryStatus, int, int) ([]domain.WebhookDelivery, error) {
+func (m *mockWebhookRepo) ListDeliveries(context.Context, domain.DeliveryFilter) ([]domain.WebhookDelivery, error) {
 	return nil, nil
 }
 func (m *mockWebhookRepo) ListUnsentDeliveries(context.Context, time.Time, int) ([]domain.WebhookDelivery, error) {
@@ -167,7 +178,8 @@ func (m *mockEnqueuer) EnqueueWebhookForward(_ context.Context, id int64) error 
 
 func newSvc() (*WebhookService, *mockPaymentRepo, *mockLedgerRepo, *mockWebhookRepo, *mockEnqueuer) {
 	pr := &mockPaymentRepo{byExternal: map[string]*domain.Payment{
-		"acme:order-1": {ID: 10, TenantID: 1, OrderID: "order-1", ExternalID: "acme:order-1", Amount: 5000, Currency: "IDR", Status: domain.PaymentStatusPending},
+		"acme:order-1": {ID: 10, PublicID: "pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C", AppID: 1, OrderID: "order-1",
+			ExternalID: "acme:order-1", Amount: 5000, Currency: "IDR", Status: domain.PaymentStatusPending},
 	}}
 	lr := &mockLedgerRepo{}
 	wr := &mockWebhookRepo{}
@@ -176,7 +188,7 @@ func newSvc() (*WebhookService, *mockPaymentRepo, *mockLedgerRepo, *mockWebhookR
 	return svc, pr, lr, wr, eq
 }
 
-func TestProcessPaidRoutesToTenantAndLedger(t *testing.T) {
+func TestProcessPaidRoutesToAppAndLedger(t *testing.T) {
 	svc, pr, lr, _, eq := newSvc()
 	cb := XenditInvoiceCallback{
 		ID:         "inv_1",
@@ -353,7 +365,7 @@ func TestProcessMissingIDs(t *testing.T) {
 }
 
 // Regression: callbacks can arrive out of order. A late PAID after SETTLED must
-// not move the payment back to PAID or send the tenant a stale payment.paid.
+// not move the payment back to PAID or send the app a stale payment.paid.
 func TestProcessLatePaidAfterSettledIsIgnored(t *testing.T) {
 	svc, pr, _, wr, _ := newSvc()
 	ctx := context.Background()
@@ -469,5 +481,78 @@ func TestProcessSettledMarksLedgerSettled(t *testing.T) {
 	want := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	if len(lr.settled) != 1 || !lr.settled[0].Equal(want) {
 		t.Fatalf("expected ledger settled once at %v, got %v", want, lr.settled)
+	}
+}
+
+// T-14: references are matched as stored. A new kp_pay_ reference and a
+// legacy {slug}:{order_id} both resolve, and a reference that looks like
+// another app's slug still routes to the app that owns the row.
+func TestProcessRoutesByStoredReference(t *testing.T) {
+	const pub = "pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0D"
+	svc, pr, lr, wr, _ := newSvc()
+	pr.byExternal["kp_"+pub] = &domain.Payment{ID: 11, PublicID: pub, AppID: 2, OrderID: "ord-ü",
+		ExternalID: "kp_" + pub, Amount: 7000, Currency: "IDR", Status: domain.PaymentStatusPending,
+		Metadata: domain.Metadata{"note": "héllo 🌏 你好", "tier": json.Number("12345678901234567890")}}
+	pr.byExternal["globex:ord-1"] = &domain.Payment{ID: 12, PublicID: "pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0E", AppID: 1,
+		OrderID: "ord-1", ExternalID: "globex:ord-1", Amount: 100, Currency: "IDR", Status: domain.PaymentStatusPending}
+	ctx := context.Background()
+
+	for _, cb := range []XenditInvoiceCallback{
+		{ID: "inv_new", ExternalID: "kp_" + pub, Status: "PAID", Amount: 7000},
+		{ID: "inv_legacy", ExternalID: "acme:order-1", Status: "PAID", Amount: 5000},
+		{ID: "inv_lookalike", ExternalID: "globex:ord-1", Status: "PAID", Amount: 100},
+	} {
+		if err := svc.Process(ctx, cb, []byte(`{}`)); err != nil {
+			t.Fatalf("%s: %v", cb.ExternalID, err)
+		}
+	}
+	if len(wr.deliveries) != 3 || len(lr.entries) != 3 {
+		t.Fatalf("deliveries=%d ledger=%d", len(wr.deliveries), len(lr.entries))
+	}
+	wantApps := []int64{2, 1, 1}
+	for i, d := range wr.deliveries {
+		if d.AppID != wantApps[i] || lr.entries[i].AppID != wantApps[i] {
+			t.Fatalf("delivery %d app=%d ledger app=%d, want %d", i, d.AppID, lr.entries[i].AppID, wantApps[i])
+		}
+	}
+
+	var got map[string]any
+	dec := json.NewDecoder(bytes.NewReader(wr.deliveries[0].Payload))
+	dec.UseNumber()
+	if err := dec.Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]any{
+		"event": "payment.paid", "payment_id": json.Number("11"), "payment_public_id": pub, "order_id": "ord-ü",
+		"external_id": "kp_" + pub, "status": "PAID", "amount": json.Number("7000"), "currency": "IDR",
+		"metadata": map[string]any{"note": "héllo 🌏 你好", "tier": json.Number("12345678901234567890")},
+	}
+	for k, v := range want {
+		if !reflect.DeepEqual(got[k], v) {
+			t.Fatalf("payload[%s] = %#v, want %#v (payload %s)", k, got[k], v, wr.deliveries[0].Payload)
+		}
+	}
+	for _, k := range []string{"paid_at", "timestamp"} {
+		if _, ok := got[k]; !ok {
+			t.Fatalf("payload lacks %s: %s", k, wr.deliveries[0].Payload)
+		}
+	}
+
+	// A legacy payment without metadata still sends {} rather than null.
+	if !bytes.Contains(wr.deliveries[1].Payload, []byte(`"metadata":{}`)) {
+		t.Fatalf("legacy payload = %s", wr.deliveries[1].Payload)
+	}
+}
+
+func TestProcessUnknownReferenceFails(t *testing.T) {
+	svc, _, _, wr, _ := newSvc()
+	for _, ref := range []string{"ghost:ord-1", "kp_pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0Z", "order-1"} {
+		err := svc.Process(context.Background(), XenditInvoiceCallback{ID: "inv_" + ref, ExternalID: ref, Status: "PAID"}, nil)
+		if !errors.Is(err, domain.ErrNotFound) {
+			t.Fatalf("%s: err = %v, want not found", ref, err)
+		}
+	}
+	if len(wr.deliveries) != 0 {
+		t.Fatalf("unknown references produced deliveries: %+v", wr.deliveries)
 	}
 }

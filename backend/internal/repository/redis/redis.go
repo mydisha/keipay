@@ -1,4 +1,4 @@
-// Package redis provides a Redis client plus tenant cache and idempotency helpers.
+// Package redis provides a Redis client plus session, failure-counter and idempotency helpers.
 package redis
 
 import (

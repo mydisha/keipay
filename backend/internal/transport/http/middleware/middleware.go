@@ -13,7 +13,8 @@ import (
 
 const (
 	ctxRequestID = "request_id"
-	ctxTenant    = "tenant"
+	ctxApp       = "app"
+	ctxAPIKey    = "api_key"
 )
 
 // RequestID attaches a unique id to each request, propagates it into the

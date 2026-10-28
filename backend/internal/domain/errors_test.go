@@ -31,7 +31,7 @@ func TestCodedErrorMatching(t *testing.T) {
 }
 
 func TestSentinelsSurviveWrapping(t *testing.T) {
-	for _, s := range []error{ErrNotFound, ErrConflict, ErrInvalidInput, ErrUnauthorized, ErrInactiveTenant} {
+	for _, s := range []error{ErrNotFound, ErrConflict, ErrInvalidInput, ErrUnauthorized, ErrAppDisabled, ErrDuplicateOrderID} {
 		if err := fmt.Errorf("%w: detail", s); !errors.Is(err, s) {
 			t.Errorf("errors.Is(%v, %v) = false", err, s)
 		}
@@ -46,7 +46,7 @@ func TestErrorCodesAreUnique(t *testing.T) {
 		}
 		seen[c] = true
 	}
-	if len(seen) != 28 {
-		t.Fatalf("got %d codes, want 28", len(seen))
+	if len(seen) != 31 {
+		t.Fatalf("got %d codes, want 31", len(seen))
 	}
 }

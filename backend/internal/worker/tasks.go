@@ -7,7 +7,7 @@ import (
 	"github.com/hibiken/asynq"
 )
 
-// TypeWebhookForward is the asynq task type for forwarding a webhook to a tenant.
+// TypeWebhookForward is the asynq task type for forwarding a webhook to an app.
 const TypeWebhookForward = "webhook:forward"
 
 // WebhookForwardPayload carries the delivery id; the handler loads the durable

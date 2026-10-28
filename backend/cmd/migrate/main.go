@@ -1,4 +1,4 @@
-// Command migrate runs SQL migrations, optionally seeds a demo tenant, and
+// Command migrate runs SQL migrations, optionally seeds a demo test app, and
 // recovers console access with -reset-admin.
 package main
 
@@ -25,7 +25,7 @@ import (
 func main() {
 	var (
 		down       = flag.Bool("down", false, "roll back all migrations")
-		seed       = flag.Bool("seed", false, "seed a demo tenant after migrating")
+		seed       = flag.Bool("seed", false, "seed a demo test app after migrating")
 		resetAdmin = flag.Bool("reset-admin", false, "reset a console user's password, or create the first owner")
 		email      = flag.String("email", "", "user for -reset-admin (default: the oldest owner)")
 		password   = flag.String("password", "", "new password for -reset-admin (generated if empty)")
@@ -82,21 +82,21 @@ func main() {
 	}
 }
 
-// runSeed creates the demo tenant. It never creates a user: the first owner
-// is made in the console's first-run setup or with -reset-admin.
+// runSeed creates the demo test app. It never creates a user: the first
+// owner is made in the console's first-run setup or with -reset-admin.
 func runSeed(ctx context.Context, pool *pgxpool.Pool, cipher service.SecretCipher, out io.Writer) error {
 	ctx = domain.WithActor(ctx, domain.SystemActor("seed"))
 	const slug = "demo"
-	t, creds, err := seedTenant(ctx, pool, cipher, "Demo App", slug)
+	created, err := seedApp(ctx, pool, cipher, "Demo App", slug, domain.EnvTest)
 	if err != nil {
 		return err
 	}
-	if t == nil {
-		fmt.Fprintf(out, "tenant %s already exists, skipping\n", slug)
+	if created == nil {
+		fmt.Fprintf(out, "app %s (%s) already exists, skipping\n", slug, domain.EnvTest)
 	} else {
-		fmt.Fprintf(out, "created tenant %s (id=%d)\n  api_key=%s\n  api_secret=%s\n",
-			t.Slug, t.ID, creds.APIKey, creds.APISecret)
-		fmt.Fprintln(out, "NOTE: store the api_secret value now; it is not recoverable in plaintext later.")
+		fmt.Fprintf(out, "created app %s (%s, %s)\n  api_key=%s\n  api_secret=%s\n  webhook_secret=%s\n",
+			created.App.Slug, created.App.PublicID, created.App.Environment,
+			created.APIKey, created.APISecret, created.WebhookSecret)
 	}
 
 	n, err := postgres.NewUserRepo(pool).Count(ctx)
@@ -109,22 +109,22 @@ func runSeed(ctx context.Context, pool *pgxpool.Pool, cipher service.SecretCiphe
 	return nil
 }
 
-// seedTenant creates a tenant through TenantService, so it is audited as the
-// actor in ctx. It returns nil values when the slug already exists.
-func seedTenant(ctx context.Context, pool *pgxpool.Pool, cipher service.SecretCipher, name, slug string) (*domain.Tenant, *service.Credentials, error) {
-	repo := postgres.NewTenantRepo(pool)
-	if _, err := repo.GetBySlug(ctx, slug); err == nil {
-		return nil, nil, nil
+// seedApp creates an app through AppService, so it is audited as the actor
+// in ctx. It returns nil when the slug already exists in env.
+func seedApp(ctx context.Context, pool *pgxpool.Pool, cipher service.SecretCipher, name, slug string, env domain.Environment) (*service.AppCreated, error) {
+	apps := postgres.NewAppRepo(pool)
+	if _, err := apps.GetBySlug(ctx, env, slug); err == nil {
+		return nil, nil
 	} else if !errors.Is(err, domain.ErrNotFound) {
-		return nil, nil, fmt.Errorf("check tenant %s: %w", slug, err)
+		return nil, fmt.Errorf("check app %s: %w", slug, err)
 	}
 	audit := service.NewAuditService(postgres.NewAuditRepo(pool))
-	svc := service.NewTenantService(repo, nil, cipher, postgres.NewTxManager(pool), audit)
-	t, creds, err := svc.Create(ctx, service.CreateTenantInput{Name: name, Slug: slug})
+	svc := service.NewAppService(apps, postgres.NewAPIKeyRepo(pool), cipher, postgres.NewTxManager(pool), audit)
+	created, err := svc.Create(ctx, service.CreateAppInput{Name: name, Slug: slug, Environment: env})
 	if err != nil {
-		return nil, nil, fmt.Errorf("seed %s: %w", slug, err)
+		return nil, fmt.Errorf("seed %s: %w", slug, err)
 	}
-	return t, creds, nil
+	return created, nil
 }
 
 // runResetAdmin recovers console access from the server shell, audited as

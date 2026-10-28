@@ -1,5 +1,5 @@
 // Package hmac provides HMAC-SHA256 signing and constant-time verification
-// used for authenticating tenant API requests and signing outbound webhooks.
+// used for authenticating app API requests and signing outbound webhooks.
 package hmac
 
 import (

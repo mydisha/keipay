@@ -33,20 +33,20 @@ func TestRouter_APIRoutesWinOverConsole(t *testing.T) {
 	if w := get(r, "/healthz"); w.Code != http.StatusOK || w.Body.String() == "<html>console</html>" {
 		t.Fatalf("/healthz: got %d %q", w.Code, w.Body.String())
 	}
-	// Protected admin and tenant APIs still reach their auth middleware.
-	if w := get(r, "/admin/tenants"); w.Code != http.StatusUnauthorized {
-		t.Fatalf("/admin/tenants: got %d, want 401", w.Code)
+	// Protected admin and app APIs still reach their auth middleware.
+	if w := get(r, "/admin/apps"); w.Code != http.StatusUnauthorized {
+		t.Fatalf("/admin/apps: got %d, want 401", w.Code)
 	}
 	if w := get(r, "/v1/payments/1"); w.Code != http.StatusUnauthorized {
 		t.Fatalf("/v1/payments/1: got %d, want 401", w.Code)
 	}
-	if w := get(r, "/tenants"); w.Code != http.StatusOK || w.Body.String() != "<html>console</html>" {
-		t.Fatalf("/tenants: got %d %q", w.Code, w.Body.String())
+	if w := get(r, "/apps"); w.Code != http.StatusOK || w.Body.String() != "<html>console</html>" {
+		t.Fatalf("/apps: got %d %q", w.Code, w.Body.String())
 	}
 }
 
 func TestRouter_NoFrontendDirKeepsPlain404(t *testing.T) {
-	if w := get(newTestRouter(t, ""), "/tenants"); w.Code != http.StatusNotFound {
+	if w := get(newTestRouter(t, ""), "/apps"); w.Code != http.StatusNotFound {
 		t.Fatalf("got %d, want 404", w.Code)
 	}
 }

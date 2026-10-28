@@ -15,9 +15,13 @@ import (
 
 // Audit actions recorded today. Actions are "{target_type}.{verb}".
 const (
-	ActionTenantCreate          = "tenant.create"
-	ActionTenantUpdate          = "tenant.update"
-	ActionTenantRotate          = "tenant.rotate_credentials"
+	ActionAppCreate             = "app.create"
+	ActionAppUpdate             = "app.update"
+	ActionAppDisable            = "app.disable"
+	ActionAppEnable             = "app.enable"
+	ActionAPIKeyCreate          = "api_key.create"
+	ActionAPIKeyRotate          = "api_key.rotate"
+	ActionAPIKeyRevoke          = "api_key.revoke"
 	ActionWebhookDeliveryReplay = "webhook_delivery.replay"
 	ActionUserSetup             = "user.setup"
 	ActionUserCreate            = "user.create"
@@ -33,7 +37,8 @@ const (
 
 // Audit target types.
 const (
-	TargetTenant          = "tenant"
+	TargetApp             = "app"
+	TargetAPIKey          = "api_key"
 	TargetUser            = "user"
 	TargetWebhookDelivery = "webhook_delivery"
 )

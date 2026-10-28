@@ -103,16 +103,17 @@ func main() {
 	// Initialize repositories.
 	log.Debug("initializing repositories")
 	userRepo := postgres.NewUserRepo(pool)
-	tenantRepo := postgres.NewTenantRepo(pool)
+	appRepo := postgres.NewAppRepo(pool)
+	apiKeyRepo := postgres.NewAPIKeyRepo(pool)
 	paymentRepo := postgres.NewPaymentRepo(pool)
 	ledgerRepo := postgres.NewLedgerRepo(pool)
 	webhookRepo := postgres.NewWebhookRepo(pool)
 	auditRepo := postgres.NewAuditRepo(pool)
 	txMgr := postgres.NewTxManager(pool)
 
-	// Initialize caches and idempotency stores.
-	log.Debug("initializing caches and idempotency stores")
-	tenantCache := redisrepo.NewTenantCache(rdb, tenantRepo)
+	// Initialize idempotency stores. API keys and apps are not cached, so a
+	// revoked key or disabled app is refused on the next request.
+	log.Debug("initializing idempotency stores")
 	idemp := redisrepo.NewIdempotency(rdb, 24*time.Hour)
 	nonces := redisrepo.NewIdempotency(rdb, 10*time.Minute)
 	sessions := redisrepo.NewSessionStore(rdb)
@@ -133,7 +134,7 @@ func main() {
 	// Initialize services.
 	log.Debug("initializing services")
 	auditSvc := service.NewAuditService(auditRepo)
-	tenantSvc := service.NewTenantService(tenantRepo, tenantCache, cipher, txMgr, auditSvc)
+	appSvc := service.NewAppService(appRepo, apiKeyRepo, cipher, txMgr, auditSvc)
 	paymentSvc := service.NewPaymentService(paymentRepo, xnd)
 	ledgerSvc := service.NewLedgerService(ledgerRepo)
 	webhookSvc := service.NewWebhookService(paymentRepo, ledgerRepo, webhookRepo, txMgr, idemp, enqueuer)
@@ -176,7 +177,7 @@ func main() {
 	cookies := middleware.CookieConfig{Secure: cfg.CookieSecure()}
 	deps := transport.Deps{
 		Log:             log,
-		TenantResolver:  tenantCache,
+		AppResolver:     appSvc,
 		NonceStore:      nonces,
 		SecretDecryptor: cipher,
 		CallbackToken:   cfg.XenditCallbackToken,
@@ -186,7 +187,8 @@ func main() {
 		TrustedProxies:  cfg.TrustedProxies,
 		Payment:         handler.NewPaymentHandler(paymentSvc),
 		Webhook:         handler.NewWebhookHandler(webhookSvc, log),
-		Admin:           handler.NewAdminHandler(tenantSvc, paymentSvc, ledgerSvc, deliverySvc, auditSvc),
+		Admin:           handler.NewAdminHandler(paymentSvc, ledgerSvc, deliverySvc, auditSvc),
+		Apps:            handler.NewAppHandler(appSvc),
 		Auth:            handler.NewAuthHandler(authSvc, cookies, service.NewToken),
 		Users:           handler.NewUserHandler(userSvc),
 		FrontendDir:     frontendDir,
@@ -207,7 +209,7 @@ func main() {
 	defer stopSweeper()
 	if cfg.RunWorker {
 		log.Info("starting asynq worker", zap.Int("concurrency", 10))
-		asynqSrv = startWorker(redisOpt, tenantRepo, webhookRepo, cipher, log, cfg.WebhookMaxRetry)
+		asynqSrv = startWorker(redisOpt, appRepo, webhookRepo, cipher, log, cfg.WebhookMaxRetry)
 		go worker.NewSweeper(webhookRepo, enqueuer, log).Run(sweepCtx)
 		log.Info("asynq worker started")
 	}
@@ -283,13 +285,13 @@ func main() {
 
 func startWorker(
 	redisOpt asynq.RedisClientOpt,
-	tenantRepo *postgres.TenantRepo,
+	appRepo *postgres.AppRepo,
 	webhookRepo *postgres.WebhookRepo,
 	cipher *crypto.Cipher,
 	log *zap.Logger,
 	maxRetry int,
 ) *asynq.Server {
-	fwd := worker.NewForwarder(tenantRepo, webhookRepo, cipher, log, maxRetry)
+	fwd := worker.NewForwarder(appRepo, webhookRepo, cipher, log, maxRetry)
 
 	srv := asynq.NewServer(redisOpt, asynq.Config{
 		Concurrency: 10,

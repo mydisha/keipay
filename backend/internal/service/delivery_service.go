@@ -31,9 +31,9 @@ type deliverySnapshot struct {
 	Attempts int                          `json:"attempts"`
 }
 
-// List returns deliveries filtered by tenant and/or status, newest first.
-func (s *DeliveryService) List(ctx context.Context, tenantID *int64, status *domain.WebhookDeliveryStatus, limit, offset int) ([]domain.WebhookDelivery, error) {
-	return s.webhooks.ListDeliveries(ctx, tenantID, status, limit, offset)
+// List returns deliveries filtered by app and/or status, newest first.
+func (s *DeliveryService) List(ctx context.Context, f domain.DeliveryFilter) ([]domain.WebhookDelivery, error) {
+	return s.webhooks.ListDeliveries(ctx, f)
 }
 
 // Replay re-enqueues a delivery and records it. The queue is not

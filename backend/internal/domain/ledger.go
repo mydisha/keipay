@@ -10,26 +10,29 @@ const (
 	LedgerEntryTypeRefund  LedgerEntryType = "REFUND"
 )
 
-// LedgerEntry records per-tenant settled amounts for reconciliation against the
+// LedgerEntry records per-app settled amounts for reconciliation against the
 // single shared Xendit balance.
 type LedgerEntry struct {
-	ID        int64           `json:"id"`
-	TenantID  int64           `json:"tenant_id"`
-	PaymentID int64           `json:"payment_id"`
-	Amount    int64           `json:"amount"`
-	XenditFee int64           `json:"xendit_fee"`
-	NetAmount int64           `json:"net_amount"`
-	Type      LedgerEntryType `json:"type"`
+	ID        int64
+	AppID     int64
+	PaymentID int64
+	// PaymentPublicID and App are filled by list queries only.
+	PaymentPublicID string
+	App             AppSummary
+	Amount          int64
+	XenditFee       int64
+	NetAmount       int64
+	Type            LedgerEntryType
 	// SettledAt is when funds settled to the shared balance, when known.
-	SettledAt *time.Time `json:"settled_at,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
+	SettledAt *time.Time
+	CreatedAt time.Time
 }
 
-// LedgerSummary aggregates ledger totals for a tenant over a period.
+// LedgerSummary aggregates ledger totals for an app over a period.
 type LedgerSummary struct {
-	TenantID    int64 `json:"tenant_id"`
-	Count       int64 `json:"count"`
-	GrossAmount int64 `json:"gross_amount"`
-	TotalFee    int64 `json:"total_fee"`
-	NetAmount   int64 `json:"net_amount"`
+	App         AppSummary
+	Count       int64
+	GrossAmount int64
+	TotalFee    int64
+	NetAmount   int64
 }

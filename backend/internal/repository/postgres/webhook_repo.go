@@ -3,7 +3,7 @@ package postgres
 import (
 	"context"
 	"errors"
-	"strings"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -38,19 +38,19 @@ func (r *WebhookRepo) CreateEventIfNew(ctx context.Context, xenditID, status str
 
 // CreateDelivery inserts an outbound delivery record.
 func (r *WebhookRepo) CreateDelivery(ctx context.Context, d *domain.WebhookDelivery) error {
-	const q = `INSERT INTO webhook_deliveries (payment_id, tenant_id, event_type, payload, status, attempts)
+	const q = `INSERT INTO webhook_deliveries (payment_id, app_id, event_type, payload, status, attempts)
 		VALUES ($1,$2,$3,$4,$5,$6)
 		RETURNING id, created_at, updated_at`
-	return conn(ctx, r.db).QueryRow(ctx, q, d.PaymentID, d.TenantID, d.EventType, d.Payload, d.Status, d.Attempts).
+	return conn(ctx, r.db).QueryRow(ctx, q, d.PaymentID, d.AppID, d.EventType, d.Payload, d.Status, d.Attempts).
 		Scan(&d.ID, &d.CreatedAt, &d.UpdatedAt)
 }
 
 // GetDelivery loads a delivery by id.
 func (r *WebhookRepo) GetDelivery(ctx context.Context, id int64) (*domain.WebhookDelivery, error) {
-	const q = `SELECT id, payment_id, tenant_id, event_type, payload, status, attempts, last_error, created_at, updated_at
+	const q = `SELECT id, payment_id, app_id, event_type, payload, status, attempts, last_error, created_at, updated_at
 		FROM webhook_deliveries WHERE id=$1`
 	var d domain.WebhookDelivery
-	err := conn(ctx, r.db).QueryRow(ctx, q, id).Scan(&d.ID, &d.PaymentID, &d.TenantID, &d.EventType,
+	err := conn(ctx, r.db).QueryRow(ctx, q, id).Scan(&d.ID, &d.PaymentID, &d.AppID, &d.EventType,
 		&d.Payload, &d.Status, &d.Attempts, &d.LastError, &d.CreatedAt, &d.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, domain.ErrNotFound
@@ -75,44 +75,52 @@ func (r *WebhookRepo) MarkFailed(ctx context.Context, id int64, attempts int, la
 	return err
 }
 
-// ListDeliveries returns deliveries filtered by tenant and/or status.
-func (r *WebhookRepo) ListDeliveries(ctx context.Context, tenantID *int64, status *domain.WebhookDeliveryStatus, limit, offset int) ([]domain.WebhookDelivery, error) {
-	var conds []string
-	var args []any
-	i := 1
-	if tenantID != nil {
-		conds = append(conds, "tenant_id=$"+itoa(i))
-		args = append(args, *tenantID)
-		i++
+// ListDeliveries returns deliveries newest first, filtered by app and/or
+// status, with their app summary and payment public id.
+func (r *WebhookRepo) ListDeliveries(ctx context.Context, f domain.DeliveryFilter) ([]domain.WebhookDelivery, error) {
+	var w filters
+	if f.AppPublicID != nil {
+		w.add("a.public_id = ?", *f.AppPublicID)
 	}
-	if status != nil {
-		conds = append(conds, "status=$"+itoa(i))
-		args = append(args, *status)
-		i++
+	if f.Status != nil {
+		w.add("d.status = ?", string(*f.Status))
 	}
-	where := ""
-	if len(conds) > 0 {
-		where = " WHERE " + strings.Join(conds, " AND ")
-	}
+	limit := f.Limit
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	q := `SELECT id, payment_id, tenant_id, event_type, payload, status, attempts, last_error, created_at, updated_at
-		FROM webhook_deliveries` + where +
-		` ORDER BY id DESC LIMIT $` + itoa(i) + ` OFFSET $` + itoa(i+1)
-	args = append(args, limit, offset)
+	q := `SELECT d.id, d.payment_id, d.app_id, p.public_id, a.public_id, a.slug, a.name, a.environment,
+		d.event_type, d.payload, d.status, d.attempts, d.last_error, d.created_at, d.updated_at
+		FROM webhook_deliveries d
+		JOIN apps a ON a.id = d.app_id
+		JOIN payments p ON p.id = d.payment_id` + w.where() +
+		` ORDER BY d.id DESC LIMIT ` + w.arg(limit) + ` OFFSET ` + w.arg(max(f.Offset, 0))
 
-	rows, err := conn(ctx, r.db).Query(ctx, q, args...)
+	rows, err := conn(ctx, r.db).Query(ctx, q, w.args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("list deliveries: %w", err)
 	}
-	return scanDeliveries(rows)
+	defer rows.Close()
+
+	var out []domain.WebhookDelivery
+	for rows.Next() {
+		var d domain.WebhookDelivery
+		var env string
+		if err := rows.Scan(&d.ID, &d.PaymentID, &d.AppID, &d.PaymentPublicID, &d.App.PublicID, &d.App.Slug,
+			&d.App.Name, &env, &d.EventType, &d.Payload, &d.Status, &d.Attempts, &d.LastError,
+			&d.CreatedAt, &d.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("scan delivery: %w", err)
+		}
+		d.App.Environment = domain.Environment(env)
+		out = append(out, d)
+	}
+	return out, rows.Err()
 }
 
 // ListUnsentDeliveries returns PENDING deliveries that were never attempted and
 // were created before olderThan, oldest first. Backed by idx_deliveries_unsent.
 func (r *WebhookRepo) ListUnsentDeliveries(ctx context.Context, olderThan time.Time, limit int) ([]domain.WebhookDelivery, error) {
-	const q = `SELECT id, payment_id, tenant_id, event_type, payload, status, attempts, last_error, created_at, updated_at
+	const q = `SELECT id, payment_id, app_id, event_type, payload, status, attempts, last_error, created_at, updated_at
 		FROM webhook_deliveries
 		WHERE status = 'PENDING' AND attempts = 0 AND created_at < $1
 		ORDER BY created_at LIMIT $2`
@@ -129,7 +137,7 @@ func scanDeliveries(rows pgx.Rows) ([]domain.WebhookDelivery, error) {
 	var out []domain.WebhookDelivery
 	for rows.Next() {
 		var d domain.WebhookDelivery
-		if err := rows.Scan(&d.ID, &d.PaymentID, &d.TenantID, &d.EventType, &d.Payload,
+		if err := rows.Scan(&d.ID, &d.PaymentID, &d.AppID, &d.EventType, &d.Payload,
 			&d.Status, &d.Attempts, &d.LastError, &d.CreatedAt, &d.UpdatedAt); err != nil {
 			return nil, err
 		}

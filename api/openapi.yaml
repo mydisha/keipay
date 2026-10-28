@@ -10,7 +10,8 @@ info:
 
     ## Surfaces
 
-    - `/v1/*`: the tenant (app) API, signed with HMAC-SHA256.
+    - `/v1/*`: the app API, authenticated with an app API key and an
+      HMAC-SHA256 signature (see App API keys).
     - `/webhooks/*`: inbound gateway callbacks. Every callback lives below
       `/webhooks/`; `GET /webhooks` itself is the console's Webhooks page.
     - `/admin/*`: the admin console API, authenticated with a session
@@ -36,9 +37,66 @@ info:
 
     New list endpoints use cursor pagination: `limit` (1-200, default 50)
     and an opaque `cursor`; the response carries `data` and `next_cursor`
-    (`null` on the last page). The older admin lists (`/admin/payments`,
-    `/admin/ledger`, `/admin/webhook-deliveries`) still use `limit` and
-    `offset` and move to cursors when their features are reworked.
+    (`null` on the last page). Two older admin lists (`/admin/ledger`,
+    `/admin/webhook-deliveries`) still use `limit` and `offset` and move
+    to cursors when their features are reworked.
+
+    ## Identifiers
+
+    Resources are identified by prefixed public ids: `app_…` (app),
+    `key_…` (API key), `pay_…` (payment), `usr_…` (user), `aud_…` (audit
+    entry). The part after the prefix is a ULID; lower case is accepted.
+    Internal integer ids are not exposed, with three exceptions kept for
+    existing integrations: the `payment_id` field of `/v1` payments and
+    webhook events, and the ids of ledger entries and webhook deliveries
+    (the replay endpoint uses the latter).
+
+    ## App API keys
+
+    Each app has one environment, `test` or `live`, fixed at creation, and
+    any number of API keys, at most 10 of them usable (not revoked, not
+    expired) at a time. A key is an identifier plus a signing secret:
+
+    - API key, sent as `X-Api-Key`: `kp_test_` or `kp_live_` (the app's
+      environment) followed by 32 lower-case hex characters. Keys issued
+      before apps replaced tenants keep their `kp_` + 32 hex form and act
+      in their app's environment. KeiPay stores only a SHA-256 hash of the
+      key and afterwards shows its prefix and last 4 characters.
+    - API secret: `kps_test_` or `kps_live_` followed by 48 hex
+      characters; the HMAC key for `X-Signature`. Stored encrypted.
+
+    Both are shown once, when the key is created or rotated. The key
+    alone decides the app and its environment; nothing in a request body
+    or path can point at another app. A key stays usable until it is
+    revoked or its optional `expires_at` passes. Rotating a key creates a
+    new key and secret with the same label and leaves the old key valid
+    until you revoke it: deploy the new pair, then revoke the old one.
+
+    `/v1` checks, in order: the three headers, the timestamp window, the
+    key (`401 unknown_api_key`), the signature (`401 invalid_signature`),
+    then the key's state (`401 api_key_revoked`, `401 api_key_expired`)
+    and the app's (`403 tenant_inactive` when the app is disabled), and
+    finally replay (`401 replayed_request`). Key and app state are only
+    reported to callers that signed with the key's secret.
+
+    Outbound webhooks are signed with the app's webhook signing secret
+    (`kpwh_` + 48 hex characters, shown once when the app is created),
+    which is separate from its API keys so rotating keys never breaks
+    webhook verification. Apps that existed before apps replaced tenants
+    keep their original `api_secret` as their webhook signing secret.
+
+    ## Idempotency
+
+    `POST /v1/payments` is idempotent per `order_id` within the app.
+    Optionally send `Idempotency-Key` as well (1-255 printable ASCII
+    characters, no spaces). The key is checked first: the same key with
+    the same request returns the original payment; the same key with a
+    different request returns `409 idempotency_key_reused`. Without a key
+    match, a repeated `order_id` with the same amount and currency returns
+    the original payment, and with a different amount or currency
+    `409 conflict`. Replays are answered with `201` and
+    `Idempotent-Replayed: true`. Keys are stored with the payment and do
+    not expire. Different apps may use the same `order_id` or key.
 
     ## Admin authentication
 
@@ -84,8 +142,8 @@ info:
 
     | permission | owner | admin | viewer |
     |---|---|---|---|
-    | `tenants:read` | yes | yes | yes |
-    | `tenants:write` | yes | yes | no |
+    | `apps:read` | yes | yes | yes |
+    | `apps:write` | yes | yes | no |
     | `payments:read` | yes | yes | yes |
     | `deliveries:read` | yes | yes | yes |
     | `deliveries:replay` | yes | yes | no |
@@ -104,19 +162,19 @@ tags:
   - name: health
     description: Liveness.
   - name: payments
-    description: Tenant API for payments.
+    description: App API for payments.
   - name: gateway-webhooks
     description: Inbound callbacks from payment gateways.
   - name: admin-auth
     description: First-run setup, sign-in, sessions and the signed-in user's account.
   - name: admin-users
     description: Console users and roles (owner only).
-  - name: admin-tenants
-    description: Tenant (app) management.
+  - name: admin-apps
+    description: Apps, their API keys and settings.
   - name: admin-payments
     description: Payment and ledger reporting.
   - name: admin-webhooks
-    description: Outbound webhook deliveries to tenants.
+    description: Outbound webhook deliveries to apps.
   - name: admin-audit
     description: Audit trail of admin mutations.
 
@@ -142,18 +200,29 @@ paths:
       summary: Create a payment
       description: |
         Creates a hosted checkout on the gateway and returns its URL.
-        Idempotent per `order_id`: a retry with the same amount and currency
-        returns the original payment (also `201`); a different amount or
-        currency returns `409 conflict`. An expired payment is returned
-        as-is, so use a new `order_id` to retry.
+        Idempotent per `order_id` within the app, and per `Idempotency-Key`
+        when sent (see Idempotency): a replay returns the original payment
+        with `201` and `Idempotent-Replayed: true`; a repeated `order_id`
+        with a different amount or currency returns `409 conflict`; a
+        repeated `Idempotency-Key` with a different request returns
+        `409 idempotency_key_reused`. An expired payment is returned as-is,
+        so use a new `order_id` to retry.
 
-        A body that breaks the schema, including any entry of `items`,
-        returns `400 invalid_request` with `details.fields` (for example
-        `items.0.quantity`). `400 validation_failed` is for business rules.
+        The gateway reference (`reference`, Xendit `external_id`) is
+        `kp_` + the payment id, for example `kp_pay_01JB…`. `metadata` is
+        stored with the payment, returned by `GET` and sent back in every
+        webhook event for it.
+
+        A body that breaks the schema, including any entry of `items` or
+        `metadata`, returns `400 invalid_request` with `details.fields`
+        (for example `items.0.quantity` or `metadata.note`).
+        `400 validation_failed` is for business rules.
       security:
-        - tenantApiKey: []
-          tenantTimestamp: []
-          tenantSignature: []
+        - appApiKey: []
+          appTimestamp: []
+          appSignature: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -162,7 +231,10 @@ paths:
               $ref: '#/components/schemas/CreatePaymentRequest'
       responses:
         '201':
-          description: Payment created, or the existing payment for this `order_id`.
+          description: Payment created, or the existing payment for this `order_id` or `Idempotency-Key`.
+          headers:
+            Idempotent-Replayed:
+              $ref: '#/components/headers/IdempotentReplayed'
           content:
             application/json:
               schema:
@@ -183,11 +255,11 @@ paths:
       tags: [payments]
       operationId: getPayment
       summary: Get a payment
-      description: Returns a payment owned by the calling tenant. Sign an empty body.
+      description: Returns a payment of the calling app, by `pay_…` id or legacy integer id. Sign an empty body.
       security:
-        - tenantApiKey: []
-          tenantTimestamp: []
-          tenantSignature: []
+        - appApiKey: []
+          appTimestamp: []
+          appSignature: []
       parameters:
         - $ref: '#/components/parameters/PaymentIdPath'
       responses:
@@ -674,19 +746,39 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /admin/tenants:
+  /admin/apps:
     get:
-      tags: [admin-tenants]
-      operationId: listTenants
-      summary: List tenants
-      x-keipay-permission: tenants:read
+      tags: [admin-apps]
+      operationId: listApps
+      summary: List apps
+      description: |
+        Cursor-paginated, newest first (`created_at` descending, then `id`
+        descending). Includes disabled apps unless filtered. An unknown
+        `environment` or `status` returns `400 invalid_request` with rule
+        `oneof`.
+      x-keipay-permission: apps:read
+      parameters:
+        - name: environment
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AppEnvironment'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AppStatus'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
       responses:
         '200':
-          description: All tenants, oldest first.
+          description: A page of apps.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TenantListResponse'
+                $ref: '#/components/schemas/AppListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -694,29 +786,33 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
     post:
-      tags: [admin-tenants]
-      operationId: createTenant
-      summary: Create a tenant
-      x-keipay-permission: tenants:write
+      tags: [admin-apps]
+      operationId: createApp
+      summary: Create an app
+      x-keipay-permission: apps:write
       security:
         - adminSession: []
           csrfToken: []
       description: |
-        Returns the API secret in plaintext exactly once. Recorded in the
-        audit log as `tenant.create`.
+        Creates an active app with its first API key (label `Default`, no
+        expiry) and its webhook signing secret. The API key, API secret
+        and webhook signing secret are returned in plaintext exactly once.
+        `slug` must be unused within the environment (`409 conflict`);
+        `slug` and `environment` never change. Records `app.create` and
+        `api_key.create`.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/CreateTenantRequest'
+              $ref: '#/components/schemas/CreateAppRequest'
       responses:
         '201':
-          description: Tenant created, with one-time credentials.
+          description: The app, its first key and the one-time secrets.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TenantWithCredentialsResponse'
+                $ref: '#/components/schemas/AppCreatedResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -728,34 +824,64 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /admin/tenants/{id}:
-    put:
-      tags: [admin-tenants]
-      operationId: updateTenant
-      summary: Update a tenant
-      x-keipay-permission: tenants:write
+  /admin/apps/{id}:
+    get:
+      tags: [admin-apps]
+      operationId: getApp
+      summary: Get an app
+      x-keipay-permission: apps:read
+      parameters:
+        - $ref: '#/components/parameters/AppIdPath'
+      responses:
+        '200':
+          description: The app.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [admin-apps]
+      operationId: updateApp
+      summary: Update an app
+      x-keipay-permission: apps:write
       security:
         - adminSession: []
           csrfToken: []
       description: |
-        Replaces every mutable field; an omitted `active` means `false`.
-        The slug cannot be changed. Recorded in the audit log as
-        `tenant.update`.
+        Send only the fields to change; `metadata` replaces the whole
+        object. `slug` and `environment` cannot change: a body containing
+        either returns `400 invalid_request` with rule `immutable` for that
+        field, even with the current value. A body with none of the
+        updatable fields returns `400 invalid_request` with
+        `details.fields` `[{"field": "body", "rule": "required"}]`. Other
+        unknown fields are ignored. A request that changes nothing returns
+        the app and records nothing; otherwise it records `app.update`
+        with only the changed fields.
       parameters:
-        - $ref: '#/components/parameters/TenantIdPath'
+        - $ref: '#/components/parameters/AppIdPath'
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/UpdateTenantRequest'
+              $ref: '#/components/schemas/UpdateAppRequest'
       responses:
         '200':
-          description: The updated tenant.
+          description: The app.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TenantResponse'
+                $ref: '#/components/schemas/AppResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -767,28 +893,203 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /admin/tenants/{id}/rotate:
+  /admin/apps/{id}/disable:
     post:
-      tags: [admin-tenants]
-      operationId: rotateTenantCredentials
-      summary: Rotate a tenant's API key and secret
-      x-keipay-permission: tenants:write
+      tags: [admin-apps]
+      operationId: disableApp
+      summary: Disable an app
+      x-keipay-permission: apps:write
       security:
         - adminSession: []
           csrfToken: []
       description: |
-        Issues a new key and secret and invalidates the old pair immediately.
-        The new secret is returned in plaintext exactly once. Recorded in the
-        audit log as `tenant.rotate_credentials`.
+        Every later `/v1` request with any of the app's keys gets
+        `403 tenant_inactive`. Keys, payments and queued webhook forwards
+        are unchanged. Disabling a disabled app returns it unchanged and
+        records nothing; otherwise records `app.disable`.
       parameters:
-        - $ref: '#/components/parameters/TenantIdPath'
+        - $ref: '#/components/parameters/AppIdPath'
       responses:
         '200':
-          description: New credentials.
+          description: The app.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/TenantWithCredentialsResponse'
+                $ref: '#/components/schemas/AppResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/apps/{id}/enable:
+    post:
+      tags: [admin-apps]
+      operationId: enableApp
+      summary: Enable an app
+      x-keipay-permission: apps:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Enabling an active app returns it unchanged and records nothing;
+        otherwise records `app.enable`.
+      parameters:
+        - $ref: '#/components/parameters/AppIdPath'
+      responses:
+        '200':
+          description: The app.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AppResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/apps/{id}/keys:
+    get:
+      tags: [admin-apps]
+      operationId: listAppApiKeys
+      summary: List an app's API keys
+      description: Cursor-paginated, newest first (`created_at` descending, then `id` descending). Includes revoked and expired keys.
+      x-keipay-permission: apps:read
+      parameters:
+        - $ref: '#/components/parameters/AppIdPath'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of keys. Secrets and full keys are never returned here.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [admin-apps]
+      operationId: createAppApiKey
+      summary: Create an API key
+      x-keipay-permission: apps:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Issues a key in the app's environment. The key and its secret are
+        returned in plaintext exactly once. An app may have at most 10
+        usable (not revoked, not expired) keys; one more returns
+        `400 validation_failed`. Works on disabled apps too. Records
+        `api_key.create`.
+      parameters:
+        - $ref: '#/components/parameters/AppIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateApiKeyRequest'
+      responses:
+        '201':
+          description: The key and its one-time secret.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCreatedResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/apps/{id}/keys/{key_id}/rotate:
+    post:
+      tags: [admin-apps]
+      operationId: rotateAppApiKey
+      summary: Rotate an API key
+      x-keipay-permission: apps:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Issues a new key and secret with the same label and no expiry. The
+        rotated key stays valid until it is revoked or expires, so both
+        work while the app switches over. Rotating a revoked or expired
+        key returns `400 validation_failed`; the 10-key limit applies. A
+        key of another app returns `404 not_found`. Records
+        `api_key.rotate` (target: the new key; before: the rotated key;
+        after: the new key).
+      parameters:
+        - $ref: '#/components/parameters/AppIdPath'
+        - $ref: '#/components/parameters/ApiKeyIdPath'
+      responses:
+        '201':
+          description: The new key and its one-time secret.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyCreatedResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/apps/{id}/keys/{key_id}/revoke:
+    post:
+      tags: [admin-apps]
+      operationId: revokeAppApiKey
+      summary: Revoke an API key
+      x-keipay-permission: apps:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Revokes the key at once: later requests with it get
+        `401 api_key_revoked`. Revoking the app's last usable key is
+        allowed. Revoking a revoked key returns it unchanged and records
+        nothing; otherwise records `api_key.revoke`. A key of another app
+        returns `404 not_found`.
+      parameters:
+        - $ref: '#/components/parameters/AppIdPath'
+        - $ref: '#/components/parameters/ApiKeyIdPath'
+      responses:
+        '200':
+          description: The revoked key.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiKeyResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -807,11 +1108,19 @@ paths:
       summary: List payments
       x-keipay-permission: payments:read
       description: |
-        Offset-paginated, newest first. Unparseable `tenant_id`, `from` and
-        `to` values are ignored, and an out-of-range `limit` falls back to the
-        default.
+        Cursor-paginated, newest first (`created_at` descending, then `id`
+        descending). Every filter is optional. An invalid value returns
+        `400 invalid_request`: `app_id` rule `public_id`, `status` rule
+        `oneof`, `from` or `to` rule `datetime`. An `app_id` that matches
+        no app returns an empty page.
       parameters:
-        - $ref: '#/components/parameters/TenantIdFilter'
+        - name: app_id
+          in: query
+          required: false
+          description: Only payments of this app.
+          schema:
+            type: string
+            pattern: '^app_[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
         - name: status
           in: query
           required: false
@@ -819,21 +1128,17 @@ paths:
             $ref: '#/components/schemas/PaymentStatus'
         - $ref: '#/components/parameters/FromFilter'
         - $ref: '#/components/parameters/ToFilter'
-        - name: limit
-          in: query
-          required: false
-          description: 1-200, default 50.
-          schema:
-            type: integer
-            default: 50
-        - $ref: '#/components/parameters/Offset'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
       responses:
         '200':
-          description: A page of payments and the total match count.
+          description: A page of payments.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaymentListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -845,13 +1150,15 @@ paths:
     get:
       tags: [admin-payments]
       operationId: listLedger
-      summary: List ledger entries with a per-tenant summary
+      summary: List ledger entries with a per-app summary
       x-keipay-permission: payments:read
       description: |
         Offset-paginated, newest first. Unparseable filters are ignored, and
-        an out-of-range `limit` falls back to the default.
+        an out-of-range `limit` falls back to the default. A well-formed
+        `app_id` that matches no app returns no entries and an empty
+        summary.
       parameters:
-        - $ref: '#/components/parameters/TenantIdFilter'
+        - $ref: '#/components/parameters/AppIdFilter'
         - $ref: '#/components/parameters/FromFilter'
         - $ref: '#/components/parameters/ToFilter'
         - name: limit
@@ -864,7 +1171,7 @@ paths:
         - $ref: '#/components/parameters/Offset'
       responses:
         '200':
-          description: Ledger entries and per-tenant totals for the same filter.
+          description: Ledger entries and per-app totals for the same filter.
           content:
             application/json:
               schema:
@@ -883,10 +1190,11 @@ paths:
       summary: List outbound webhook deliveries
       x-keipay-permission: deliveries:read
       description: |
-        Offset-paginated, newest first. An unparseable `tenant_id` is
-        ignored, and an out-of-range `limit` falls back to the default.
+        Offset-paginated, newest first. An unparseable `app_id` is
+        ignored; a well-formed `app_id` that matches no app returns an
+        empty list. An out-of-range `limit` falls back to the default.
       parameters:
-        - $ref: '#/components/parameters/TenantIdFilter'
+        - $ref: '#/components/parameters/AppIdFilter'
         - name: status
           in: query
           required: false
@@ -924,7 +1232,7 @@ paths:
         - adminSession: []
           csrfToken: []
       description: |
-        Re-enqueues the delivery. Delivery is at-least-once, so tenants must
+        Re-enqueues the delivery. Delivery is at-least-once, so apps must
         already dedupe. Recorded in the audit log as `webhook_delivery.replay`.
       parameters:
         - name: id
@@ -983,12 +1291,14 @@ webhooks:
   paymentEvent:
     post:
       operationId: paymentEventWebhook
-      summary: Payment event forwarded to the tenant's webhook_url
+      summary: Payment event forwarded to the app's webhook_url
       description: |
-        Sent when a payment changes status. Verify `X-Kei-Signature`
-        (hex HMAC-SHA256 of the raw body keyed with the tenant `api_secret`)
-        in constant time. Return any `2xx` to acknowledge; anything else is
-        retried. Delivery is at-least-once: dedupe on `payment_id` + `event`.
+        Sent when a payment changes status. Verify `X-Kei-Signature` (hex
+        HMAC-SHA256 of the raw body keyed with the app's webhook signing
+        secret; for apps that existed before apps replaced tenants, that is
+        their original `api_secret`) in constant time. Return any `2xx` to
+        acknowledge; anything else is retried. Delivery is at-least-once:
+        dedupe on `payment_public_id` (or `payment_id`) + `event`.
       security: []
       parameters:
         - name: X-Kei-Event
@@ -1031,23 +1341,24 @@ components:
         `PUT`, `PATCH` and `DELETE` under `/admin/`, including sign-in,
         setup and logout; with a session it must equal the session's token.
         Missing or wrong: `403 invalid_csrf_token`.
-    tenantApiKey:
+    appApiKey:
       type: apiKey
       in: header
       name: X-Api-Key
-      description: The tenant `api_key`.
-    tenantTimestamp:
+      description: An app API key (`kp_test_…`, `kp_live_…`, or a legacy `kp_…`). Identifies the app; not a secret on its own.
+    appTimestamp:
       type: apiKey
       in: header
       name: X-Timestamp
       description: Unix seconds; must be within 5 minutes of server time.
-    tenantSignature:
+    appSignature:
       type: apiKey
       in: header
       name: X-Signature
       description: |
-        Hex HMAC-SHA256 of `"{X-Timestamp}.{rawBody}"` keyed with the tenant
-        `api_secret`. Each signature is accepted once (replay protection).
+        Hex HMAC-SHA256 of `"{X-Timestamp}.{rawBody}"` keyed with the API
+        secret of the key in `X-Api-Key`. Each signature is accepted once
+        (replay protection).
     xenditCallbackToken:
       type: apiKey
       in: header
@@ -1070,27 +1381,60 @@ components:
       name: id
       in: path
       required: true
-      description: Payment id. A non-integer returns `400 invalid_request`; an integer below 1 matches nothing and returns `404 not_found`.
+      description: |
+        The payment's `pay_…` id (lower case accepted) or its legacy integer
+        `payment_id`. Anything else returns `400 invalid_request` with
+        `details.fields` `[{"field": "id", "rule": "public_id"}]`. A payment
+        of another app, or an integer below 1, returns `404 not_found`.
       schema:
-        type: integer
-        format: int64
-        minimum: 1
-    TenantIdPath:
+        type: string
+        pattern: '^(pay_[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}|[0-9]{1,19})$'
+        examples: [pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+    AppIdPath:
       name: id
       in: path
       required: true
-      description: Tenant id. A non-integer returns `400 invalid_request`; an integer below 1 matches nothing and returns `404 not_found`.
+      description: |
+        App id (`app_…`; lower case is accepted). Any other format returns
+        `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
       schema:
-        type: integer
-        format: int64
-        minimum: 1
-    TenantIdFilter:
-      name: tenant_id
+        type: string
+        pattern: '^app_[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
+        examples: [app_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+    ApiKeyIdPath:
+      name: key_id
+      in: path
+      required: true
+      description: |
+        API key id (`key_…`; lower case is accepted). Any other format
+        returns `400 invalid_request` with `details.fields`
+        `[{"field": "key_id", "rule": "public_id"}]`.
+      schema:
+        type: string
+        pattern: '^key_[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
+        examples: [key_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+    AppIdFilter:
+      name: app_id
       in: query
       required: false
+      description: Only rows of this app (`app_…`). On these legacy offset lists an unparseable value is ignored; a well-formed id that matches no app still filters, so no rows are returned.
       schema:
-        type: integer
-        format: int64
+        type: string
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Optional retry key, unique per app (see Idempotency). 1-255
+        printable ASCII characters without spaces; an empty header counts as
+        absent. Invalid: `400 invalid_request` with field `Idempotency-Key`
+        and rule `max` (longer than 255) or `format`.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 255
+        pattern: '^[\x21-\x7E]+$'
+        examples: [3f1c2d9e-7b1a-4c55-9a1e-2f0f6f1b9c11]
     FromFilter:
       name: from
       in: query
@@ -1147,6 +1491,11 @@ components:
       schema:
         type: integer
         minimum: 1
+    IdempotentReplayed:
+      description: '`true` when the response is an existing payment returned for a repeated `order_id` or `Idempotency-Key`; absent on a newly created payment.'
+      schema:
+        type: string
+        const: 'true'
 
   responses:
     BadRequest:
@@ -1164,7 +1513,8 @@ components:
       description: |
         Authentication failed. The `code` says why: `session_required` or
         `session_expired` on admin routes, `invalid_credentials` on sign-in
-        and password change, the tenant signature codes on `/v1`, and
+        and password change, the app key and signature codes on `/v1`
+        (including `api_key_revoked` and `api_key_expired`), and
         `invalid_callback_token` on gateway callbacks.
       content:
         application/json:
@@ -1174,7 +1524,8 @@ components:
       description: |
         `forbidden` (the role lacks the operation's `x-keipay-permission`),
         `password_change_required`, `invalid_csrf_token`,
-        `invalid_setup_token`, or on `/v1` `tenant_inactive`.
+        `invalid_setup_token`, or on `/v1` `tenant_inactive` (the app is
+        disabled).
       content:
         application/json:
           schema:
@@ -1187,9 +1538,10 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     Conflict:
       description: |
-        `conflict` (duplicate slug or email, or an `order_id` reused with a
-        different amount or currency), `setup_completed`, `last_owner`, or
-        `cannot_modify_self`.
+        `conflict` (duplicate slug within an environment or duplicate
+        email, or an `order_id` reused with a different amount or
+        currency), `idempotency_key_reused`, `setup_completed`,
+        `last_owner`, or `cannot_modify_self`.
       content:
         application/json:
           schema:
@@ -1228,20 +1580,23 @@ components:
         | `invalid_token` | 401 | Not returned since admin bearer tokens were replaced by session cookies; kept so the code keeps its meaning. |
         | `session_required` | 401 | Admin request without a `keipay_session` cookie. |
         | `session_expired` | 401 | The session is unknown, idle too long, past its absolute lifetime, or was ended (logout, user disabled, password changed or reset). Sign in again. |
-        | `missing_signature_headers` | 401 | Tenant request without `X-Api-Key`, `X-Timestamp` or `X-Signature`. |
+        | `missing_signature_headers` | 401 | App request without `X-Api-Key`, `X-Timestamp` or `X-Signature`. |
         | `invalid_timestamp` | 401 | `X-Timestamp` is not unix seconds. |
         | `timestamp_out_of_range` | 401 | `X-Timestamp` is more than 5 minutes from server time. |
-        | `unknown_api_key` | 401 | No tenant has this `X-Api-Key`. |
+        | `unknown_api_key` | 401 | No app key matches `X-Api-Key`. |
+        | `api_key_revoked` | 401 | The key was revoked. Use another key of the app. |
+        | `api_key_expired` | 401 | The key's `expires_at` has passed. Use another key of the app. |
         | `invalid_signature` | 401 | `X-Signature` does not match. |
         | `replayed_request` | 401 | This signature was already used. |
         | `invalid_callback_token` | 401 | Gateway callback token is missing or wrong. |
-        | `tenant_inactive` | 403 | The tenant is disabled. |
+        | `tenant_inactive` | 403 | The app is disabled. (The name dates from when apps were called tenants.) |
         | `forbidden` | 403 | The signed-in user's role lacks the operation's permission (`x-keipay-permission`). |
         | `password_change_required` | 403 | The user must change their password first (`POST /admin/me/password`). |
         | `invalid_csrf_token` | 403 | `X-CSRF-Token` is missing, does not match the `keipay_csrf` cookie, or does not match the session. |
         | `invalid_setup_token` | 403 | The server requires `SETUP_TOKEN` and `setup_token` is missing or wrong. |
         | `not_found` | 404 | The resource or route does not exist. |
-        | `conflict` | 409 | Duplicate (slug, email), or idempotent retry with different data. |
+        | `conflict` | 409 | Duplicate (slug within an environment, email), or an `order_id` repeated with a different amount or currency. |
+        | `idempotency_key_reused` | 409 | The `Idempotency-Key` was already used by this app for a different request. |
         | `setup_completed` | 409 | First-run setup already happened; sign in instead. |
         | `last_owner` | 409 | The change would leave no active owner. |
         | `cannot_modify_self` | 409 | Owners cannot disable themselves or reset their own password through the users API. |
@@ -1276,6 +1631,9 @@ components:
         - last_owner
         - cannot_modify_self
         - rate_limited
+        - api_key_revoked
+        - api_key_expired
+        - idempotency_key_reused
 
     ErrorResponse:
       type: object
@@ -1387,7 +1745,7 @@ components:
         order_id:
           type: string
           minLength: 1
-          description: Your order reference; unique per tenant.
+          description: Your order reference; unique per app.
         amount:
           type: integer
           format: int64
@@ -1414,14 +1772,28 @@ components:
           type: string
           format: date-time
           description: Optional estimate you can show your user before funds settle.
+        metadata:
+          $ref: '#/components/schemas/Metadata'
 
     PaymentResponse:
       type: object
-      required: [payment_id, order_id, status, amount, currency, invoice_url]
+      required: [id, payment_id, reference, order_id, status, amount, currency, invoice_url, metadata]
       properties:
+        id:
+          type: string
+          pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
+          examples: [pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
         payment_id:
           type: integer
           format: int64
+          description: Legacy integer id, kept for existing integrations. Prefer `id`.
+        reference:
+          type: string
+          description: |
+            The reference KeiPay sent to the gateway (Xendit `external_id`):
+            `kp_` + `id` for payments created since apps replaced tenants,
+            `{slug}:{order_id}` for older ones.
+          examples: [kp_pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
         order_id:
           type: string
         status:
@@ -1438,6 +1810,8 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/OrderItem'
+        metadata:
+          $ref: '#/components/schemas/Metadata'
         expires_at:
           type: string
           format: date-time
@@ -1460,7 +1834,7 @@ components:
           type: string
         external_id:
           type: string
-          description: '`{tenant_slug}:{order_id}`.'
+          description: The payment's reference, matched against stored references (`kp_pay_…`, or `{slug}:{order_id}` for older payments). It is never parsed.
         status:
           type: string
           examples: [PAID, SETTLED, EXPIRED]
@@ -1508,8 +1882,8 @@ components:
       type: string
       description: See "Roles and permissions" above. New permissions may be added.
       enum:
-        - 'tenants:read'
-        - 'tenants:write'
+        - 'apps:read'
+        - 'apps:write'
         - 'payments:read'
         - 'deliveries:read'
         - 'deliveries:replay'
@@ -1705,29 +2079,96 @@ components:
           type: [string, 'null']
           description: Pass as `cursor` to get the next page; `null` on the last page.
 
-    Tenant:
+    AppEnvironment:
+      type: string
+      description: |
+        `test` or `live`. Fixed when the app is created; the app's keys
+        carry it (`kp_test_…`, `kp_live_…`).
+      enum: [test, live]
+
+    AppStatus:
+      type: string
+      description: '`disabled` apps get `403 tenant_inactive` on every `/v1` request.'
+      enum: [active, disabled]
+
+    AppSlug:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$'
+      description: |
+        3-32 characters of `a-z`, `0-9` and `-`, starting and ending with a
+        letter or digit (surrounding spaces are trimmed and upper case is
+        lowered before checking). Unique within an environment; never
+        changes. Invalid: rule `slug`.
+      examples: [acme-shop]
+
+    AppName:
+      type: string
+      minLength: 1
+      maxLength: 100
+      description: Display name, trimmed. Blank is rejected (`required`), more than 100 characters `max`, control characters `name`.
+      examples: [Acme Shop]
+
+    HttpUrl:
+      type: string
+      maxLength: 2048
+      description: |
+        Empty (none), or an absolute `http` or `https` URL with a host, at
+        most 2048 bytes, without whitespace or control characters.
+        Invalid: rule `url`.
+      examples: [https://shop.example.com/hooks/keipay]
+
+    Metadata:
       type: object
-      required: [id, name, slug, api_key, webhook_url, redirect_success_url, redirect_failure_url, active, created_at, updated_at]
+      maxProperties: 50
+      propertyNames:
+        minLength: 1
+        maxLength: 40
+      additionalProperties:
+        type: [string, number, boolean, 'null']
+        maxLength: 500
+      description: |
+        Your own key-value data, stored and returned with the same keys
+        and values (key order is not kept; numbers are never rounded
+        through floating point). At most 50 keys; each key 1-40
+        characters (Unicode code points) without control characters; each
+        value a string of at most 500 characters, a number, a boolean or
+        `null` (no nested objects or arrays); no string may contain U+0000;
+        at most 8192 bytes as compact JSON. Omitted or `null` means `{}`.
+        Violations return `400 invalid_request` with `metadata` and rule
+        `object` (not an object), `max_keys`, `key` or `max_bytes`, or with
+        `metadata.<key>` and rule `type` (nested value), `max` (string too
+        long) or `invalid_character` (U+0000).
+      examples:
+        - channel: mobile
+          campaign: promo-11.11
+          customer_tier: 2
+
+    App:
+      type: object
+      required: [id, slug, name, environment, status, metadata, webhook_url, redirect_success_url, redirect_failure_url, created_at, updated_at]
       properties:
         id:
-          type: integer
-          format: int64
-        name:
           type: string
+          pattern: '^app_[0-9A-HJKMNP-TV-Z]{26}$'
+          examples: [app_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
         slug:
           type: string
-          description: Lowercase, 3-32 chars of `a-z`, `0-9` and `-`; cannot change.
-        api_key:
+          description: See `AppSlug`. Never changes.
+        name:
           type: string
-          description: Public key id sent as `X-Api-Key`. Not a secret.
+        environment:
+          $ref: '#/components/schemas/AppEnvironment'
+        status:
+          $ref: '#/components/schemas/AppStatus'
+        metadata:
+          $ref: '#/components/schemas/Metadata'
         webhook_url:
           type: string
+          description: Where payment events are sent; empty means none.
         redirect_success_url:
           type: string
         redirect_failure_url:
           type: string
-        active:
-          type: boolean
         created_at:
           type: string
           format: date-time
@@ -1735,88 +2176,207 @@ components:
           type: string
           format: date-time
 
-    TenantCredentials:
+    AppSummary:
       type: object
-      required: [api_key, api_secret]
+      description: The app a row belongs to.
+      required: [id, slug, name, environment]
       properties:
-        api_key:
+        id:
           type: string
-        api_secret:
-          type: string
-          description: HMAC signing secret. Shown once; store it now.
-
-    CreateTenantRequest:
-      type: object
-      required: [name, slug]
-      properties:
-        name:
-          type: string
-          minLength: 1
+          pattern: '^app_[0-9A-HJKMNP-TV-Z]{26}$'
         slug:
           type: string
-          pattern: '^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$'
-        webhook_url:
-          type: string
-        redirect_success_url:
-          type: string
-        redirect_failure_url:
-          type: string
-
-    UpdateTenantRequest:
-      type: object
-      required: [name]
-      properties:
         name:
           type: string
-          minLength: 1
+        environment:
+          $ref: '#/components/schemas/AppEnvironment'
+
+    CreateAppRequest:
+      type: object
+      required: [name, slug, environment]
+      properties:
+        name:
+          $ref: '#/components/schemas/AppName'
+        slug:
+          $ref: '#/components/schemas/AppSlug'
+        environment:
+          $ref: '#/components/schemas/AppEnvironment'
         webhook_url:
-          type: string
+          $ref: '#/components/schemas/HttpUrl'
         redirect_success_url:
-          type: string
+          $ref: '#/components/schemas/HttpUrl'
         redirect_failure_url:
-          type: string
-        active:
-          type: boolean
-          default: false
+          $ref: '#/components/schemas/HttpUrl'
+        metadata:
+          $ref: '#/components/schemas/Metadata'
 
-    TenantResponse:
+    UpdateAppRequest:
       type: object
-      required: [tenant]
+      minProperties: 1
+      description: |
+        Send only the fields to change. `slug` or `environment` in the body
+        returns `400 invalid_request` with rule `immutable`.
       properties:
-        tenant:
-          $ref: '#/components/schemas/Tenant'
+        name:
+          $ref: '#/components/schemas/AppName'
+        webhook_url:
+          $ref: '#/components/schemas/HttpUrl'
+        redirect_success_url:
+          $ref: '#/components/schemas/HttpUrl'
+        redirect_failure_url:
+          $ref: '#/components/schemas/HttpUrl'
+        metadata:
+          $ref: '#/components/schemas/Metadata'
 
-    TenantWithCredentialsResponse:
+    AppResponse:
       type: object
-      required: [tenant, credentials]
+      required: [app]
       properties:
-        tenant:
-          $ref: '#/components/schemas/Tenant'
-        credentials:
-          $ref: '#/components/schemas/TenantCredentials'
+        app:
+          $ref: '#/components/schemas/App'
 
-    TenantListResponse:
+    AppListResponse:
       type: object
-      required: [tenants]
+      required: [data, next_cursor]
       properties:
-        tenants:
+        data:
           type: array
           items:
-            $ref: '#/components/schemas/Tenant'
+            $ref: '#/components/schemas/App'
+        next_cursor:
+          type: [string, 'null']
+          description: Pass as `cursor` to get the next page; `null` on the last page.
+
+    AppCreatedResponse:
+      type: object
+      required: [app, key, api_key, api_secret, webhook_secret]
+      properties:
+        app:
+          $ref: '#/components/schemas/App'
+        key:
+          $ref: '#/components/schemas/ApiKey'
+        api_key:
+          type: string
+          description: The full API key for `X-Api-Key`. Shown once; KeiPay keeps only its hash.
+          examples: [kp_test_3f9a0c1d2e4b5a69788796a5b4c3d2e1]
+        api_secret:
+          type: string
+          format: password
+          description: The HMAC secret for `X-Signature`. Shown once; store it now.
+        webhook_secret:
+          type: string
+          format: password
+          description: The secret that signs outbound webhooks (`X-Kei-Signature`). Shown once; store it now.
+
+    ApiKeyStatus:
+      type: string
+      description: Derived. `revoked` once `revoked_at` is set; else `expired` once `expires_at` has passed; else `active`.
+      enum: [active, expired, revoked]
+
+    ApiKeyLabel:
+      type: string
+      minLength: 1
+      maxLength: 60
+      description: What the key is for, trimmed. Blank is rejected (`required`), more than 60 characters `max`, control characters `name`.
+      examples: [Production server]
+
+    ApiKey:
+      type: object
+      required: [id, app_id, label, environment, prefix, last4, status, last_used_at, expires_at, revoked_at, created_at]
+      properties:
+        id:
+          type: string
+          pattern: '^key_[0-9A-HJKMNP-TV-Z]{26}$'
+          examples: [key_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+        app_id:
+          type: string
+          pattern: '^app_[0-9A-HJKMNP-TV-Z]{26}$'
+        label:
+          type: string
+        environment:
+          $ref: '#/components/schemas/AppEnvironment'
+        prefix:
+          type: string
+          enum: [kp_test_, kp_live_, kp_]
+          description: '`kp_` for keys issued before apps replaced tenants. Display the key as `{prefix}…{last4}`.'
+        last4:
+          type: string
+          minLength: 4
+          maxLength: 4
+        status:
+          $ref: '#/components/schemas/ApiKeyStatus'
+        last_used_at:
+          type: [string, 'null']
+          format: date-time
+          description: Last successfully authenticated request; updated at most once a minute.
+        expires_at:
+          type: [string, 'null']
+          format: date-time
+        revoked_at:
+          type: [string, 'null']
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    CreateApiKeyRequest:
+      type: object
+      required: [label]
+      properties:
+        label:
+          $ref: '#/components/schemas/ApiKeyLabel'
+        expires_at:
+          type: [string, 'null']
+          format: date-time
+          description: Optional; must be in the future (rule `future`). Omitted or `null` means the key does not expire.
+
+    ApiKeyResponse:
+      type: object
+      required: [key]
+      properties:
+        key:
+          $ref: '#/components/schemas/ApiKey'
+
+    ApiKeyListResponse:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ApiKey'
+        next_cursor:
+          type: [string, 'null']
+          description: Pass as `cursor` to get the next page; `null` on the last page.
+
+    ApiKeyCreatedResponse:
+      type: object
+      required: [key, api_key, api_secret]
+      properties:
+        key:
+          $ref: '#/components/schemas/ApiKey'
+        api_key:
+          type: string
+          description: The full API key for `X-Api-Key`. Shown once; KeiPay keeps only its hash.
+        api_secret:
+          type: string
+          format: password
+          description: The HMAC secret for `X-Signature`. Shown once; store it now.
 
     Payment:
       type: object
-      required: [id, tenant_id, order_id, external_id, xendit_invoice_id, amount, currency, status, description, invoice_url, payer_email, created_at, updated_at]
+      required: [id, reference, app, order_id, xendit_invoice_id, amount, currency, status, description, invoice_url, payer_email, items, metadata, expires_at, paid_at, settled_at, expected_settlement_at, created_at, updated_at]
       properties:
         id:
-          type: integer
-          format: int64
-        tenant_id:
-          type: integer
-          format: int64
-        order_id:
           type: string
-        external_id:
+          pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
+          examples: [pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+        reference:
+          type: string
+          description: The gateway reference (Xendit `external_id`); `kp_pay_…`, or `{slug}:{order_id}` for older payments.
+        app:
+          $ref: '#/components/schemas/AppSummary'
+        order_id:
           type: string
         xendit_invoice_id:
           type: string
@@ -1835,19 +2395,22 @@ components:
           type: string
         items:
           type: array
+          description: Empty when the order had no items.
           items:
             $ref: '#/components/schemas/OrderItem'
+        metadata:
+          $ref: '#/components/schemas/Metadata'
         expires_at:
-          type: string
+          type: [string, 'null']
           format: date-time
         paid_at:
-          type: string
+          type: [string, 'null']
           format: date-time
         settled_at:
-          type: string
+          type: [string, 'null']
           format: date-time
         expected_settlement_at:
-          type: string
+          type: [string, 'null']
           format: date-time
         created_at:
           type: string
@@ -1858,30 +2421,28 @@ components:
 
     PaymentListResponse:
       type: object
-      required: [payments, total]
+      required: [data, next_cursor]
       properties:
-        payments:
+        data:
           type: array
           items:
             $ref: '#/components/schemas/Payment'
-        total:
-          type: integer
-          format: int64
-          description: Number of payments matching the filter, ignoring limit and offset.
+        next_cursor:
+          type: [string, 'null']
+          description: Pass as `cursor` to get the next page; `null` on the last page.
 
     LedgerEntry:
       type: object
-      required: [id, tenant_id, payment_id, amount, xendit_fee, net_amount, type, created_at]
+      required: [id, app, payment_id, amount, xendit_fee, net_amount, type, created_at]
       properties:
         id:
           type: integer
           format: int64
-        tenant_id:
-          type: integer
-          format: int64
+        app:
+          $ref: '#/components/schemas/AppSummary'
         payment_id:
-          type: integer
-          format: int64
+          type: string
+          pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
         amount:
           type: integer
           format: int64
@@ -1903,11 +2464,10 @@ components:
 
     LedgerSummary:
       type: object
-      required: [tenant_id, count, gross_amount, total_fee, net_amount]
+      required: [app, count, gross_amount, total_fee, net_amount]
       properties:
-        tenant_id:
-          type: integer
-          format: int64
+        app:
+          $ref: '#/components/schemas/AppSummary'
         count:
           type: integer
           format: int64
@@ -1940,21 +2500,21 @@ components:
 
     WebhookDelivery:
       type: object
-      required: [id, payment_id, tenant_id, event_type, payload, status, attempts, last_error, created_at, updated_at]
+      required: [id, payment_id, app, event_type, payload, status, attempts, last_error, created_at, updated_at]
       properties:
         id:
           type: integer
           format: int64
         payment_id:
-          type: integer
-          format: int64
-        tenant_id:
-          type: integer
-          format: int64
+          type: string
+          pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
+        app:
+          $ref: '#/components/schemas/AppSummary'
         event_type:
           $ref: '#/components/schemas/PaymentEventType'
         payload:
           $ref: '#/components/schemas/PaymentWebhookEvent'
+          description: The body as sent. Deliveries created before apps replaced tenants have no `payment_public_id` or `metadata`.
         status:
           $ref: '#/components/schemas/WebhookDeliveryStatus'
         attempts:
@@ -1994,10 +2554,19 @@ components:
         payment_id:
           type: integer
           format: int64
+          description: Legacy integer id. Prefer `payment_public_id`.
+        payment_public_id:
+          type: string
+          pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
+          description: The payment's `pay_…` id. Sent on every event since apps replaced tenants.
         order_id:
           type: string
         external_id:
           type: string
+          description: The gateway reference (same as `reference` on the payment).
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+          description: The payment's `metadata`, `{}` when none. Sent on every event since apps replaced tenants.
         status:
           $ref: '#/components/schemas/PaymentStatus'
         amount:
@@ -2038,11 +2607,11 @@ components:
       properties:
         type:
           type: string
-          description: Entries written before users existed use `admin_user` for the console admin.
-          examples: [tenant, user, webhook_delivery]
+          description: Entries written before users existed use `admin_user` for the console admin; entries written before apps existed use `tenant` with the integer tenant id.
+          examples: [app, api_key, user, webhook_delivery]
         id:
           type: string
-          description: The target's identifier as a string (`usr_…` for users). Empty for a failed sign-in with an unknown email.
+          description: The target's identifier as a string (`app_…`, `key_…`, `usr_…`). Empty for a failed sign-in with an unknown email.
 
     AuditLog:
       type: object
@@ -2060,14 +2629,16 @@ components:
         action:
           type: string
           description: |
-            `{target_type}.{verb}`. Current values: `tenant.create`,
-            `tenant.update`, `tenant.rotate_credentials`,
-            `webhook_delivery.replay`, `user.setup`, `user.create`,
-            `user.update`, `user.disable`, `user.enable`,
-            `user.reset_password`, `user.change_password`, `user.login`,
-            `user.login_failed`, `user.logout`. Older entries may carry
-            `admin_user.change_password`. New actions may be added.
-          examples: [tenant.update]
+            `{target_type}.{verb}`. Current values: `app.create`,
+            `app.update`, `app.disable`, `app.enable`, `api_key.create`,
+            `api_key.rotate`, `api_key.revoke`, `webhook_delivery.replay`,
+            `user.setup`, `user.create`, `user.update`, `user.disable`,
+            `user.enable`, `user.reset_password`, `user.change_password`,
+            `user.login`, `user.login_failed`, `user.logout`. Older entries
+            may carry `tenant.create`, `tenant.update`,
+            `tenant.rotate_credentials` or `admin_user.change_password`. New
+            actions may be added.
+          examples: [app.update]
         target:
           $ref: '#/components/schemas/AuditTarget'
         before:

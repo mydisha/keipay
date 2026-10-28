@@ -3,9 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"fmt"
-	"os"
-	"strconv"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -15,57 +13,11 @@ import (
 
 	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/pkg/crypto"
+	"github.com/mydisha/keipay/backend/internal/pkg/keygen"
 	"github.com/mydisha/keipay/backend/internal/repository/postgres"
 	"github.com/mydisha/keipay/backend/internal/service"
 	"github.com/mydisha/keipay/backend/internal/testutil/pgtest"
 )
-
-// The seeded tenant is recorded as tenant.create by system:seed, and a second
-// seed run skips it without another entry.
-func TestIntegrationSeedTenantIsAuditedAsSystem(t *testing.T) {
-	dsn := os.Getenv("KEI_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("KEI_TEST_POSTGRES_DSN not set")
-	}
-	ctx := domain.WithActor(context.Background(), domain.SystemActor("seed"))
-	pool, err := postgres.NewPool(ctx, dsn)
-	if err != nil {
-		t.Fatalf("pool: %v", err)
-	}
-	t.Cleanup(pool.Close)
-	cipher, err := crypto.New("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
-	if err != nil {
-		t.Fatalf("cipher: %v", err)
-	}
-
-	slug := fmt.Sprintf("seed-it-%d", time.Now().UnixNano())
-	tenant, creds, err := seedTenant(ctx, pool, cipher, "Seed IT", slug)
-	if err != nil || tenant == nil || creds == nil {
-		t.Fatalf("seed = %+v, %v", tenant, err)
-	}
-	target := strconv.FormatInt(tenant.ID, 10)
-	t.Cleanup(func() {
-		bg := context.Background()
-		_, _ = pool.Exec(bg, `DELETE FROM audit_logs WHERE target_type='tenant' AND target_id=$1`, target)
-		_, _ = pool.Exec(bg, `DELETE FROM tenants WHERE id=$1`, tenant.ID)
-	})
-
-	again, _, err := seedTenant(ctx, pool, cipher, "Seed IT", slug)
-	if err != nil || again != nil {
-		t.Fatalf("second seed = %+v, %v; want skip", again, err)
-	}
-
-	var n int
-	var actorType, actorID, action, ip string
-	err = pool.QueryRow(context.Background(), `SELECT count(*), min(actor_type), min(actor_id), min(action), min(ip)
-		FROM audit_logs WHERE target_type='tenant' AND target_id=$1`, target).Scan(&n, &actorType, &actorID, &action, &ip)
-	if err != nil {
-		t.Fatalf("query: %v", err)
-	}
-	if n != 1 || actorType != "system" || actorID != "seed" || action != "tenant.create" || ip != "" {
-		t.Fatalf("entries=%d actor=%s:%s action=%s ip=%q", n, actorType, actorID, action, ip)
-	}
-}
 
 func freshCLIPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
@@ -78,24 +30,74 @@ func freshCLIPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// T-22 / AC-4: seeding creates the demo tenant but never a user or password.
-func TestIntegrationSeedCreatesNoUser(t *testing.T) {
+// T-19 / AC-8: the seed creates the demo test app with one key through the
+// service, audited as system:seed, prints the one-time secrets in the agreed
+// format, and on a rerun prints the skip line and creates nothing. It never
+// creates a user.
+func TestIntegrationSeedCreatesDemoTestApp(t *testing.T) {
 	pool := freshCLIPool(t)
 	cipher, err := crypto.New("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range 2 {
-		var out bytes.Buffer
-		if err := runSeed(context.Background(), pool, cipher, &out); err != nil {
-			t.Fatalf("seed: %v", err)
-		}
-		if strings.Contains(out.String(), "password") || !strings.Contains(out.String(), "-reset-admin -email <email>") {
-			t.Fatalf("seed output = %q", out.String())
-		}
+	ctx := context.Background()
+
+	var out bytes.Buffer
+	if err := runSeed(ctx, pool, cipher, &out); err != nil {
+		t.Fatalf("seed: %v", err)
 	}
-	if n, _ := postgres.NewUserRepo(pool).Count(context.Background()); n != 0 {
-		t.Fatalf("seed created %d users", n)
+	re := regexp.MustCompile(`\Acreated app demo \((app_[0-9A-HJKMNP-TV-Z]{26}), test\)\n` +
+		`  api_key=(kp_test_[0-9a-f]{32})\n` +
+		`  api_secret=(kps_test_[0-9a-f]{48})\n` +
+		`  webhook_secret=(kpwh_[0-9a-f]{48})\n` +
+		`no console user yet: open the console to create the first owner, or run -reset-admin -email <email>\n\z`)
+	m := re.FindStringSubmatch(out.String())
+	if m == nil {
+		t.Fatalf("seed output = %q", out.String())
+	}
+	app, err := postgres.NewAppRepo(pool).GetBySlug(ctx, domain.EnvTest, "demo")
+	if err != nil || app.PublicID != m[1] || app.Name != "Demo App" || app.Status != domain.AppActive {
+		t.Fatalf("app = %+v, %v", app, err)
+	}
+	key, keyApp, err := postgres.NewAPIKeyRepo(pool).GetByHashWithApp(ctx, keygen.HashAPIKey(m[2]))
+	if err != nil || keyApp.ID != app.ID || key.Label != "Default" {
+		t.Fatalf("key = %+v, %v", key, err)
+	}
+	if secret, err := cipher.Decrypt(key.SecretEnc); err != nil || secret != m[3] {
+		t.Fatalf("stored api secret does not match the printed one: %v", err)
+	}
+	if secret, err := cipher.Decrypt(app.WebhookSecretEnc); err != nil || secret != m[4] {
+		t.Fatalf("stored webhook secret does not match the printed one: %v", err)
+	}
+
+	out.Reset()
+	if err := runSeed(ctx, pool, cipher, &out); err != nil {
+		t.Fatalf("second seed: %v", err)
+	}
+	if !strings.HasPrefix(out.String(), "app demo (test) already exists, skipping\n") || strings.Contains(out.String(), "api_key=") {
+		t.Fatalf("second seed output = %q", out.String())
+	}
+
+	rows, err := pool.Query(ctx, `SELECT action, actor_type, actor_id, ip FROM audit_logs ORDER BY occurred_at, public_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var action, actorType, actorID, ip string
+		_ = rows.Scan(&action, &actorType, &actorID, &ip)
+		got = append(got, action+" "+actorType+":"+actorID+" "+ip)
+	}
+	want := []string{"app.create system:seed ", "api_key.create system:seed "}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("audit = %q, want %q", got, want)
+	}
+	var keys, users int
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM app_api_keys`).Scan(&keys)
+	_ = pool.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&users)
+	if keys != 1 || users != 0 {
+		t.Fatalf("keys=%d users=%d", keys, users)
 	}
 }
 

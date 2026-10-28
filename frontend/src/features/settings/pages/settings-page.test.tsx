@@ -27,7 +27,7 @@ describe("Settings audit log tab", () => {
       },
     });
     const { user } = renderApp("/settings/audit-log");
-    expect(await screen.findByText("tenant.create")).toBeInTheDocument();
+    expect(await screen.findByText("app.create")).toBeInTheDocument();
     expect(screen.getByText("system:seed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
 
@@ -39,7 +39,7 @@ describe("Settings audit log tab", () => {
     expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();
 
     await user.click(screen.getByRole("button", { name: "Previous" }));
-    expect(await screen.findByText("tenant.create")).toBeInTheDocument();
+    expect(await screen.findByText("app.create")).toBeInTheDocument();
   });
 
   it("opens an entry with before and after JSON", async () => {
@@ -70,7 +70,7 @@ describe("Settings audit log tab", () => {
     await user.click(await screen.findByRole("button", { name: "Next" }));
     expect(await screen.findByText(/That page is no longer available/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("Page 1")).toBeInTheDocument());
-    expect(screen.getByText("tenant.create")).toBeInTheDocument();
+    expect(screen.getByText("app.create")).toBeInTheDocument();
     expect(screen.queryByTestId("error-state")).not.toBeInTheDocument();
   });
 

@@ -22,7 +22,12 @@ export function canonicalEmail(value: string): string {
 // Whitespace, control characters and the characters that only appear in
 // quoted or display-name forms.
 const FORBIDDEN_EMAIL_CHARS = /[\s\p{Cc}<>()[\]\\,;:"]/u;
+// C0, DEL and C1: the same set as Go's unicode.IsControl.
 const CONTROL_CHARS = /\p{Cc}/u;
+
+export function hasControlChars(value: string): boolean {
+  return CONTROL_CHARS.test(value);
+}
 
 export function isValidEmail(value: string): boolean {
   const email = canonicalEmail(value);
@@ -49,13 +54,31 @@ export function emailField() {
   return z.string().trim().min(1, strings.auth.emailRequired).refine(isValidEmail, strings.auth.emailInvalid);
 }
 
-export function nameField() {
+export interface TextFieldMessages {
+  required: string;
+  tooLong: string;
+  invalid: string;
+}
+
+/**
+ * A required single-line text: trimmed, at most `max` code points and free of
+ * control characters (the server's name and label rule).
+ */
+export function textField({ max, messages }: { max: number; messages: TextFieldMessages }) {
   return z
     .string()
     .trim()
-    .min(1, strings.auth.nameRequired)
-    .refine((value) => codePointLength(value) <= MAX_NAME_CHARS, strings.auth.nameTooLong)
-    .refine((value) => !CONTROL_CHARS.test(value), strings.auth.nameInvalid);
+    .min(1, messages.required)
+    .refine((value) => codePointLength(value) <= max, messages.tooLong)
+    .refine((value) => !hasControlChars(value), messages.invalid);
+}
+
+/** A user or app name. */
+export function nameField() {
+  return textField({
+    max: MAX_NAME_CHARS,
+    messages: { required: strings.auth.nameRequired, tooLong: strings.auth.nameTooLong, invalid: strings.auth.nameInvalid },
+  });
 }
 
 /** A new password, sent exactly as typed (no trimming or normalization). */

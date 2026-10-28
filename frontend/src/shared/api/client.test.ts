@@ -21,15 +21,15 @@ async function caught(promise: Promise<unknown>): Promise<ApiError> {
   throw new Error("expected the call to fail");
 }
 
-const newTenant = { name: "Acme", slug: "acme" };
+const newApp = { name: "Acme", slug: "acme", environment: "test" as const };
 
 describe("API client", () => {
   it("returns typed data and sends cookies same-origin", async () => {
-    const { client, requests } = clientWith(async () => json(200, { tenants: [] }));
-    const data = await unwrap(client.GET("/admin/tenants"));
-    expect(data).toEqual({ tenants: [] });
+    const { client, requests } = clientWith(async () => json(200, { data: [], next_cursor: null }));
+    const data = await unwrap(client.GET("/admin/apps"));
+    expect(data).toEqual({ data: [], next_cursor: null });
     const [request] = requests();
-    expect(request!.url).toBe("http://keipay.test/admin/tenants");
+    expect(request!.url).toBe("http://keipay.test/admin/apps");
     expect(request!.credentials).toBe("same-origin");
   });
 
@@ -37,7 +37,7 @@ describe("API client", () => {
     setTestCookie("keipay_csrf", "csrf-1");
     const fields = [{ field: "slug", rule: "required" }];
     const { client } = clientWith(async () => json(400, errorBody("invalid_request", "invalid request body", { fields })));
-    const error = await caught(unwrap(client.POST("/admin/tenants", { body: { name: "", slug: "" } })));
+    const error = await caught(unwrap(client.POST("/admin/apps", { body: { name: "", slug: "", environment: "test" } })));
     expect(error).toMatchObject({ status: 400, code: "invalid_request", message: "invalid request body" });
     expect(error.details).toEqual({ fields });
     expect(error.fields).toEqual(fields);
@@ -47,13 +47,13 @@ describe("API client", () => {
     const { client } = clientWith(
       async () => new Response("<html><body>Bad gateway</body></html>", { status: 502, headers: { "Content-Type": "text/html" } }),
     );
-    const error = await caught(unwrap(client.GET("/admin/tenants")));
+    const error = await caught(unwrap(client.GET("/admin/apps")));
     expect(error).toMatchObject({ status: 502, code: "unknown_error" });
   });
 
   it("turns a non-JSON 200 body into unknown_error", async () => {
     const { client } = clientWith(async () => new Response("<!doctype html>", { status: 200 }));
-    const error = await caught(unwrap(client.GET("/admin/tenants")));
+    const error = await caught(unwrap(client.GET("/admin/apps")));
     expect(error.code).toBe("unknown_error");
   });
 
@@ -61,7 +61,7 @@ describe("API client", () => {
     const { client } = clientWith(async () => {
       throw new TypeError("Failed to fetch");
     });
-    const error = await caught(unwrap(client.GET("/admin/tenants")));
+    const error = await caught(unwrap(client.GET("/admin/apps")));
     expect(error).toMatchObject({ status: 0, code: "network_error" });
   });
 
@@ -74,15 +74,7 @@ describe("API client", () => {
 
 describe("API client CSRF (T-40)", () => {
   it.each([
-    ["POST", (c: ReturnType<typeof clientWith>["client"]) => c.POST("/admin/tenants", { body: newTenant })],
-    [
-      "PUT",
-      (c: ReturnType<typeof clientWith>["client"]) =>
-        c.PUT("/admin/tenants/{id}", {
-          params: { path: { id: 1 } },
-          body: { name: "A", webhook_url: "", redirect_success_url: "", redirect_failure_url: "", active: true },
-        }),
-    ],
+    ["POST", (c: ReturnType<typeof clientWith>["client"]) => c.POST("/admin/apps", { body: newApp })],
     [
       "PATCH",
       (c: ReturnType<typeof clientWith>["client"]) =>
@@ -100,8 +92,8 @@ describe("API client CSRF (T-40)", () => {
 
   it("does not send the header on GET", async () => {
     setTestCookie("keipay_csrf", "csrf-1");
-    const { client, requests } = clientWith(async () => json(200, { tenants: [] }));
-    await unwrap(client.GET("/admin/tenants"));
+    const { client, requests } = clientWith(async () => json(200, { data: [], next_cursor: null }));
+    await unwrap(client.GET("/admin/apps"));
     expect(requests()[0]!.headers.has("X-CSRF-Token")).toBe(false);
   });
 
@@ -113,9 +105,9 @@ describe("API client CSRF (T-40)", () => {
       }
       return json(201, {});
     });
-    await client.POST("/admin/tenants", { body: newTenant });
+    await client.POST("/admin/apps", { body: newApp });
     const sent = requests();
-    expect(sent.map((r) => `${r.method} ${new URL(r.url).pathname}`)).toEqual(["GET /admin/setup", "POST /admin/tenants"]);
+    expect(sent.map((r) => `${r.method} ${new URL(r.url).pathname}`)).toEqual(["GET /admin/setup", "POST /admin/apps"]);
     expect(sent[1]!.headers.get("X-CSRF-Token")).toBe("issued");
   });
 
@@ -127,7 +119,7 @@ describe("API client CSRF (T-40)", () => {
       }
       return json(201, {});
     });
-    await Promise.all([client.POST("/admin/tenants", { body: newTenant }), client.POST("/admin/logout")]);
+    await Promise.all([client.POST("/admin/apps", { body: newApp }), client.POST("/admin/logout")]);
     expect(requests().filter((r) => r.method === "GET")).toHaveLength(1);
     expect(requests().filter((r) => r.method === "POST").every((r) => r.headers.get("X-CSRF-Token") === "issued")).toBe(true);
   });
@@ -137,7 +129,7 @@ describe("API client CSRF (T-40)", () => {
       if (new URL(request.url).pathname === "/admin/setup") throw new TypeError("Failed to fetch");
       return json(403, errorBody("invalid_csrf_token", "invalid csrf token"));
     });
-    const error = await caught(unwrap(client.POST("/admin/tenants", { body: newTenant })));
+    const error = await caught(unwrap(client.POST("/admin/apps", { body: newApp })));
     expect(error.code).toBe("invalid_csrf_token");
     expect(requests().at(-1)!.headers.has("X-CSRF-Token")).toBe(false);
   });
@@ -145,8 +137,8 @@ describe("API client CSRF (T-40)", () => {
   it("never sends an Authorization header", async () => {
     setTestCookie("keipay_csrf", "csrf-1");
     const { client, requests } = clientWith(async () => json(200, {}));
-    await client.GET("/admin/tenants");
-    await client.POST("/admin/tenants", { body: newTenant });
+    await client.GET("/admin/apps");
+    await client.POST("/admin/apps", { body: newApp });
     await client.POST("/admin/logout");
     expect(requests().some((r) => r.headers.has("Authorization"))).toBe(false);
   });
@@ -200,7 +192,7 @@ describe("API client session redirects (T-41)", () => {
     vi.stubGlobal("location", { ...window.location, origin: "http://keipay.test", assign });
     const fetchMock = vi.fn(async () => json(401, errorBody("session_expired", "session expired")));
     const client = createApiClient({ baseUrl: "http://keipay.test", fetch: fetchMock });
-    await caught(unwrap(client.GET("/admin/tenants")));
+    await caught(unwrap(client.GET("/admin/apps")));
     expect(assign).toHaveBeenCalledWith("/login?reason=session_expired");
   });
 });

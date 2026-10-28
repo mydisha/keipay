@@ -43,7 +43,7 @@ describe("App shell (T-29)", () => {
     expect(window.localStorage.getItem(storageKeys.mode)).toBe("test");
 
     unmount();
-    mockApi({ "GET /admin/payments": { payments: [], total: 0 }, "GET /admin/tenants": { tenants: [] } });
+    mockApi({ "GET /admin/payments": { data: [], next_cursor: null }, "GET /admin/apps": { data: [], next_cursor: null } });
     renderApp("/payments");
     expect(await screen.findByTestId("test-mode-banner")).toBeInTheDocument();
   });
@@ -60,7 +60,7 @@ describe("App shell (T-29)", () => {
   });
 
   it("opens the palette with Ctrl+K and navigates", async () => {
-    mockApi({ "GET /admin/payments": { payments: [], total: 0 }, "GET /admin/tenants": { tenants: [] } });
+    mockApi({ "GET /admin/payments": { data: [], next_cursor: null }, "GET /admin/apps": { data: [], next_cursor: null } });
     const { user, router } = renderApp("/");
     await screen.findByRole("heading", { level: 1, name: "Dashboard" });
     await user.keyboard("{Control>}k{/Control}");
@@ -86,7 +86,7 @@ describe("App shell (T-29)", () => {
 
   it("uses a sheet for navigation on mobile", async () => {
     setViewport("mobile");
-    mockApi({ "GET /admin/tenants": { tenants: [] } });
+    mockApi({ "GET /admin/apps": { data: [], next_cursor: null } });
     const { user, router } = renderApp("/");
     await user.click(await screen.findByRole("button", { name: "Open navigation" }));
     const sheet = await screen.findByRole("dialog");
@@ -165,7 +165,7 @@ describe("Routing", () => {
     ["/no-such-page", "/"],
   ])("redirects %s to %s", async (from, to) => {
     mockApi({
-      "GET /admin/tenants": { tenants: [] },
+      "GET /admin/apps": { data: [], next_cursor: null },
       "GET /admin/webhook-deliveries": { deliveries: [] },
       "GET /admin/ledger": { entries: [], summary: [] },
     });
@@ -184,7 +184,7 @@ describe("Routing", () => {
     let expired = false;
     mockApi({
       "GET /admin/me": () => (expired ? signedOut() : json(200, me())),
-      "GET /admin/tenants": () => {
+      "GET /admin/apps": () => {
         expired = true;
         return json(401, errorBody("session_expired", "session expired"));
       },
@@ -193,14 +193,14 @@ describe("Routing", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
     expect(router.state.location.search).toBe("?reason=session_expired");
     expect(await screen.findByText("Your session has expired. Sign in again.")).toBeInTheDocument();
-    expect(queryClient.getQueryData(["tenants"])).toBeUndefined();
+    expect(queryClient.getQueryData(["apps", "list", { environment: "live", status: null }])).toBeUndefined();
   });
 
   it("sends a missing session to sign-in without the message (T-41)", async () => {
     let gone = false;
     mockApi({
       "GET /admin/me": () => (gone ? signedOut() : json(200, me())),
-      "GET /admin/tenants": () => {
+      "GET /admin/apps": () => {
         gone = true;
         return json(401, errorBody("session_required", "session required"));
       },
@@ -216,7 +216,7 @@ describe("Routing", () => {
     let pending = false;
     mockApi({
       "GET /admin/me": () => json(200, me({ must_change_password: pending })),
-      "GET /admin/tenants": () => {
+      "GET /admin/apps": () => {
         pending = true;
         return json(403, errorBody("password_change_required", "password change required"));
       },

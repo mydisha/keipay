@@ -1,124 +1,125 @@
 import { BoxesIcon, PlusIcon } from "lucide-react";
 import { useState } from "react";
+import { Link, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { usePermission } from "@/features/auth/components/can";
-import { errorMessage } from "@/shared/api/error-message";
-import type { components } from "@/shared/api/schema";
+import { useMode, type Mode } from "@/shared/lib/mode";
 import { strings } from "@/shared/lib/strings";
+import { loadMoreList } from "@/shared/lib/use-cursor-pages";
 import { Button } from "@/shared/ui/button";
-import { ConfirmDialog } from "@/shared/ui/confirm-dialog";
-import { DataTable, type DataColumn } from "@/shared/ui/data-table";
+import { DataTable, type DataColumn, type FilterChipGroup } from "@/shared/ui/data-table";
 import { DateTimeText } from "@/shared/ui/date-time-text";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { IdText } from "@/shared/ui/id-text";
 import { PageHeader } from "@/shared/ui/page-header";
-import { SecretRevealDialog, type RevealedSecret } from "@/shared/ui/secret-reveal-dialog";
+import { SecretRevealDialog } from "@/shared/ui/secret-reveal-dialog";
 import { StatusBadge } from "@/shared/ui/status-badge";
-import { tenantUpdateBody, useRotateTenant, useTenants, useUpdateTenant, type Tenant } from "../api/tenants";
-import { AppRowActions } from "../components/app-row-actions";
+import {
+  APP_ENVIRONMENTS,
+  APP_STATUSES,
+  isAppEnvironment,
+  isAppStatus,
+  useApps,
+  type App,
+  type AppCreated,
+  type AppEnvironment,
+  type AppStatus,
+} from "../api/apps";
 import { CreateAppDialog } from "../components/create-app-dialog";
-import { EditAppDialog } from "../components/edit-app-dialog";
+import { EnvironmentBadge } from "../components/environment-badge";
 
-type Credentials = components["schemas"]["TenantCredentials"];
+// Chip groups here offer "All" as a chip because the environment filter does
+// not start empty: it starts at the Test/Live mode.
+const ALL = "all";
 
-function credentialSecrets(credentials: Credentials): RevealedSecret[] {
+function createdSecrets(result: AppCreated) {
   return [
-    { label: strings.apps.apiKey, value: credentials.api_key },
-    { label: strings.apps.apiSecret, value: credentials.api_secret },
+    { label: strings.apps.apiKey, value: result.api_key },
+    { label: strings.apps.apiSecret, value: result.api_secret },
+    { label: strings.apps.webhookSecret, value: result.webhook_secret },
   ];
 }
 
+/** The environment chip starts at the mode and goes back to it whenever the mode switch changes. */
+function useEnvironmentFilter(mode: Mode) {
+  const [state, setState] = useState<{ mode: Mode; environment: AppEnvironment | null }>({ mode, environment: mode });
+  if (state.mode !== mode) setState({ mode, environment: mode });
+  const environment = state.mode === mode ? state.environment : mode;
+  return [environment, (next: AppEnvironment | null) => setState({ mode, environment: next })] as const;
+}
+
 export function AppsPage() {
-  const canWrite = usePermission("tenants:write");
-  const tenants = useTenants();
-  const update = useUpdateTenant();
-  const rotate = useRotateTenant();
+  const canWrite = usePermission("apps:write");
+  const navigate = useNavigate();
+  const { mode } = useMode();
+  const [environment, setEnvironment] = useEnvironmentFilter(mode);
+  const [status, setStatus] = useState<AppStatus | null>(null);
+  const apps = useApps({ environment, status });
+  const list = loadMoreList(apps);
 
   const [createOpen, setCreateOpen] = useState(false);
-  const [editing, setEditing] = useState<Tenant | null>(null);
-  const [rotating, setRotating] = useState<Tenant | null>(null);
-  const [deactivating, setDeactivating] = useState<Tenant | null>(null);
-  const [revealed, setRevealed] = useState<RevealedSecret[] | null>(null);
+  const [created, setCreated] = useState<AppCreated | null>(null);
 
-  function setActive(tenant: Tenant, active: boolean) {
-    update.mutate(
-      { id: tenant.id, body: tenantUpdateBody(tenant, { active }) },
-      {
-        onSuccess: () => {
-          toast.success(active ? strings.apps.activated(tenant.name) : strings.apps.deactivated(tenant.name));
-          setDeactivating(null);
-        },
-        onError: (error) => toast.error(errorMessage(error, strings.apps.updateFailed)),
-      },
-    );
-  }
-
-  function confirmRotate() {
-    if (!rotating) return;
-    rotate.mutate(rotating.id, {
-      onSuccess: (result) => {
-        setRotating(null);
-        toast.success(strings.apps.rotated);
-        setRevealed(credentialSecrets(result.credentials));
-      },
-      onError: (error) => toast.error(errorMessage(error, strings.apps.rotateFailed)),
-    });
-  }
-
-  const allColumns: DataColumn<Tenant>[] = [
+  const columns: DataColumn<App>[] = [
     {
       id: "name",
       header: strings.apps.name,
       card: "title",
-      cell: (t) => (
+      className: "max-w-72",
+      cell: (app) => (
         <div className="grid min-w-0">
-          <span className="truncate font-medium">{t.name}</span>
-          <span className="truncate font-mono text-xs text-muted-foreground">{t.slug}</span>
+          <Link
+            to={`/apps/${app.id}`}
+            title={app.name}
+            className="truncate rounded-sm font-medium underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            // The row navigates too; one history entry is enough.
+            onClick={(event) => event.stopPropagation()}
+          >
+            {app.name}
+          </Link>
+          <span className="truncate font-mono text-xs text-muted-foreground" title={app.slug}>
+            {app.slug}
+          </span>
         </div>
       ),
     },
     {
-      id: "api_key",
-      header: strings.apps.apiKey,
-      className: "max-w-56",
-      cell: (t) => <IdText value={t.api_key} label={strings.apps.apiKey} />,
+      id: "environment",
+      header: strings.apps.environment,
+      cell: (app) => <EnvironmentBadge environment={app.environment} />,
     },
+    { id: "status", header: strings.apps.status, cell: (app) => <StatusBadge status={app.status} /> },
     {
-      id: "webhook_url",
-      header: strings.apps.webhookUrl,
-      className: "max-w-64",
-      cell: (t) =>
-        t.webhook_url ? (
-          <span className="block truncate" title={t.webhook_url}>
-            {t.webhook_url}
-          </span>
-        ) : (
-          <span className="text-muted-foreground">{strings.common.none}</span>
-        ),
+      id: "id",
+      header: strings.apps.appId,
+      className: "max-w-56",
+      cell: (app) => <IdText value={app.id} label={strings.apps.appId} />,
+    },
+    { id: "created", header: strings.apps.created, cell: (app) => <DateTimeText value={app.created_at} /> },
+  ];
+
+  const filters: FilterChipGroup[] = [
+    {
+      id: "environment",
+      label: strings.apps.environmentFilter,
+      options: [
+        { value: ALL, label: strings.common.all },
+        ...APP_ENVIRONMENTS.map((e) => ({ value: e, label: strings.environments[e] ?? e })),
+      ],
+      value: environment ?? ALL,
+      onChange: (value) => setEnvironment(isAppEnvironment(value) ? value : null),
     },
     {
       id: "status",
-      header: strings.apps.status,
-      cell: (t) => <StatusBadge status={t.active ? "active" : "inactive"} />,
-    },
-    { id: "created", header: strings.apps.created, cell: (t) => <DateTimeText value={t.created_at} /> },
-    {
-      id: "actions",
-      header: strings.common.actions,
-      card: "actions",
-      align: "right",
-      cell: (t) => (
-        <AppRowActions
-          tenant={t}
-          onEdit={setEditing}
-          onRotate={setRotating}
-          onToggleActive={(tenant) => (tenant.active ? setDeactivating(tenant) : setActive(tenant, true))}
-        />
-      ),
+      label: strings.apps.statusFilter,
+      options: [
+        { value: ALL, label: strings.common.all },
+        ...APP_STATUSES.map((s) => ({ value: s, label: strings.status[s] ?? s })),
+      ],
+      value: status ?? ALL,
+      onChange: (value) => setStatus(isAppStatus(value) ? value : null),
     },
   ];
-  // Viewers read the list; every row action needs `tenants:write`.
-  const columns = canWrite ? allColumns : allColumns.filter((column) => column.id !== "actions");
 
   const createButton = canWrite ? (
     <Button onClick={() => setCreateOpen(true)}>
@@ -127,65 +128,91 @@ export function AppsPage() {
     </Button>
   ) : undefined;
 
+  const clearFilters = () => {
+    setEnvironment(null);
+    setStatus(null);
+  };
+
+  let emptyState;
+  if (environment !== null) {
+    emptyState = (
+      <EmptyState
+        icon={BoxesIcon}
+        title={strings.apps.emptyEnvironmentTitle(environment)}
+        description={strings.apps.emptyEnvironmentBody}
+        action={
+          <>
+            <Button variant="outline" onClick={() => setEnvironment(null)}>
+              {strings.apps.showAllEnvironments}
+            </Button>
+            {createButton}
+          </>
+        }
+      />
+    );
+  } else if (status !== null) {
+    emptyState = (
+      <EmptyState
+        icon={BoxesIcon}
+        title={strings.apps.emptyFilteredTitle}
+        description={strings.apps.emptyFilteredBody}
+        action={
+          <Button variant="outline" onClick={clearFilters}>
+            {strings.common.clearFilters}
+          </Button>
+        }
+      />
+    );
+  } else {
+    emptyState = (
+      <EmptyState
+        icon={BoxesIcon}
+        title={strings.apps.emptyTitle}
+        description={canWrite ? strings.apps.emptyBody : strings.apps.emptyBodyReadOnly}
+        action={createButton}
+      />
+    );
+  }
+
   return (
     <>
       <PageHeader title={strings.apps.title} description={strings.apps.subtitle} actions={createButton} />
       <DataTable
         caption={strings.apps.title}
         columns={columns}
-        data={tenants.data}
-        getRowId={(t) => String(t.id)}
-        isLoading={tenants.isPending}
-        error={tenants.error}
-        onRetry={() => void tenants.refetch()}
-        emptyState={
-          <EmptyState
-            icon={BoxesIcon}
-            title={strings.apps.emptyTitle}
-            description={canWrite ? strings.apps.emptyBody : strings.apps.emptyBodyReadOnly}
-            action={createButton}
-          />
-        }
+        data={list.rows}
+        getRowId={(app) => app.id}
+        isLoading={apps.isPending}
+        error={list.error}
+        onRetry={() => void apps.refetch()}
+        filters={filters}
+        hasActiveFilters={environment !== null || status !== null}
+        onClearFilters={clearFilters}
+        loadMore={list.loadMore}
+        onRowClick={(app) => void navigate(`/apps/${app.id}`)}
+        emptyState={emptyState}
       />
 
       <CreateAppDialog
         open={createOpen}
         onOpenChange={setCreateOpen}
-        onCreated={(tenant, credentials) => {
+        onCreated={(result) => {
           setCreateOpen(false);
-          toast.success(strings.apps.created_toast(tenant.name));
-          setRevealed(credentialSecrets(credentials));
+          toast.success(strings.apps.created_toast(result.app.name));
+          setCreated(result);
         }}
       />
-      <EditAppDialog tenant={editing} onClose={() => setEditing(null)} />
-      <ConfirmDialog
-        open={rotating !== null}
-        onOpenChange={(open) => !open && setRotating(null)}
-        title={rotating ? strings.apps.rotateTitle(rotating.name) : ""}
-        description={strings.apps.rotateBody}
-        confirmText={rotating?.slug}
-        confirmLabel={strings.apps.rotateConfirm}
-        pendingLabel={strings.apps.rotating}
-        pending={rotate.isPending}
-        destructive
-        onConfirm={confirmRotate}
-      />
-      <ConfirmDialog
-        open={deactivating !== null}
-        onOpenChange={(open) => !open && setDeactivating(null)}
-        title={deactivating ? strings.apps.deactivateTitle(deactivating.name) : ""}
-        description={strings.apps.deactivateBody}
-        confirmLabel={strings.apps.deactivate}
-        pending={update.isPending}
-        destructive
-        onConfirm={() => deactivating && setActive(deactivating, false)}
-      />
       <SecretRevealDialog
-        open={revealed !== null}
+        open={created !== null}
         title={strings.apps.secretTitle}
         description={strings.apps.secretDescription}
-        secrets={revealed ?? []}
-        onClose={() => setRevealed(null)}
+        warning={strings.apps.secretWarning}
+        secrets={created ? createdSecrets(created) : []}
+        onClose={() => {
+          const id = created?.app.id;
+          setCreated(null);
+          if (id) void navigate(`/apps/${id}`);
+        }}
       />
     </>
   );

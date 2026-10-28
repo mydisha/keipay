@@ -1,6 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState } from "react";
+import { Profiler, useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/shared/api/errors";
 import { setViewport } from "@/test/media";
@@ -51,6 +51,37 @@ describe("DataTable (T-23)", () => {
     renderTable({ data: undefined, isLoading: true, skeletonRows: 4 });
     expect(screen.getAllByTestId("skeleton-row")).toHaveLength(4);
     expect(screen.queryByText("Nothing here")).not.toBeInTheDocument();
+  });
+
+  it("settles when a loaded table goes back to loading (data undefined)", async () => {
+    setViewport("desktop");
+    let renders = 0;
+    const table = (data: Row[] | undefined) => (
+      <Profiler id="table" onRender={() => (renders += 1)}>
+        <DataTable<Row>
+          caption="Things"
+          columns={columns}
+          data={data}
+          isLoading={data === undefined}
+          getRowId={(r) => r.id}
+          emptyState={<p>Nothing here</p>}
+        />
+      </Profiler>
+    );
+    const { rerender } = render(table(rows));
+    await Promise.resolve();
+    rerender(table(undefined));
+    // A fresh `[]` per render made TanStack Table reset its page index after
+    // every render, forever. act() would throttle that loop to one step per
+    // call, so let React run on its own for a moment, as in the browser.
+    const actEnvironment = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    } finally {
+      actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    }
+    expect(renders).toBeLessThan(10);
   });
 
   it("shows the empty state when there are no rows", () => {

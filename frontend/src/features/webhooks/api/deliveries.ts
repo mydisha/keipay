@@ -13,7 +13,8 @@ export function isDeliveryStatus(value: string | null): value is DeliveryStatus 
 
 export interface DeliveryFilters {
   status: DeliveryStatus | null;
-  tenantId: number | null;
+  /** App public id (`app_…`). */
+  appId: string | null;
 }
 
 const deliveryKeys = { all: ["webhook-deliveries"] as const };
@@ -28,7 +29,7 @@ export function useDeliveries(filters: DeliveryFilters) {
             params: {
               query: {
                 status: filters.status ?? undefined,
-                tenant_id: filters.tenantId ?? undefined,
+                app_id: filters.appId ?? undefined,
               },
             },
           }),

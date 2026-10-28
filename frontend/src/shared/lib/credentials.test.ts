@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { canonicalEmail, emailField, isValidEmail, nameField, newPasswordField } from "./credentials";
+import {
+  canonicalEmail,
+  codePointLength,
+  emailField,
+  hasControlChars,
+  isValidEmail,
+  nameField,
+  newPasswordField,
+  textField,
+  utf8Length,
+} from "./credentials";
 
 describe("canonicalEmail", () => {
   it("trims, applies NFC and lower-cases", () => {
@@ -37,7 +47,32 @@ describe("isValidEmail", () => {
   });
 });
 
+describe("text helpers", () => {
+  it("counts code points and UTF-8 bytes", () => {
+    expect(codePointLength("")).toBe(0);
+    expect(codePointLength("a😀é")).toBe(3);
+    expect(utf8Length("a😀é")).toBe(7);
+  });
+
+  it("finds C0, DEL and C1 control characters only", () => {
+    for (const c of ["\u0000", "\u0007", "\u001f", "\u007f", "\u0085", "\u009f"]) {
+      expect(hasControlChars(`a${c}b`)).toBe(true);
+    }
+    for (const text of ["", "Acme Store", "\u00a0", "\u200b", "😀"]) {
+      expect(hasControlChars(text)).toBe(false);
+    }
+  });
+});
+
 describe("form fields", () => {
+  it("text: uses the given limit and messages", () => {
+    const field = textField({ max: 3, messages: { required: "req", tooLong: "long", invalid: "bad" } });
+    expect(field.parse(" 😀😀😀 ")).toBe("😀😀😀");
+    expect(field.safeParse("  ").error?.issues[0]?.message).toBe("req");
+    expect(field.safeParse("abcd").error?.issues[0]?.message).toBe("long");
+    expect(field.safeParse("a\u0085").error?.issues[0]?.message).toBe("bad");
+  });
+
   it("email: required, then format", () => {
     expect(emailField().safeParse("").error?.issues[0]?.message).toBe("Enter your email.");
     expect(emailField().safeParse("nope").error?.issues[0]?.message).toMatch(/Enter an email address/);

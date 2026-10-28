@@ -2,9 +2,9 @@ import { CreditCardIcon, ExternalLinkIcon } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { AppFilterSelect } from "@/features/apps/components/app-filter-select";
-import { AppName } from "@/features/apps/components/app-name";
-import { useTenantNames } from "@/features/apps/api/tenants";
+import { AppLabel } from "@/features/apps/components/app-label";
 import { strings } from "@/shared/lib/strings";
+import { loadMoreList } from "@/shared/lib/use-cursor-pages";
 import { Button } from "@/shared/ui/button";
 import { DataTable, type DataColumn } from "@/shared/ui/data-table";
 import { DateTimeText } from "@/shared/ui/date-time-text";
@@ -15,20 +15,21 @@ import { PageHeader } from "@/shared/ui/page-header";
 import { StatusBadge } from "@/shared/ui/status-badge";
 import { isPaymentStatus, PAYMENT_STATUSES, usePayments, type Payment, type PaymentFilters } from "../api/payments";
 
-const NO_FILTERS: PaymentFilters = { status: null, tenantId: null };
+const NO_FILTERS: PaymentFilters = { status: null, appId: null };
 
 export function PaymentsPage() {
   const [filters, setFilters] = useState<PaymentFilters>(NO_FILTERS);
   const payments = usePayments(filters);
-  const names = useTenantNames();
-  const filtered = filters.status !== null || filters.tenantId !== null;
+  const list = loadMoreList(payments);
+  const filtered = filters.status !== null || filters.appId !== null;
 
   const columns: DataColumn<Payment>[] = [
     {
       id: "id",
       header: strings.payments.payment,
       card: "title",
-      cell: (p) => <IdText value={p.id} prefix="#" label={strings.payments.payment} />,
+      className: "max-w-60",
+      cell: (p) => <IdText value={p.id} label={strings.payments.payment} />,
     },
     {
       id: "order_id",
@@ -36,7 +37,7 @@ export function PaymentsPage() {
       className: "max-w-48",
       cell: (p) => <IdText value={p.order_id} label={strings.payments.orderId} />,
     },
-    { id: "app", header: strings.common.app, cell: (p) => <AppName id={p.tenant_id} names={names} /> },
+    { id: "app", header: strings.common.app, className: "max-w-56", cell: (p) => <AppLabel app={p.app} /> },
     { id: "status", header: strings.payments.status, cell: (p) => <StatusBadge status={p.status} /> },
     {
       id: "amount",
@@ -70,10 +71,10 @@ export function PaymentsPage() {
       <DataTable
         caption={strings.payments.title}
         columns={columns}
-        data={payments.data?.payments}
-        getRowId={(p) => String(p.id)}
+        data={list.rows}
+        getRowId={(p) => p.id}
         isLoading={payments.isPending}
-        error={payments.error}
+        error={list.error}
         onRetry={() => void payments.refetch()}
         filters={[
           {
@@ -85,15 +86,11 @@ export function PaymentsPage() {
           },
         ]}
         toolbar={
-          <AppFilterSelect value={filters.tenantId} onChange={(tenantId) => setFilters((f) => ({ ...f, tenantId }))} />
+          <AppFilterSelect value={filters.appId} onChange={(appId) => setFilters((f) => ({ ...f, appId }))} />
         }
         hasActiveFilters={filtered}
         onClearFilters={clearFilters}
-        footer={
-          payments.data && payments.data.payments.length > 0
-            ? strings.payments.showing(payments.data.payments.length, payments.data.total)
-            : null
-        }
+        loadMore={list.loadMore}
         emptyState={
           filtered ? (
             <EmptyState

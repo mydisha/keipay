@@ -167,7 +167,7 @@ func (m *mockEnqueuer) EnqueueWebhookForward(_ context.Context, id int64) error 
 
 func newSvc() (*WebhookService, *mockPaymentRepo, *mockLedgerRepo, *mockWebhookRepo, *mockEnqueuer) {
 	pr := &mockPaymentRepo{byExternal: map[string]*domain.Payment{
-		"etala:order-1": {ID: 10, TenantID: 1, OrderID: "order-1", ExternalID: "etala:order-1", Amount: 5000, Currency: "IDR", Status: domain.PaymentStatusPending},
+		"acme:order-1": {ID: 10, TenantID: 1, OrderID: "order-1", ExternalID: "acme:order-1", Amount: 5000, Currency: "IDR", Status: domain.PaymentStatusPending},
 	}}
 	lr := &mockLedgerRepo{}
 	wr := &mockWebhookRepo{}
@@ -180,7 +180,7 @@ func TestProcessPaidRoutesToTenantAndLedger(t *testing.T) {
 	svc, pr, lr, _, eq := newSvc()
 	cb := XenditInvoiceCallback{
 		ID:         "inv_1",
-		ExternalID: "etala:order-1",
+		ExternalID: "acme:order-1",
 		Status:     "PAID",
 		PaidAmount: 5000,
 		FeesPaid:   100,
@@ -201,7 +201,7 @@ func TestProcessPaidRoutesToTenantAndLedger(t *testing.T) {
 
 func TestProcessIdempotentDuplicate(t *testing.T) {
 	svc, _, lr, _, eq := newSvc()
-	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "etala:order-1", Status: "PAID", PaidAmount: 5000}
+	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", PaidAmount: 5000}
 	_ = svc.Process(context.Background(), cb, []byte(`{}`))
 	_ = svc.Process(context.Background(), cb, []byte(`{}`))
 	if lr.created != 1 {
@@ -216,7 +216,7 @@ func TestProcessSettledRecordsSettlement(t *testing.T) {
 	svc, pr, lr, wr, _ := newSvc()
 	cb := XenditInvoiceCallback{
 		ID:             "inv_2",
-		ExternalID:     "etala:order-1",
+		ExternalID:     "acme:order-1",
 		Status:         "SETTLED",
 		PaidAmount:     5000,
 		FeesPaid:       100,
@@ -241,7 +241,7 @@ func TestProcessSettledRecordsSettlement(t *testing.T) {
 func TestProcessRetryAfterFailureIsNotSkipped(t *testing.T) {
 	svc, pr, lr, wr, eq := newSvc()
 	pr.failUpdates = 1
-	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "etala:order-1", Status: "PAID", PaidAmount: 5000}
+	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", PaidAmount: 5000}
 
 	if err := svc.Process(context.Background(), cb, []byte(`{}`)); err == nil {
 		t.Fatal("expected first attempt to fail")
@@ -265,7 +265,7 @@ func TestProcessRetryAfterFailureIsNotSkipped(t *testing.T) {
 func TestProcessFailureLeavesNoTrace(t *testing.T) {
 	svc, pr, lr, wr, eq := newSvc()
 	pr.failUpdates = 1
-	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "etala:order-1", Status: "PAID", PaidAmount: 5000}
+	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", PaidAmount: 5000}
 
 	if err := svc.Process(context.Background(), cb, []byte(`{}`)); err == nil {
 		t.Fatal("expected failure")
@@ -300,7 +300,7 @@ func TestProcessUnknownExternalIDNotRecorded(t *testing.T) {
 func TestProcessEnqueueFailureKeepsDelivery(t *testing.T) {
 	svc, pr, lr, wr, eq := newSvc()
 	eq.err = errors.New("redis down")
-	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "etala:order-1", Status: "PAID", PaidAmount: 5000}
+	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", PaidAmount: 5000}
 
 	err := svc.Process(context.Background(), cb, []byte(`{}`))
 	if !errors.Is(err, ErrForwardNotQueued) {
@@ -327,7 +327,7 @@ func TestProcessEnqueueFailureKeepsDelivery(t *testing.T) {
 // the DB event record is the final guard.
 func TestProcessDBGuardWithoutRedis(t *testing.T) {
 	svc, _, lr, wr, eq := newSvc()
-	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "etala:order-1", Status: "PAID", PaidAmount: 5000}
+	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", PaidAmount: 5000}
 	if err := svc.Process(context.Background(), cb, []byte(`{}`)); err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -343,7 +343,7 @@ func TestProcessDBGuardWithoutRedis(t *testing.T) {
 func TestProcessMissingIDs(t *testing.T) {
 	svc, _, _, _, _ := newSvc()
 	for _, cb := range []XenditInvoiceCallback{
-		{ExternalID: "etala:order-1", Status: "PAID"},
+		{ExternalID: "acme:order-1", Status: "PAID"},
 		{ID: "inv_1", Status: "PAID"},
 	} {
 		if err := svc.Process(context.Background(), cb, nil); !errors.Is(err, domain.ErrInvalidInput) {
@@ -357,8 +357,8 @@ func TestProcessMissingIDs(t *testing.T) {
 func TestProcessLatePaidAfterSettledIsIgnored(t *testing.T) {
 	svc, pr, _, wr, _ := newSvc()
 	ctx := context.Background()
-	settled := XenditInvoiceCallback{ID: "inv_1", ExternalID: "etala:order-1", Status: "SETTLED", Amount: 5000, PaidAmount: 5000}
-	paid := XenditInvoiceCallback{ID: "inv_1", ExternalID: "etala:order-1", Status: "PAID", Amount: 5000, PaidAmount: 5000}
+	settled := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "SETTLED", Amount: 5000, PaidAmount: 5000}
+	paid := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", Amount: 5000, PaidAmount: 5000}
 
 	if err := svc.Process(ctx, settled, []byte(`{}`)); err != nil {
 		t.Fatalf("settled: %v", err)
@@ -366,7 +366,7 @@ func TestProcessLatePaidAfterSettledIsIgnored(t *testing.T) {
 	if err := svc.Process(ctx, paid, []byte(`{}`)); err != nil {
 		t.Fatalf("late paid: %v", err)
 	}
-	if got := pr.byExternal["etala:order-1"].Status; got != domain.PaymentStatusSettled {
+	if got := pr.byExternal["acme:order-1"].Status; got != domain.PaymentStatusSettled {
 		t.Fatalf("status regressed to %s", got)
 	}
 	if len(wr.deliveries) != 1 || wr.deliveries[0].EventType != "payment.settled" {
@@ -378,7 +378,7 @@ func TestProcessLatePaidAfterSettledIsIgnored(t *testing.T) {
 // made outside KeiPayment that reused the external_id) must not mark it paid.
 func TestProcessAmountMismatchIsNotApplied(t *testing.T) {
 	svc, pr, lr, wr, _ := newSvc()
-	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "etala:order-1", Status: "PAID", Amount: 1000, PaidAmount: 1000}
+	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", Amount: 1000, PaidAmount: 1000}
 
 	err := svc.Process(context.Background(), cb, []byte(`{}`))
 	if !errors.Is(err, ErrCallbackMismatch) {
@@ -398,7 +398,7 @@ func TestProcessAmountMismatchIsNotApplied(t *testing.T) {
 
 func TestProcessCurrencyMismatchIsNotApplied(t *testing.T) {
 	svc, pr, _, _, _ := newSvc()
-	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "etala:order-1", Status: "PAID", Amount: 5000, Currency: "USD"}
+	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", Amount: 5000, Currency: "USD"}
 	if err := svc.Process(context.Background(), cb, []byte(`{}`)); !errors.Is(err, ErrCallbackMismatch) {
 		t.Fatalf("expected ErrCallbackMismatch, got %v", err)
 	}
@@ -410,7 +410,7 @@ func TestProcessCurrencyMismatchIsNotApplied(t *testing.T) {
 // Matching amount and currency, as Xendit sends them, is applied normally.
 func TestProcessMatchingAmountAndCurrencyApplied(t *testing.T) {
 	svc, pr, _, _, _ := newSvc()
-	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "etala:order-1", Status: "PAID", Amount: 5000, Currency: "IDR"}
+	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", Amount: 5000, Currency: "IDR"}
 	if err := svc.Process(context.Background(), cb, []byte(`{}`)); err != nil {
 		t.Fatalf("process: %v", err)
 	}
@@ -425,12 +425,12 @@ func TestProcessPaidAfterExpiredIsApplied(t *testing.T) {
 	svc, pr, lr, wr, _ := newSvc()
 	ctx := context.Background()
 	for _, st := range []string{"EXPIRED", "PAID"} {
-		cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "etala:order-1", Status: st, Amount: 5000}
+		cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: st, Amount: 5000}
 		if err := svc.Process(ctx, cb, []byte(`{}`)); err != nil {
 			t.Fatalf("%s: %v", st, err)
 		}
 	}
-	if got := pr.byExternal["etala:order-1"].Status; got != domain.PaymentStatusPaid {
+	if got := pr.byExternal["acme:order-1"].Status; got != domain.PaymentStatusPaid {
 		t.Fatalf("expected PAID, got %s", got)
 	}
 	if lr.created != 1 || len(wr.deliveries) != 2 || wr.deliveries[1].EventType != "payment.paid" {
@@ -443,12 +443,12 @@ func TestProcessUnknownStatusAfterPaidIsIgnored(t *testing.T) {
 	svc, pr, _, wr, _ := newSvc()
 	ctx := context.Background()
 	for _, st := range []string{"PAID", "SOMETHING_NEW"} {
-		cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "etala:order-1", Status: st, Amount: 5000}
+		cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: st, Amount: 5000}
 		if err := svc.Process(ctx, cb, []byte(`{}`)); err != nil {
 			t.Fatalf("%s: %v", st, err)
 		}
 	}
-	if got := pr.byExternal["etala:order-1"].Status; got != domain.PaymentStatusPaid {
+	if got := pr.byExternal["acme:order-1"].Status; got != domain.PaymentStatusPaid {
 		t.Fatalf("status changed to %s", got)
 	}
 	if len(wr.deliveries) != 1 {
@@ -460,7 +460,7 @@ func TestProcessSettledMarksLedgerSettled(t *testing.T) {
 	svc, _, lr, _, _ := newSvc()
 	ctx := context.Background()
 	for _, st := range []string{"PAID", "SETTLED"} {
-		cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "etala:order-1", Status: st, Amount: 5000,
+		cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: st, Amount: 5000,
 			SettlementDate: "2026-01-02T03:04:05Z"}
 		if err := svc.Process(ctx, cb, []byte(`{}`)); err != nil {
 			t.Fatalf("%s: %v", st, err)

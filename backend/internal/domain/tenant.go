@@ -2,7 +2,7 @@ package domain
 
 import "time"
 
-// Tenant is a client application (e.g. Etala, Inveet) that consumes KeiPayment.
+// Tenant is a client application that consumes KeiPay.
 type Tenant struct {
 	ID                 int64     `json:"id"`
 	Name               string    `json:"name"`

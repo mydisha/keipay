@@ -90,7 +90,7 @@ func (f *fakeXendit) ExpireInvoice(_ context.Context, id string) error {
 	return nil
 }
 
-var testTenant = &domain.Tenant{ID: 1, Slug: "etala"}
+var testTenant = &domain.Tenant{ID: 1, Slug: "acme"}
 
 // Regression: a tenant retrying the same order_id must get the original
 // payment back instead of a second (orphan) Xendit invoice and a 409.
@@ -145,11 +145,11 @@ func TestCreateSameOrderOtherTenant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("tenant a: %v", err)
 	}
-	b, err := svc.Create(context.Background(), &domain.Tenant{ID: 2, Slug: "inveet"}, in)
+	b, err := svc.Create(context.Background(), &domain.Tenant{ID: 2, Slug: "globex"}, in)
 	if err != nil {
 		t.Fatalf("tenant b: %v", err)
 	}
-	if a.ID == b.ID || b.ExternalID != "inveet:ord-1" || len(xnd.created) != 2 {
+	if a.ID == b.ID || b.ExternalID != "globex:ord-1" || len(xnd.created) != 2 {
 		t.Fatalf("expected separate payments, got a=%+v b=%+v", a, b)
 	}
 }
@@ -159,7 +159,7 @@ func TestCreateSameOrderOtherTenant(t *testing.T) {
 func TestCreateInsertRaceExpiresLoserInvoice(t *testing.T) {
 	repo, xnd := newMemPaymentRepo(), &fakeXendit{}
 	svc := NewPaymentService(repo, xnd)
-	winner := &domain.Payment{TenantID: 1, OrderID: "ord-1", ExternalID: "etala:ord-1", Amount: 150000,
+	winner := &domain.Payment{TenantID: 1, OrderID: "ord-1", ExternalID: "acme:ord-1", Amount: 150000,
 		Currency: "IDR", XenditInvoiceID: "inv_winner", InvoiceURL: "https://checkout.xendit.co/web/inv_winner"}
 	xnd.onCreate = func() { _ = repo.Create(context.Background(), winner) }
 
@@ -235,7 +235,7 @@ func TestCreateUnicodeOrderID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if p.ExternalID != "etala:pesanan-ü-1" {
+	if p.ExternalID != "acme:pesanan-ü-1" {
 		t.Fatalf("unexpected external_id %q", p.ExternalID)
 	}
 }

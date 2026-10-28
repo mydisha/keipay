@@ -1,4 +1,4 @@
-// Command migrate runs SQL migrations and optionally seeds the 4 tenants.
+// Command migrate runs SQL migrations and optionally seeds a demo tenant and the admin user.
 package main
 
 import (
@@ -25,7 +25,7 @@ import (
 func main() {
 	var (
 		down       = flag.Bool("down", false, "roll back all migrations")
-		seed       = flag.Bool("seed", false, "seed the 4 default tenants after migrating")
+		seed       = flag.Bool("seed", false, "seed a demo tenant and the admin user after migrating")
 		resetAdmin = flag.Bool("reset-admin", false, "reset admin password")
 		password   = flag.String("password", "", "password for reset-admin (auto-generate if empty)")
 	)
@@ -55,7 +55,7 @@ func main() {
 	fmt.Println("migrations applied")
 
 	if *seed {
-		if err := seedTenants(cfg); err != nil {
+		if err := seedDemoTenant(cfg); err != nil {
 			fatal(err)
 		}
 		if err := seedAdmin(cfg); err != nil {
@@ -70,7 +70,7 @@ func main() {
 	}
 }
 
-func seedTenants(cfg *config.Config) error {
+func seedDemoTenant(cfg *config.Config) error {
 	ctx := context.Background()
 	pool, err := postgres.NewPool(ctx, cfg.PostgresDSN)
 	if err != nil {
@@ -86,26 +86,18 @@ func seedTenants(cfg *config.Config) error {
 	repo := postgres.NewTenantRepo(pool)
 	svc := service.NewTenantService(repo, nil, cipher)
 
-	apps := []struct{ name, slug string }{
-		{"Etala", "etala"},
-		{"Inveet", "inveet"},
-		{"Invina", "invina"},
-		{"Clipee", "clipee"},
+	const name, slug = "Demo App", "demo"
+	if existing, err := repo.GetBySlug(ctx, slug); err == nil && existing != nil {
+		fmt.Printf("tenant %s already exists (id=%d), skipping\n", slug, existing.ID)
+		return nil
 	}
-
-	for _, a := range apps {
-		if existing, err := repo.GetBySlug(ctx, a.slug); err == nil && existing != nil {
-			fmt.Printf("tenant %s already exists (id=%d), skipping\n", a.slug, existing.ID)
-			continue
-		}
-		t, creds, err := svc.Create(ctx, service.CreateTenantInput{Name: a.name, Slug: a.slug})
-		if err != nil {
-			return fmt.Errorf("seed %s: %w", a.slug, err)
-		}
-		fmt.Printf("created tenant %s (id=%d)\n  api_key=%s\n  api_secret=%s\n",
-			t.Slug, t.ID, creds.APIKey, creds.APISecret)
+	t, creds, err := svc.Create(ctx, service.CreateTenantInput{Name: name, Slug: slug})
+	if err != nil {
+		return fmt.Errorf("seed %s: %w", slug, err)
 	}
-	fmt.Println("NOTE: store the api_secret values now; they are not recoverable in plaintext later.")
+	fmt.Printf("created tenant %s (id=%d)\n  api_key=%s\n  api_secret=%s\n",
+		t.Slug, t.ID, creds.APIKey, creds.APISecret)
+	fmt.Println("NOTE: store the api_secret value now; it is not recoverable in plaintext later.")
 	return nil
 }
 

@@ -64,9 +64,8 @@ export POSTGRES_DSN="postgres://keipay:keipay@localhost:${PG_PORT}/keipay?sslmod
 export REDIS_ADDR="localhost:${REDIS_PORT}"
 export REDIS_PASSWORD=""
 export REDIS_DB=0
-JWT_SECRET="$(openssl rand -hex 32)"
 ENCRYPTION_KEY="$(openssl rand -hex 32)"
-export JWT_SECRET ENCRYPTION_KEY
+export ENCRYPTION_KEY
 export XENDIT_SECRET_KEY="xnd_development_ci"
 export XENDIT_CALLBACK_TOKEN="ci-callback-token"
 export KEI_TEST_POSTGRES_DSN="$POSTGRES_DSN"
@@ -144,14 +143,13 @@ stage_e2e() {
     fail "port ${API_PORT} is already serving; set CI_API_PORT"
   fi
 
-  log "e2e: build server, seed, set admin password"
+  log "e2e: build server, seed"
   (cd backend && CGO_ENABLED=0 go build -o "$WORK/keipay" ./cmd/server)
   (cd backend && CGO_ENABLED=0 go build -o "$WORK/keipay-migrate" ./cmd/migrate)
   local password
   password="$(openssl rand -hex 12)"
   # Seed output contains one-time secrets; keep it out of the log.
   (cd backend && "$WORK/keipay-migrate" -seed >/dev/null)
-  (cd backend && "$WORK/keipay-migrate" -reset-admin -password "$password" >/dev/null)
 
   log "e2e: start server on :${API_PORT}"
   (cd backend && exec env HTTP_PORT="$API_PORT" HTTP_BASE_URL="http://127.0.0.1:${API_PORT}" \
@@ -168,9 +166,12 @@ stage_e2e() {
     fail "server did not become healthy on :${API_PORT}"
   fi
 
+  # No user exists yet: the Playwright `setup` project creates the owner
+  # through the console's first-run setup with E2E_EMAIL and E2E_PASSWORD,
+  # and every other project signs in as that owner.
   log "e2e: playwright"
   npm --prefix frontend exec -- playwright install chromium
-  if ! E2E_BASE_URL="http://127.0.0.1:${API_PORT}" E2E_USERNAME=admin E2E_PASSWORD="$password" \
+  if ! E2E_BASE_URL="http://127.0.0.1:${API_PORT}" E2E_EMAIL="owner@example.com" E2E_PASSWORD="$password" \
     npm --prefix frontend run e2e; then
     log "server log (last 50 lines)"
     tail -n 50 "$WORK/server.log" >&2 || true

@@ -10,6 +10,12 @@ backend/bin/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/coverage/
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+scripts/
+api/
 *.md
 .DS_Store
 .idea/

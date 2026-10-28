@@ -40,8 +40,8 @@ make dev         # API :8080 + console :5173 together
 make backend     # API + worker only
 make frontend    # Vite only
 make up / down   # postgres + redis
-make seed        # migrations + demo tenant + admin user (prints credentials once)
-make reset-admin PW=yourpass
+make seed        # migrations + demo tenant (prints its credentials once)
+make reset-admin EMAIL=you@example.com PW=yourpass   # recovery; first owner comes from console setup
 make test        # go test ./... in backend/
 make gen         # regenerate frontend API types from api/openapi.yaml
 make check       # gofmt + vet + test + API lint + typecheck + frontend tests
@@ -97,6 +97,15 @@ postgres implementation → migration in `backend/migrations/` → wire in main.
    row in the event transaction and enqueues after commit (task ID derived from
    the delivery id). If enqueue fails, `worker.Sweeper` re-enqueues pending
    deliveries with `attempts = 0` older than a minute. Admins can replay.
+5. **Admin sessions**: the session id in the `keipay_session` cookie is only
+   a Redis key (stored hashed); every authenticated request still loads the
+   user from Postgres, so disabling a user or changing a role takes effect at
+   once. Each session records the user's `session_version`; bumping it
+   (disable, password change or reset) ends all other sessions without
+   tracking them. Unsafe `/admin` methods need `X-CSRF-Token` equal to the
+   `keipay_csrf` cookie and the session's token. Permissions per role are data
+   in `internal/domain`; each route declares one in `router.go`, and a test
+   checks them against `x-keipay-permission` in the spec.
 
 ## Conventions
 

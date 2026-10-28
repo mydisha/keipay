@@ -12,10 +12,12 @@ App C ─┘        ▲                 └─► DOKU       (planned)
                 └──► verify → normalize → sign → app webhook_url
 ```
 
-> **Status: early.** Today KeiPay supports **Xendit Invoice** with one Xendit
-> account per deployment. Multi-gateway connections, per-app routing
-> (`auto`, weighted, fallback) and Midtrans/DOKU adapters are designed in
-> [`docs/design.md`](docs/design.md) and not built yet.
+> **Status: early.** Today KeiPay supports **Xendit Invoice**. Gateway
+> accounts are configured in the console as connections (any number, each
+> `test` or `live`), and each app uses one default connection. Per-app
+> routing across connections (`auto`, weighted, fallback) and Midtrans/DOKU
+> adapters are designed in [`docs/design.md`](docs/design.md) and not built
+> yet.
 
 ## KeiPay never holds funds
 
@@ -38,6 +40,11 @@ that use.
   last-used time, overlapping rotation and revocation.
 - Idempotent payment creation per `order_id` and optional `Idempotency-Key`,
   with your own `metadata` echoed back in every webhook.
+- Gateway connections managed in the console: credentials validated
+  against the gateway adapter's schema, envelope-encrypted at rest and never
+  shown again (last 4 characters only), a connection test, a callback URL
+  per connection verified with that connection's own secret, and the
+  payment channels each connection offers.
 - Webhook ingestion that is idempotent (Redis fast path + durable DB guard in
   one transaction), applies status in order, and rejects callbacks whose
   amount or currency does not match the payment.
@@ -58,7 +65,7 @@ api/openapi.yaml    HTTP contract (source of truth; frontend types are generated
 backend/            Go module github.com/mydisha/keipay/backend
   cmd/server/       API + embedded asynq worker (+ serves the console)
   cmd/migrate/      migrations, -seed, -reset-admin
-  internal/         domain, service, repository, transport, worker, xendit, pkg
+  internal/         domain, service, provider (gateway adapters), repository, transport, worker, pkg
   migrations/       SQL up/down
 frontend/           React + Vite + Tailwind admin console (see DESIGN.md)
 deploy/Dockerfile   one image: API + worker + console
@@ -80,15 +87,14 @@ make setup   # .env with generated secrets, deps, postgres + redis, migrate + se
 ```
 
 `make setup` prints the **demo app credentials** (a `test` app with one
-API key, its secret and the webhook signing secret) once. Then set
-`XENDIT_SECRET_KEY` and `XENDIT_CALLBACK_TOKEN` in `.env` (Xendit dashboard →
-API keys / Webhooks) and run:
+API key, its secret and the webhook signing secret) once. Then run:
 
 ```bash
 make dev     # API on :8080, console on :5173 (hot reload)
 ```
 
-Open the console and follow [First sign-in](#first-sign-in).
+Open the console, follow [First sign-in](#first-sign-in), then
+[connect Xendit](#connect-a-gateway-xendit).
 
 Other targets: `make backend`, `make frontend`, `make test`, `make check`,
 `make ci`, `make gen`, `make reset-admin EMAIL=... PW=...`, `make help`.
@@ -107,15 +113,11 @@ make dev     # API on :18080, console on :15173
 
 Any target also accepts a one-off override, e.g. `make dev API_PORT=18080`.
 
-In the Xendit dashboard, set the invoice webhook URL to
-`https://<your-host>/webhooks/xendit` and copy its verification token into
-`XENDIT_CALLBACK_TOKEN`.
-
 ## Running everything with Docker
 
 ```bash
 cp .env.example .env    # or: make env
-# set ENCRYPTION_KEY, XENDIT_SECRET_KEY, XENDIT_CALLBACK_TOKEN (and SETUP_TOKEN, see below)
+# set ENCRYPTION_KEY and HTTP_BASE_URL (and SETUP_TOKEN, see below)
 docker compose up -d --build
 ```
 
@@ -149,7 +151,7 @@ Owners add more users in **Settings → Users** and pick a role:
 |---|---|
 | `owner` | everything, including users |
 | `admin` | everything except users |
-| `viewer` | read apps, payments, ledger and webhook deliveries; no changes, no audit log |
+| `viewer` | read apps, connections, payments, ledger and webhook deliveries; no changes, no audit log |
 
 New users and password resets get a temporary password, shown once, that
 must be changed at first sign-in.
@@ -173,6 +175,46 @@ Behind a reverse proxy, list the proxy in `TRUSTED_PROXIES` so sign-in rate
 limits and the audit log see the real client IP. Session cookies are
 `Secure` unless `APP_ENV=development`; serve the console over HTTPS, or set
 `COOKIE_SECURE=false` for plain HTTP on a host other than `localhost`.
+
+## Connect a gateway (Xendit)
+
+Gateway accounts are **connections**, managed in the console (owner and
+admin; viewers can look). Set `HTTP_BASE_URL` to the public URL the gateway
+can reach first: callback URLs are built from it.
+
+1. **Connections → Add connection.** Pick Xendit, the environment (`test`
+   for a Xendit development key `xnd_development_…`, `live` for
+   `xnd_production_…`) and a name such as `xendit-live`.
+2. Paste the **secret API key** (Xendit dashboard → Settings → API keys;
+   a restricted key with Invoice read and write is enough) and the
+   **webhook verification token** (Settings → Webhooks). KeiPay encrypts
+   them and from then on shows only their last 4 characters.
+3. KeiPay **tests** the credentials right away. Fix and retest if needed.
+4. Copy the connection's **callback URL**,
+   `https://<your-host>/webhooks/xendit/con_…`, into Xendit → Settings →
+   Webhooks → Invoices paid. Each connection has its own URL and is
+   verified with its own token.
+5. Choose the **channels** to offer. Leave all on to offer everything your
+   Xendit account has activated.
+6. Open each app (**Apps → app → Overview**) and pick its **default
+   connection**. It must have the app's environment. Payments of an app
+   without one fail with `422 no_eligible_connection`.
+
+To change keys later, use **Replace credentials** on the same connection;
+do not add a second connection for the same Xendit account, because Xendit
+sends callbacks to one URL only. A connection that is some app's default
+cannot be disabled until the apps use another one.
+
+**Upgrading from `XENDIT_SECRET_KEY` / `XENDIT_CALLBACK_TOKEN`:** keep both
+set for the first start after upgrading. The server imports them once into
+a connection named `xendit-imported` (environment from the key prefix),
+attaches existing payments to it and makes it the default connection of
+every app with the same environment. `/webhooks/xendit` keeps working as an
+alias for that connection, so nothing breaks; then move the Xendit dashboard
+to the connection's own URL and remove the two variables (the server warns
+while they are set). Apps whose environment differs from the key's (for
+example `live` apps with a development key) get no default connection and
+are listed in the server log.
 
 ## API contract
 
@@ -268,6 +310,12 @@ the payment and sent back in every webhook for it.
 `payment_id` (integer) is kept for existing integrations; use `id`
 (`pay_…`) in new code.
 
+The checkout is created on the app's default connection. Without one the
+request fails with `422 no_eligible_connection`. When the gateway refuses
+the request it fails with `422 provider_rejected`; when the gateway cannot
+be reached or has a server error, `503 provider_unavailable`. No payment is
+stored in either case, so retry with the same `order_id`.
+
 ### Get a payment
 
 `GET /v1/payments/:id`, signed the same way (empty body). `:id` is the
@@ -308,7 +356,8 @@ of order the stale one is dropped, so you may get `payment.settled` without
 
 KeiPay matches gateway callbacks to payments by the stored reference
 (`kp_pay_…`, or `{slug}:{order_id}` for payments created before apps), never
-by parsing it.
+by parsing it. A callback only updates payments created through the
+connection whose URL it arrived at.
 
 ## Admin API
 
@@ -326,18 +375,22 @@ Sessions expire after 30 minutes idle or 12 hours in total
 - `GET/POST /admin/apps`, `GET/PATCH /admin/apps/:id`,
   `POST /admin/apps/:id/disable|enable`
 - `GET/POST /admin/apps/:id/keys`, `POST /admin/apps/:id/keys/:key_id/rotate|revoke`
+- `GET /admin/providers`
+- `GET/POST /admin/connections`, `GET/PATCH /admin/connections/:id`,
+  `PATCH /admin/connections/:id/credentials`, `PUT /admin/connections/:id/channels`,
+  `POST /admin/connections/:id/test|disable|enable`
 - `GET /admin/payments` (cursor-paginated), `GET /admin/ledger`
 - `GET /admin/webhook-deliveries`, `POST /admin/webhook-deliveries/:id/replay`
 - `GET /admin/audit-logs`
 
 Cursor-paginated lists take `limit` and `cursor` and return `next_cursor`.
-Resources use prefixed ids (`app_…`, `key_…`, `pay_…`, `usr_…`).
+Resources use prefixed ids (`app_…`, `key_…`, `pay_…`, `con_…`, `usr_…`).
 
 The server checks each operation's permission against the caller's role
 (`403 forbidden` otherwise); the table is in the spec and `GET /admin/me`
 returns the caller's permissions.
 
-Every admin change (users, apps, API keys, password changes, replays) and every
+Every admin change (users, apps, API keys, connections, password changes, replays) and every
 sign-in, failed sign-in and sign-out is recorded in the audit log with who,
 what, when and before/after values, never secrets or passwords.
 

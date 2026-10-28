@@ -5,12 +5,13 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 ## What this is
 
 KeiPay is a self-hosted payment orchestrator. Apps (formerly tenants) call one
-API with their own API keys; KeiPay creates the checkout on the payment gateway (today: a
-Xendit Invoice on the operator's own Xendit account), receives the gateway
-webhook, and forwards a normalized, signed event to the originating app.
-KeiPay never holds funds. See `README.md` for the API and webhook contracts,
-and `docs/design.md` for the multi-gateway design (connections,
-routing, Midtrans/DOKU adapters) that is not built yet.
+API with their own API keys; KeiPay creates the checkout on the payment gateway
+through the app's default connection (today: a Xendit Invoice on the
+operator's own Xendit account), receives the gateway webhook on that
+connection's own URL, and forwards a normalized, signed event to the
+originating app. KeiPay never holds funds. See `README.md` for the API and
+webhook contracts, and `docs/design.md` for the multi-gateway design (routing,
+attempts, Midtrans/DOKU adapters) that is not built yet.
 
 ## Repository layout
 
@@ -69,7 +70,9 @@ Service-layer (ports-and-adapters); dependencies point inward to
 - `internal/repository/{postgres,redis}`: implementations of domain interfaces,
   no business logic.
 - `internal/worker`: asynq enqueuer, webhook forwarder, sweeper.
-- `internal/xendit`: Xendit SDK port and adapter.
+- `internal/provider`: gateway port (`Provider`, `Registry`, schemas,
+  capabilities, error classes); one adapter package per gateway
+  (`internal/provider/xendit`), registered in `cmd/server/main.go`.
 - `internal/pkg`: crypto (AES-256-GCM), hmac, keygen, logger.
 - Wiring is manual DI in `cmd/server/main.go`.
 
@@ -82,10 +85,15 @@ postgres implementation → migration in `backend/migrations/` → wire in main.
 1. **App identification is always a table lookup**: `/v1` hashes
    `X-Api-Key` (SHA-256) and loads key + app in one query by `key_hash`; the
    key decides the app and its environment (`kp_test_`/`kp_live_`, legacy
-   `kp_` keys take the app's). Gateway callbacks find the payment by its
-   stored reference (`payments.external_id`: `kp_pay_…`, or `{slug}:{order_id}`
-   for pre-apps payments); nothing parses a slug. The legacy `tenants` table
-   and `tenant_id` columns are read-only leftovers of expand/contract.
+   `kp_` keys take the app's). Gateway callbacks arrive at
+   `/webhooks/{provider}/{con_…}`, are verified with that connection's
+   credentials, and find the payment by its stored reference
+   (`payments.external_id`: `kp_pay_…`, or `{slug}:{order_id}` for pre-apps
+   payments), which must belong to the same connection; nothing parses a
+   slug. `/webhooks/xendit` aliases the connection imported from the
+   deprecated `XENDIT_*` env (`merchants.legacy_connection_id`). The legacy
+   `tenants` table and `tenant_id` columns are read-only leftovers of
+   expand/contract.
 2. **Two-layer idempotency**: `WebhookService.Process` checks Redis
    (`idemp.Seen` on `{xenditID}:{status}`), then runs the durable guard
    (`CreateEventIfNew`) in the same transaction as the status update, ledger
@@ -100,7 +108,9 @@ postgres implementation → migration in `backend/migrations/` → wire in main.
    nonce); outbound forwards sign the raw body as `X-Kei-Signature` with the
    app's webhook signing secret (for migrated apps, their old `api_secret`),
    so key rotation never breaks webhook verification. Secrets are AES-256-GCM
-   encrypted at rest and shown in plaintext only at create/rotate.
+   encrypted at rest and shown in plaintext only at create/rotate. Gateway
+   credentials use envelope encryption (per-connection data key, bound to the
+   connection's public id) and are never returned, only their last 4 chars.
 4. **Delivery durability**: `Process` writes a `pending` `webhook_deliveries`
    row in the event transaction and enqueues after commit (task ID derived from
    the delivery id). If enqueue fails, `worker.Sweeper` re-enqueues pending

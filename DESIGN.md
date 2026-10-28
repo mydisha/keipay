@@ -44,11 +44,11 @@ Status tones. Each has a tinted background, a text colour and a border:
 
 | Tone | Tokens | Used for |
 |---|---|---|
-| success | `success`, `success-foreground`, `success-border` | `PAID`, `DELIVERED`, active (apps, users, API keys) |
-| warning | `warning`, `warning-foreground`, `warning-border` | `PENDING`, expired API key |
-| danger | `danger`, `danger-foreground`, `danger-border` | `FAILED`, revoked API key, errors, field messages |
-| info | `info`, `info-foreground`, `info-border` | `SETTLED` |
-| neutral | `neutral`, `neutral-foreground`, `neutral-border` | `EXPIRED` payment, disabled, inactive, anything unknown |
+| success | `success`, `success-foreground`, `success-border` | `PAID`, `DELIVERED`, active (apps, users, API keys, connections), connection test `Passed` |
+| warning | `warning`, `warning-foreground`, `warning-border` | `PENDING`, expired API key, "no default connection" notice |
+| danger | `danger`, `danger-foreground`, `danger-border` | `FAILED`, revoked API key, connection test `Failed`, errors, field messages |
+| info | `info`, `info-foreground`, `info-border` | `SETTLED`, the `Legacy URL` badge of the imported connection |
+| neutral | `neutral`, `neutral-foreground`, `neutral-border` | `EXPIRED` payment, disabled, inactive, connection `Not tested`, anything unknown |
 
 Test mode: `test-mode`, `test-mode-foreground`, `test-mode-border` (amber). Use
 them only for the test-mode banner, the switch and the `Test` environment
@@ -85,6 +85,7 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 | Component | Use it for |
 |---|---|
 | `Button` | Every action. Variants: `default` (one per view), `outline`, `ghost`, `secondary`, `destructive`, `link`. Sizes reach 44px below 768px. |
+| `PasswordInput` | Passwords and other secrets: masked, with a show/hide toggle whose accessible name can be overridden (`Show value: Secret API key`). |
 | `Input`, `Textarea`, `Select`, `Checkbox`, `RadioGroup`, `Switch`, `Label` | Form controls. Always with a visible label. `SelectItem` takes an optional one-line `description` (shown in the list, not in the trigger), used for the role picker. A `RadioGroup` is named by its field label (`aria-labelledby`) and each item has its own `Label`; use it for a short fixed choice such as the app environment. |
 | `Form` (`FormField`, `FormItem`, `FormLabel`, `FormControl`, `FormDescription`, `FormMessage`) | Every form: react-hook-form + a zod schema that mirrors the contract. Server field errors go on their field; other failures in an `Alert` above the form. |
 | `DataTable` | Every list. See the table pattern. |
@@ -105,7 +106,9 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 | `Alert` | Inline messages inside forms and sections. |
 | `Tabs` | Sibling views of one resource (Webhooks: Outbound, Inbound) that share a URL. |
 | `LinkTabs` | Sibling views that each have their own URL (Settings: Account, Users, Audit log; an app's Overview, API keys, Webhooks, Routing): links styled as tabs inside a labelled `nav`, `aria-current="page"` on the active one. |
-| `EnvironmentBadge` (`features/apps`) | An app's environment as text: `Test` in the amber test-mode tokens, `Live` in neutral card colours. Shown next to every app name (`AppLabel` in payments, webhooks and reconciliation rows). |
+| `EnvironmentBadge` (`features/apps`) | An app's or a connection's environment as text: `Test` in the amber test-mode tokens, `Live` in neutral card colours. Shown next to every app name (`AppLabel` in payments, webhooks and reconciliation rows) and every connection name. |
+| `SchemaFields` (`features/connections`) | Every provider form field, rendered from the `SchemaField` list the server sends. See Connections. |
+| `WizardStepper` (`features/connections`) | The numbered steps of a multi-step page. See Wizard pattern. |
 | toasts (`sonner`) | Outcome of an action the user just took: "Delivery 7 queued", "Couldn't replay". Never for load errors (use `ErrorState`). |
 
 ## Dense table pattern
@@ -206,6 +209,7 @@ live integration at once:
 | Disable an app | the app's slug |
 | Revoke an API key | the key's label |
 | Disable a user, reset a password | the user's email |
+| Disable a connection | the connection's name |
 
 Undoable or non-breaking actions (enable an app or user, rotate a key) use a
 plain confirm. The dialog's text says what fails and with which error code
@@ -232,6 +236,59 @@ plain confirm. The dialog's text says what fails and with which error code
   for a signed-out visitor. A failure other than 401 shows a full-page
   `ErrorState` with retry.
 
+## Wizard pattern
+
+Used when a task has steps that each need room (adding a connection). A
+wizard is a page, never a dialog, so it works at 375px and survives a reload.
+
+- `WizardStepper` above one card: numbered steps with text labels in an
+  `ol` inside a `nav` named "Steps"; the current step has
+  `aria-current="step"`, finished steps show a check, and each item carries
+  "Step N of M:" for screen readers. Steps stack vertically below 768px.
+- The card has the step's `h2`, one sentence, the content, and the actions
+  bottom-right: the main action last (`Next`, `Create and test`,
+  `Continue`), `Back` before it, and `Skip for now` (ghost) on optional steps.
+- Steps before the resource exists share one form, so Back keeps what was
+  typed, and the server's field errors send the user back to the step that
+  has the field. Once the resource exists, the URL carries it and the step
+  (`?connection=con_…&step=3`), so a reload resumes there; the steps after
+  creation are optional and every one of them can be done later on the
+  detail page.
+
+## Connections
+
+- Every credential and settings form is rendered by `SchemaFields` from the
+  provider's schema (`GET /admin/providers`); the console has no code per
+  gateway. `string` is an `Input` (a secret field is a `PasswordInput` with
+  `autocomplete="off"` and no spellcheck), `integer` a numeric text input sent
+  as a number (blank means "not set"), `boolean` a `Switch`, and `enum` a
+  `Select` with a `Default` choice when the field is optional. Labels,
+  descriptions and placeholders come from the schema; required fields carry a
+  `*` and `aria-required`.
+- Client rules mirror the server (required, length in code points, pattern
+  with `pattern_hint` as the message and never the regex, minimum, maximum,
+  options). Server errors `credentials.<key>` and `settings.<key>` land on
+  their field. A field type the console doesn't know shows "This provider
+  needs a newer console." and disables submit.
+- Credentials are write-only. The detail page shows each field's label and
+  `•••• last4` (or `Stored` when the value is too short to hint), never a
+  value. Replacing them uses the same fields in replace mode: empty fields
+  keep the stored value, the hint is the placeholder, at least one value is
+  required, and only the filled keys are sent.
+- Settings sit under a collapsible "Advanced settings" in the wizard and in
+  the Details form on the detail page, which sends only what changed.
+- The callback URL is mono with a copy button, followed by the provider's
+  numbered instructions and dashboard link. The imported connection also
+  says it receives callbacks at `/webhooks/xendit` (legacy).
+- The last test is a status badge (`Passed`, `Failed`, `Not tested`) with
+  the relative time; a failure shows its message. A failed test never blocks
+  the wizard; it says checkouts may fail until the test passes.
+- An app's default connection is chosen on its Overview tab from the active
+  connections of the app's environment, plus `None`. Viewers see a link or
+  "Not set". Without one, a warning says payments fail until it is set.
+- Disabling a connection that an app uses as its default is refused: a
+  dialog lists those apps as links and how many there are.
+
 ## Roles and permissions
 
 - The UI reads what the signed-in user may do from `me.permissions`
@@ -239,7 +296,9 @@ plain confirm. The dialog's text says what fails and with which error code
   name. The server enforces every permission anyway.
 - Actions the role can't perform are hidden, not disabled: no Create app,
   Edit, Disable, Enable, Create key, Rotate or Revoke without `apps:write`, no
-  Replay without `deliveries:replay`. Pages stay readable.
+  Add connection, Test connection, Replace credentials, Disable or Enable
+  without `connections:write`, no Replay without `deliveries:replay`. Pages
+  stay readable; forms a viewer can't submit render disabled.
 - Pages and tabs the role can't open are hidden from navigation; opening
   their URL shows `ForbiddenState` in place of the content (no redirect).
 - The role is shown as a text label: Owner, Admin, Viewer. Role pickers give
@@ -295,9 +354,10 @@ Enable is a plain confirm. Your own row has no Disable or Reset password.
   account settings, change password, sign out). Sign out calls
   `POST /admin/logout`, clears every cached query and goes to `/login`; if it
   fails the user stays signed in and sees a toast.
-- Test mode shows an amber banner on every page. The switch sets the Apps
-  list's starting environment filter (and resets it whenever the switch
-  changes) and the create-app default. Payments, webhooks and reconciliation
+- Test mode shows an amber banner on every page. The switch sets the
+  starting environment filter of the Apps and Connections lists (and resets
+  it whenever the switch changes) and the environment default of the
+  create-app dialog and the add-connection wizard. Payments, webhooks and reconciliation
   do not follow it yet, and the banner says so instead of claiming the data is
   filtered.
 - The palette navigates to every page (plus Users with `users:manage`),
@@ -325,7 +385,7 @@ All formatting goes through `frontend/src/shared/lib/format.ts`.
   formatting and a `WIB` suffix: `2 Jan 2026, 01.30.00 WIB`. Tables show the
   relative time ("5 minutes ago") with the absolute time in a tooltip and in
   `<time dateTime>`.
-- Ids: public ids (`app_…`, `pay_…`, `key_…`, `usr_…`) look like
+- Ids: public ids (`app_…`, `pay_…`, `key_…`, `usr_…`, `con_…`) look like
   `pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C` and are always mono with copy. Numeric ids
   from older endpoints (deliveries, ledger entries) show as `#12`.
 - Missing values show `—`.

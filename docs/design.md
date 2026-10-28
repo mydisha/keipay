@@ -636,7 +636,7 @@ Navigasi final (sidebar yang bisa diciutkan, top bar dengan switch Test/Live dan
 |---|---|---|
 | Dashboard | Volume per provider, success rate create, status health, delivery gagal, item rekonsiliasi belum resolved | Empty state "segera hadir" |
 | Apps | List → detail dengan tab Overview, API keys, Webhooks, Routing | Halaman tenant lama dipindah ke sini; fase 2: list cursor + detail dengan tab (Webhooks dan Routing masih empty state) |
-| Connections | List + wizard tambah connection, health per channel, toggle maintenance | Empty state "segera hadir" |
+| Connections | List + wizard tambah connection, health per channel, toggle maintenance | Empty state "segera hadir"; fase 3: list, wizard, detail (setting, kredensial, channel, test, aktif/nonaktif); health dan maintenance di fase 9 |
 | Webhooks | Tab Outbound (delivery ke app, replay) dan Inbound (dari PG, raw + hasil verifikasi) | Halaman delivery lama (Outbound) |
 | Payments | List + **timeline** per payment | Halaman payment lama |
 | Reconciliation | Run rekonsiliasi per connection, ringkasan per app × connection × periode, export CSV | Halaman ledger lama (ringkasan per tenant) |
@@ -716,8 +716,8 @@ Diputuskan di fase 1.
 
 | Permission | owner | admin | viewer |
 |---|---|---|---|
-| `apps:read`, `payments:read`, `deliveries:read` | ya | ya | ya |
-| `apps:write`, `deliveries:replay`, `audit:read` | ya | ya | tidak |
+| `apps:read`, `connections:read`, `payments:read`, `deliveries:read` | ya | ya | ya |
+| `apps:write`, `connections:write`, `deliveries:replay`, `audit:read` | ya | ya | tidak |
 | `users:manage` | ya | tidak | tidak |
 
 Viewer tidak membaca audit log karena isinya (email, IP, perubahan user) setara dengan manajemen user. Fase 2 mengganti `tenants:read`/`tenants:write` dengan `apps:read`/`apps:write` (route tenant dihapus, jadi permission lamanya ikut hilang; konsol adalah satu-satunya klien `/admin`). Fase berikutnya menambah permission per resource (`connections:*`, dst.) dengan pola yang sama.
@@ -759,7 +759,43 @@ Legacy tenant menjadi `live` karena integrasi yang sudah ada memakai akun Xendit
 
 Audit: `app.create` dan `api_key.create` (dua baris di satu transaksi saat app dibuat), `app.update` (hanya field yang berubah), `app.disable`, `app.enable`, `api_key.create`, `api_key.rotate` (target key baru, `before` key lama, `after` key baru), `api_key.revoke`. Snapshot key berisi `id`, `app_id`, `label`, `environment`, `prefix`, `last4`, `expires_at`, `revoked_at`, tanpa key utuh, hash, maupun secret. Entri lama `tenant.*` tetap seperti adanya.
 
-**Konsol.** Switch Test/Live di top bar sekarang punya arti: list Apps memakai mode itu sebagai filter environment awal (chip environment tetap bisa diganti ke All), dan dialog buat app memilih environment sesuai mode. Halaman lain belum difilter per mode; itu menunggu payment punya kolom environment sendiri (fase 3).
+**Konsol.** Switch Test/Live di top bar sekarang punya arti: list Apps memakai mode itu sebagai filter environment awal (chip environment tetap bisa diganti ke All), dan dialog buat app memilih environment sesuai mode. Fase 3 menerapkan hal yang sama ke list Connections dan wizard tambah connection. Payments, Webhooks, dan Reconciliation belum difilter per mode; filternya ditambahkan saat halaman itu dikerjakan ulang (fase 4 dan 5), lewat join ke `apps.environment`, bukan kolom environment baru di `payments`.
+
+### Connections dan provider
+
+Diputuskan di fase 3. Tujuannya: menambah gateway cukup dengan satu paket adapter dan satu baris registrasi, tanpa mengubah frontend.
+
+**Port.** `internal/provider` berisi port `Provider`, `Registry`, `Capabilities`, schema field, dan kelas error (`ErrRejected`, `ErrRetryable`, `ErrUnknownOutcome`, `ErrNotFound`, dibungkus dengan `%w` dan dicek dengan `errors.Is`). Perbedaan dari sketsa di [Port `provider.Provider`](#port-providerprovider):
+
+- Setiap call ke PG menerima `provider.Account{Environment, Credentials, Settings}`, bukan `Credentials` saja, karena setting connection (misalnya durasi invoice default) ikut menentukan request.
+- Adapter mendeklarasikan `CredentialSchema()` dan `SettingsSchema()` dalam satu format (`SchemaField`: `key`, `type` `string|integer|boolean|enum`, `label`, `description`, `placeholder`, `secret`, `required`, `default`, `options`, `min_length`, `max_length`, `pattern` + `pattern_hint`, `minimum`, `maximum`). Validator generik di `internal/provider` dipakai service untuk create dan update; `ValidateAccount(env, creds)` di adapter menambah aturan lintas field (Xendit: prefix `xnd_development_` hanya untuk `test`, `xnd_production_` hanya untuk `live`). Key yang tidak ada di schema ditolak (`unknown`), supaya salah ketik tidak tersimpan diam-diam. Nilai kredensial selalu string dan di-trim.
+- `Descriptor()` mengembalikan nama tampilan, deskripsi, URL dokumentasi, dan langkah memasang URL webhook di dashboard PG. `GET /admin/providers` menyajikan semuanya; konsol tidak punya kode per provider.
+- `FindByReference` dan `GetStatus` belum ada di port. Keduanya ditambahkan saat dipakai (rekonsiliasi di fase 5, attempt loop di fase 6); adapter ada di repo yang sama, jadi menambah method ke interface tidak memutus siapa pun.
+- `MapStatus` Xendit tetap memetakan status yang tidak dikenal ke `PENDING` (perilaku lama, efektifnya diabaikan sebagai stale). Status `unmapped` yang tercatat datang bersama `inbound_webhooks` di fase 4.
+
+**Data.** Migrasi `000008`:
+
+- `merchants`: satu baris default (`is_default`, unik parsial), tanpa ID publik dan tidak tampil di UI. `legacy_connection_id` menunjuk connection hasil impor env, target alias `/webhooks/xendit`.
+- `connections`: `public_id` (`con_`), `merchant_id`, `provider`, `name` (format seperti slug, 3–64 karakter, unik per merchant; boleh diganti di fase 3, dan fase 6 memutuskan ulang kalau app mulai merujuk connection lewat nama), `environment` (`test` | `live`, kosakata yang sama dengan app), `status` (`active` | `disabled`), `credentials_enc`, `credentials_dek_enc`, `key_version`, `credentials_last4` JSONB, `settings` JSONB, `last_tested_at`, `last_test_status` (`ok` | `failed`), `last_test_error`. `UNIQUE (id, merchant_id, environment)` menjadi target FK komposit dari `apps`.
+- `connection_channels`: `(connection_id, channel)`, `enabled`. Fee, batas amount, dan jadwal maintenance dari sketsa data model belum dibuat; kolomnya ditambahkan secara additive saat fiturnya ada (fase 5, 6, 9), supaya tidak ada konfigurasi yang tersimpan tanpa efek.
+- `apps.merchant_id` (backfill ke merchant default, lalu `NOT NULL`) dan `apps.default_connection_id`, dengan FK komposit `(default_connection_id, merchant_id, environment) → connections (id, merchant_id, environment)`. Jadi app tidak mungkin menunjuk connection milik merchant lain atau beda environment, bahkan lewat SQL langsung. Service tetap memeriksa lebih dulu supaya error-nya berupa field error yang jelas.
+- `payments.connection_id` dan `payments.provider` (nullable). Payment baru selalu mengisinya; payment lama diisi saat impor env.
+
+**Envelope encryption.** Setiap connection punya data key acak 32 byte. Kredensial (JSON) dienkripsi AES-256-GCM dengan data key itu dan `public_id` connection sebagai additional data, sehingga ciphertext yang dipindah ke baris lain gagal didekripsi. Data key dienkripsi dengan master key `ENCRYPTION_KEY` lewat `crypto.Cipher` yang sudah ada. `key_version = 1`; rotasi master key cukup mengenkripsi ulang data key. Respons admin hanya membawa 4 karakter terakhir per field (`null` kalau nilainya kurang dari 12 karakter, karena 4 karakter dari nilai sependek itu terlalu banyak membuka), disimpan di `credentials_last4` saat ditulis sehingga list dan detail tidak perlu dekripsi. Snapshot audit tidak pernah memuat kredensial maupun last4: `connection.update_credentials` hanya mencatat nama field yang diganti.
+
+**Impor env (sekali).** Kalau `XENDIT_SECRET_KEY` dan `XENDIT_CALLBACK_TOKEN` di-set dan merchant default belum punya `legacy_connection_id`, server saat start membuat satu connection Xendit (nama `xendit-imported`, atau `xendit-imported-<6 karakter terakhir ID>` kalau nama itu sudah dipakai), dengan environment dari prefix key, lalu dalam transaksi yang sama: mengisi `legacy_connection_id`, mengisi `payments.connection_id`/`provider` yang masih kosong, dan menjadikannya default connection untuk setiap app yang belum punya default dan environment-nya sama. Transaksi mengunci baris merchant, jadi dua instance yang start bersamaan hanya mengimpor sekali. Impor dicatat di audit sebagai `system:import` (`connection.create`, dan `app.update` per app). Setelah itu env diabaikan, dan server memberi peringatan setiap start supaya env dihapus. Kalau hanya satu dari dua env yang di-set, config gagal dimuat. Key dengan prefix yang tidak dikenal tidak diimpor (error di log, server tetap jalan). App hasil migrasi fase 2 (`live`) tidak dipindah environment-nya walaupun key-nya `xnd_development_`: memindah environment app juga harus memindah semua API key-nya (FK komposit) dan mengubah arti key yang sudah dipakai integrasi. App seperti itu tidak mendapat default connection, dan server mencatat peringatan berisi daftar app tersebut. Konsekuensinya: deploy yang sudah ada harus tetap menyetel kedua env itu saat start pertama setelah upgrade.
+
+**Webhook masuk per connection.** `POST /webhooks/{provider}/{connection_id}` me-resolve connection lewat ID publik, mewajibkan provider di path sama dengan provider connection (selain itu `404`), lalu `VerifyWebhook` dengan kredensial connection itu sebelum body dibaca. Token yang valid untuk connection lain ditolak `401 invalid_callback_token` dan dicatat sebagai security event. Payment hasil lookup reference harus milik connection yang sama; kalau tidak, callback dicatat tetapi tidak di-apply (security event, `200` ke PG), sama seperti mismatch amount. Connection yang disabled tetap menerima callback supaya payment lama tetap ter-update. `/webhooks/xendit` adalah alias ke `legacy_connection_id` (`404` kalau tidak ada), sehingga dashboard Xendit yang belum diubah tetap jalan. Dedupe event tetap `(xendit_id, status)` global sampai `inbound_webhooks` di fase 4. Satu akun PG sebaiknya hanya punya satu connection: ganti kredensial di connection yang sama, jangan membuat connection kedua untuk akun yang sama, karena PG hanya mengirim callback ke satu URL dan payment milik connection lama akan dianggap mismatch.
+
+**Create payment.** Replay idempotent dijawab sebelum connection dilihat. Sesudah itu payment memakai `default_connection_id` app: tidak ada → `422 no_eligible_connection` (`reasons: ["no_default_connection"]`), disabled → `["connection_disabled"]`. Kalau channel yang aktif adalah subset ketat dari channel provider, checkout dibatasi ke channel itu; kalau semua aktif atau belum diatur, checkout tidak dibatasi, karena mengirim daftar lengkap bisa membuat Xendit menolak metode yang belum diaktifkan di akun. Error adapter dipetakan: `ErrRejected` → `422 provider_rejected`, `ErrRetryable` dan `ErrUnknownOutcome` → `503 provider_unavailable` (sebelumnya semua `500`). Pesan PG hanya masuk log. `ErrUnknownOutcome` saat create masih bisa meninggalkan invoice di Xendit tanpa baris payment, sama seperti sebelumnya; attempt dan adopsi di fase 6 yang menyelesaikannya.
+
+**Test connection.** `POST /admin/connections/{id}/test` memanggil `TestCredentials` (Xendit: list satu invoice, permission yang memang dibutuhkan) dengan timeout 10 detik dan selalu menjawab `200` dengan `result` `ok`/`failed` plus pesan yang sudah disanitasi. Hasilnya disimpan di connection dan dicatat `connection.test`. Mengganti kredensial mengosongkan hasil test.
+
+**Otorisasi.** `connections:read` (owner, admin, viewer) dan `connections:write` (owner, admin). Memilih default connection app memakai `apps:write`. Disable connection ditolak `409 connection_in_use` selama ada app (aktif maupun disabled) yang memakainya sebagai default, supaya default connection app selalu aktif.
+
+Audit: `connection.create`, `connection.update` (hanya field yang berubah), `connection.update_credentials`, `connection.update_channels`, `connection.disable`, `connection.enable`, `connection.test`, dan `app.update` untuk `default_connection_id`. Snapshot connection berisi `id`, `provider`, `name`, `environment`, `status`, `settings`, tanpa kredensial.
+
+**Konsol.** Wizard tambah connection adalah halaman (`/connections/new`), bukan dialog, supaya nyaman di mobile: provider dan environment → form kredensial dan setting dari schema → connection dibuat lalu langsung dites → URL webhook + petunjuk provider → channel. Langkah setelah connection dibuat boleh dilewati karena semuanya bisa diatur di halaman detail. Form dirender generik dari `ConfigSchema`; field secret memakai input password dengan tombol tampilkan dan tidak pernah diisi ulang dari server (saat ganti kredensial, field kosong berarti "tetap").
 
 ### Penyajian konsol
 

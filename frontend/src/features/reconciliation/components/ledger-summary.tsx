@@ -1,4 +1,4 @@
-import { AppName } from "@/features/apps/components/app-name";
+import { AppLabel } from "@/features/apps/components/app-label";
 import { formatNumber } from "@/shared/lib/format";
 import { strings } from "@/shared/lib/strings";
 import { Card } from "@/shared/ui/card";
@@ -8,11 +8,9 @@ import type { LedgerSummary as Summary } from "../api/ledger";
 
 export function LedgerSummary({
   summary,
-  names,
   isLoading,
 }: {
   summary: Summary[] | undefined;
-  names: Map<number, string>;
   isLoading: boolean;
 }) {
   if (isLoading) {
@@ -28,11 +26,11 @@ export function LedgerSummary({
   return (
     <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" aria-label={strings.reconciliation.summaryTitle}>
       {summary.map((row) => (
-        <li key={row.tenant_id}>
+        <li key={row.app.id}>
           <Card className="grid gap-3 p-4">
             <div className="flex items-baseline justify-between gap-2">
-              <span className="truncate font-medium">
-                <AppName id={row.tenant_id} names={names} />
+              <span className="min-w-0 font-medium">
+                <AppLabel app={row.app} />
               </span>
               <span className="text-xs text-muted-foreground tabular-nums">
                 {formatNumber(row.count)} {strings.reconciliation.count.toLowerCase()}

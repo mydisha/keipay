@@ -3,8 +3,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 import { AppFilterSelect } from "@/features/apps/components/app-filter-select";
-import { AppName } from "@/features/apps/components/app-name";
-import { useTenantNames } from "@/features/apps/api/tenants";
+import { AppLabel } from "@/features/apps/components/app-label";
 import { usePermission } from "@/features/auth/components/can";
 import { errorMessage } from "@/shared/api/error-message";
 import { strings } from "@/shared/lib/strings";
@@ -23,15 +22,14 @@ import {
   type WebhookDelivery,
 } from "../api/deliveries";
 
-const NO_FILTERS: DeliveryFilters = { status: null, tenantId: null };
+const NO_FILTERS: DeliveryFilters = { status: null, appId: null };
 
 export function OutboundDeliveries() {
   const [filters, setFilters] = useState<DeliveryFilters>(NO_FILTERS);
   const deliveries = useDeliveries(filters);
   const canReplay = usePermission("deliveries:replay");
   const replay = useReplayDelivery();
-  const names = useTenantNames();
-  const filtered = filters.status !== null || filters.tenantId !== null;
+  const filtered = filters.status !== null || filters.appId !== null;
   const clearFilters = () => setFilters(NO_FILTERS);
 
   function onReplay(id: number) {
@@ -52,9 +50,10 @@ export function OutboundDeliveries() {
     {
       id: "payment",
       header: strings.webhooks.payment,
-      cell: (d) => <IdText value={d.payment_id} prefix="#" label={strings.webhooks.payment} />,
+      className: "max-w-60",
+      cell: (d) => <IdText value={d.payment_id} label={strings.webhooks.payment} />,
     },
-    { id: "app", header: strings.common.app, cell: (d) => <AppName id={d.tenant_id} names={names} /> },
+    { id: "app", header: strings.common.app, className: "max-w-56", cell: (d) => <AppLabel app={d.app} /> },
     { id: "status", header: strings.webhooks.status, cell: (d) => <StatusBadge status={d.status} /> },
     {
       id: "attempts",
@@ -118,7 +117,7 @@ export function OutboundDeliveries() {
           onChange: (value) => setFilters((f) => ({ ...f, status: isDeliveryStatus(value) ? value : null })),
         },
       ]}
-      toolbar={<AppFilterSelect value={filters.tenantId} onChange={(tenantId) => setFilters((f) => ({ ...f, tenantId }))} />}
+      toolbar={<AppFilterSelect value={filters.appId} onChange={(appId) => setFilters((f) => ({ ...f, appId }))} />}
       hasActiveFilters={filtered}
       onClearFilters={clearFilters}
       emptyState={

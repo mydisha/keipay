@@ -7,10 +7,13 @@ export type FieldRuleMessages = Record<string, Record<string, string>>;
 
 const PASSWORD_RULES = { min: strings.auth.passwordTooShort, max: strings.auth.passwordTooLong };
 
+/** Server rules for a user or app name (`nameField` on the client). */
+export const NAME_RULES = { required: strings.auth.nameRequired, max: strings.auth.nameTooLong, name: strings.auth.nameInvalid };
+
 /** Server rules for the email, name and password fields (see api/openapi.yaml). */
 export const credentialRuleMessages: FieldRuleMessages = {
   email: { required: strings.auth.emailRequired, email: strings.auth.emailInvalid, max: strings.auth.emailInvalid },
-  name: { required: strings.auth.nameRequired, max: strings.auth.nameTooLong, name: strings.auth.nameInvalid },
+  name: NAME_RULES,
   password: PASSWORD_RULES,
   new_password: PASSWORD_RULES,
 };

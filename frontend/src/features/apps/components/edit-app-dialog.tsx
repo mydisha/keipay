@@ -7,60 +7,78 @@ import { errorMessage } from "@/shared/api/error-message";
 import { strings } from "@/shared/lib/strings";
 import { Alert, AlertDescription } from "@/shared/ui/alert";
 import { Button } from "@/shared/ui/button";
-import { Checkbox } from "@/shared/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/shared/ui/dialog";
-import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/shared/ui/form";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/shared/ui/form";
 import { Input } from "@/shared/ui/input";
-import { useUpdateTenant, type Tenant } from "../api/tenants";
+import { useUpdateApp, type App, type Metadata, type UpdateAppRequest } from "../api/apps";
 import { editAppSchema, type EditAppValues } from "../schemas/app-form";
+import { metadataToText, parseMetadataText } from "../schemas/metadata";
 import { applyServerErrors } from "./apply-server-errors";
+import { MetadataEditor } from "./metadata-editor";
 import { UrlFields } from "./url-fields";
 
-const FIELD_NAMES = ["name", "webhook_url", "redirect_success_url", "redirect_failure_url", "active"] as const;
+const FIELD_NAMES = ["name", "webhook_url", "redirect_success_url", "redirect_failure_url", "metadata"] as const;
+const TEXT_FIELDS = ["name", "webhook_url", "redirect_success_url", "redirect_failure_url"] as const;
 
 interface EditAppDialogProps {
-  tenant: Tenant | null;
+  app: App | null;
   onClose: () => void;
 }
 
-export function EditAppDialog({ tenant, onClose }: EditAppDialogProps) {
-  const update = useUpdateTenant();
+export function EditAppDialog({ app, onClose }: EditAppDialogProps) {
+  const update = useUpdateApp();
   return (
-    <Dialog open={tenant !== null} onOpenChange={(open) => !open && !update.isPending && onClose()}>
-      {tenant && <EditAppForm key={tenant.id} tenant={tenant} update={update} onClose={onClose} />}
+    <Dialog open={app !== null} onOpenChange={(open) => !open && !update.isPending && onClose()}>
+      {app && <EditAppForm key={app.id} app={app} update={update} onClose={onClose} />}
     </Dialog>
   );
 }
 
-function EditAppForm({
-  tenant,
-  update,
-  onClose,
-}: {
-  tenant: Tenant;
-  update: ReturnType<typeof useUpdateTenant>;
-  onClose: () => void;
-}) {
+function sameMetadata(a: Metadata, b: Metadata): boolean {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((key) => key in b && Object.is(a[key], b[key]));
+}
+
+/** Only the fields that differ from the app: PATCH semantics, and the audit log records just those. */
+function changedFields(app: App, values: EditAppValues): { body: UpdateAppRequest; metadataText?: string } {
+  const body: UpdateAppRequest = {};
+  for (const field of TEXT_FIELDS) {
+    if (values[field] !== app[field]) body[field] = values[field];
+  }
+  const metadata = parseMetadataText(values.metadata);
+  if (metadata.ok && !sameMetadata(metadata.value, app.metadata)) {
+    body.metadata = metadata.value;
+    return { body, metadataText: values.metadata };
+  }
+  return { body };
+}
+
+function EditAppForm({ app, update, onClose }: { app: App; update: ReturnType<typeof useUpdateApp>; onClose: () => void }) {
   const [formError, setFormError] = useState<string | null>(null);
   const form = useForm<EditAppValues>({
     resolver: zodResolver(editAppSchema),
     defaultValues: {
-      name: tenant.name,
-      webhook_url: tenant.webhook_url,
-      redirect_success_url: tenant.redirect_success_url,
-      redirect_failure_url: tenant.redirect_failure_url,
-      active: tenant.active,
+      name: app.name,
+      webhook_url: app.webhook_url,
+      redirect_success_url: app.redirect_success_url,
+      redirect_failure_url: app.redirect_failure_url,
+      metadata: metadataToText(app.metadata),
     },
   });
   const pending = update.isPending;
 
   function onSubmit(values: EditAppValues) {
     setFormError(null);
+    const { body, metadataText } = changedFields(app, values);
+    if (Object.keys(body).length === 0) {
+      onClose();
+      return;
+    }
     update.mutate(
-      { id: tenant.id, body: values },
+      { id: app.id, body, metadataText },
       {
         onSuccess: (result) => {
-          toast.success(strings.apps.updated_toast(result.tenant.name));
+          toast.success(strings.apps.updated_toast(result.app.name));
           onClose();
         },
         onError: (error) => {
@@ -75,9 +93,9 @@ function EditAppForm({
   return (
     <DialogContent showCloseButton={!pending}>
       <DialogHeader>
-        <DialogTitle>{strings.apps.editTitle(tenant.name)}</DialogTitle>
+        <DialogTitle>{strings.apps.editTitle(app.name)}</DialogTitle>
         <DialogDescription>
-          {strings.apps.editDescription} <span className="font-mono">{tenant.slug}</span>
+          {strings.apps.editDescription}
         </DialogDescription>
       </DialogHeader>
       <Form {...form}>
@@ -103,19 +121,7 @@ function EditAppForm({
               )}
             />
             <UrlFields control={form.control} />
-            <FormField
-              control={form.control}
-              name="active"
-              render={({ field }) => (
-                <FormItem className="grid-cols-[auto_1fr] items-center gap-x-2 gap-y-1">
-                  <FormControl>
-                    <Checkbox checked={field.value} onCheckedChange={(v) => field.onChange(v === true)} />
-                  </FormControl>
-                  <FormLabel>{strings.apps.active}</FormLabel>
-                  <FormDescription className="col-start-2">{strings.apps.activeHint}</FormDescription>
-                </FormItem>
-              )}
-            />
+            <MetadataEditor control={form.control} label={strings.apps.metadata} />
           </fieldset>
           <DialogFooter>
             <Button variant="outline" onClick={onClose} disabled={pending}>

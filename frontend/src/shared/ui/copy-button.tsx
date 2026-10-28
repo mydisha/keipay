@@ -45,7 +45,11 @@ export function CopyButton({ value, label, className, showText = false }: CopyBu
       variant="ghost"
       size={showText ? "sm" : "icon-sm"}
       className={cn(!showText && "size-7", className)}
-      onClick={onCopy}
+      onClick={(event) => {
+        // Copying an id inside a clickable row must not also open the row.
+        event.stopPropagation();
+        void onCopy();
+      }}
       aria-label={showText ? undefined : label}
       title={label}
     >

@@ -1,6 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
-import { auditLog, delivery, me, tenant } from "@/test/fixtures";
+import { apiKey, app, APP_ID, auditLog, delivery, me, page } from "@/test/fixtures";
 import { errorBody, json, mockApi } from "@/test/http";
 import { setViewport } from "@/test/media";
 import { renderApp } from "@/test/render";
@@ -19,36 +19,53 @@ function settingsTabs() {
     .map((link) => link.textContent);
 }
 
-describe("Permission-aware console (T-49, AC-25)", () => {
-  it("viewers see apps without Create app or row actions", async () => {
-    mockApi({ "GET /admin/me": viewer, "GET /admin/tenants": { tenants: [tenant()] } });
-    renderApp("/apps");
+const DETAIL = `GET /admin/apps/${APP_ID}`;
+const KEYS = `GET /admin/apps/${APP_ID}/keys`;
+
+describe("Permission-aware console (T-49, AC-25; T-48)", () => {
+  it("viewers see apps without Create app", async () => {
+    mockApi({ "GET /admin/me": viewer, "GET /admin/apps": page([app()]) });
+    const { user } = renderApp("/apps");
+    await user.click(await screen.findByRole("button", { name: "All", pressed: false }));
     expect(await screen.findByText("Demo App")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create app" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Actions for Demo App" })).not.toBeInTheDocument();
   });
 
   it("viewers with no apps get an empty state without a create action", async () => {
-    mockApi({ "GET /admin/me": viewer, "GET /admin/tenants": { tenants: [] } });
-    renderApp("/apps");
-    const empty = await screen.findByTestId("empty-state");
-    expect(within(empty).queryByRole("button")).not.toBeInTheDocument();
+    mockApi({ "GET /admin/me": viewer, "GET /admin/apps": page([]) });
+    const { user } = renderApp("/apps");
+    await user.click(await screen.findByRole("button", { name: "All", pressed: false }));
+    expect(await screen.findByText("No apps yet")).toBeInTheDocument();
+    expect(within(screen.getByTestId("empty-state")).queryByRole("button")).not.toBeInTheDocument();
   });
 
-  it("only tenants:write unlocks app actions, whatever the role is called", async () => {
+  it("viewers see an app's detail and keys without Edit, Disable or key actions", async () => {
+    mockApi({ "GET /admin/me": viewer, [DETAIL]: { app: app() }, [KEYS]: page([apiKey()]) });
+    renderApp(`/apps/${APP_ID}/keys`);
+    expect(await screen.findByText("kp_test_…a1b2")).toBeInTheDocument();
+    for (const name of ["Edit", "Disable", "Enable", "Create key"]) {
+      expect(screen.queryByRole("button", { name })).not.toBeInTheDocument();
+    }
+    expect(screen.queryByRole("button", { name: /^Actions for key/ })).not.toBeInTheDocument();
+  });
+
+  it("only apps:write unlocks app actions, whatever the role is called", async () => {
     mockApi({
-      "GET /admin/me": me({ role: "viewer" }, ["tenants:read", "tenants:write"]),
-      "GET /admin/tenants": { tenants: [tenant()] },
+      "GET /admin/me": me({ role: "viewer" }, ["apps:read", "apps:write"]),
+      [DETAIL]: { app: app() },
+      [KEYS]: page([apiKey()]),
     });
-    renderApp("/apps");
-    expect(await screen.findByRole("button", { name: "Actions for Demo App" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Create app" })).toBeInTheDocument();
+    renderApp(`/apps/${APP_ID}/keys`);
+    expect(await screen.findByRole("button", { name: "Actions for key Default (kp_test_…a1b2)" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Disable" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create key" })).toBeInTheDocument();
   });
 
   it("viewers see deliveries without Replay", async () => {
     mockApi({
       "GET /admin/me": viewer,
-      "GET /admin/tenants": { tenants: [tenant()] },
+      "GET /admin/apps": page([app()]),
       "GET /admin/webhook-deliveries": { deliveries: [delivery()] },
     });
     renderApp("/webhooks");
@@ -59,7 +76,7 @@ describe("Permission-aware console (T-49, AC-25)", () => {
   it("admins keep Replay", async () => {
     mockApi({
       "GET /admin/me": admin,
-      "GET /admin/tenants": { tenants: [tenant()] },
+      "GET /admin/apps": page([app()]),
       "GET /admin/webhook-deliveries": { deliveries: [delivery()] },
     });
     renderApp("/webhooks");
@@ -99,6 +116,6 @@ describe("Permission-aware console (T-49, AC-25)", () => {
   it("owners open the audit log tab", async () => {
     mockApi({ "GET /admin/audit-logs": { data: [auditLog()], next_cursor: null } });
     renderApp("/settings/audit-log");
-    expect(await screen.findByText("tenant.create")).toBeInTheDocument();
+    expect(await screen.findByText("app.create")).toBeInTheDocument();
   });
 });

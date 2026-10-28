@@ -1,7 +1,9 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { readStorage, storageKeys, writeStorage } from "./storage";
 
-// Test/Live is console state only until environments arrive (phase 2).
+// The Test/Live switch. Its values match an app's `environment`: it sets the
+// Apps list's starting environment filter and the create-app default. Other
+// pages ignore it until they can filter by environment.
 export type Mode = "live" | "test";
 
 interface ModeContextValue {

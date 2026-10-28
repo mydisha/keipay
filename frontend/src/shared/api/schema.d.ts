@@ -33,14 +33,23 @@ export interface paths {
         /**
          * Create a payment
          * @description Creates a hosted checkout on the gateway and returns its URL.
-         *     Idempotent per `order_id`: a retry with the same amount and currency
-         *     returns the original payment (also `201`); a different amount or
-         *     currency returns `409 conflict`. An expired payment is returned
-         *     as-is, so use a new `order_id` to retry.
+         *     Idempotent per `order_id` within the app, and per `Idempotency-Key`
+         *     when sent (see Idempotency): a replay returns the original payment
+         *     with `201` and `Idempotent-Replayed: true`; a repeated `order_id`
+         *     with a different amount or currency returns `409 conflict`; a
+         *     repeated `Idempotency-Key` with a different request returns
+         *     `409 idempotency_key_reused`. An expired payment is returned as-is,
+         *     so use a new `order_id` to retry.
          *
-         *     A body that breaks the schema, including any entry of `items`,
-         *     returns `400 invalid_request` with `details.fields` (for example
-         *     `items.0.quantity`). `400 validation_failed` is for business rules.
+         *     The gateway reference (`reference`, Xendit `external_id`) is
+         *     `kp_` + the payment id, for example `kp_pay_01JB…`. `metadata` is
+         *     stored with the payment, returned by `GET` and sent back in every
+         *     webhook event for it.
+         *
+         *     A body that breaks the schema, including any entry of `items` or
+         *     `metadata`, returns `400 invalid_request` with `details.fields`
+         *     (for example `items.0.quantity` or `metadata.note`).
+         *     `400 validation_failed` is for business rules.
          */
         post: operations["createPayment"];
         delete?: never;
@@ -58,7 +67,7 @@ export interface paths {
         };
         /**
          * Get a payment
-         * @description Returns a payment owned by the calling tenant. Sign an empty body.
+         * @description Returns a payment of the calling app, by `pay_…` id or legacy integer id. Sign an empty body.
          */
         get: operations["getPayment"];
         put?: never;
@@ -355,51 +364,68 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/tenants": {
+    "/admin/apps": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** List tenants */
-        get: operations["listTenants"];
+        /**
+         * List apps
+         * @description Cursor-paginated, newest first (`created_at` descending, then `id`
+         *     descending). Includes disabled apps unless filtered. An unknown
+         *     `environment` or `status` returns `400 invalid_request` with rule
+         *     `oneof`.
+         */
+        get: operations["listApps"];
         put?: never;
         /**
-         * Create a tenant
-         * @description Returns the API secret in plaintext exactly once. Recorded in the
-         *     audit log as `tenant.create`.
+         * Create an app
+         * @description Creates an active app with its first API key (label `Default`, no
+         *     expiry) and its webhook signing secret. The API key, API secret
+         *     and webhook signing secret are returned in plaintext exactly once.
+         *     `slug` must be unused within the environment (`409 conflict`);
+         *     `slug` and `environment` never change. Records `app.create` and
+         *     `api_key.create`.
          */
-        post: operations["createTenant"];
+        post: operations["createApp"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/admin/tenants/{id}": {
+    "/admin/apps/{id}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        /**
-         * Update a tenant
-         * @description Replaces every mutable field; an omitted `active` means `false`.
-         *     The slug cannot be changed. Recorded in the audit log as
-         *     `tenant.update`.
-         */
-        put: operations["updateTenant"];
+        /** Get an app */
+        get: operations["getApp"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /**
+         * Update an app
+         * @description Send only the fields to change; `metadata` replaces the whole
+         *     object. `slug` and `environment` cannot change: a body containing
+         *     either returns `400 invalid_request` with rule `immutable` for that
+         *     field, even with the current value. A body with none of the
+         *     updatable fields returns `400 invalid_request` with
+         *     `details.fields` `[{"field": "body", "rule": "required"}]`. Other
+         *     unknown fields are ignored. A request that changes nothing returns
+         *     the app and records nothing; otherwise it records `app.update`
+         *     with only the changed fields.
+         */
+        patch: operations["updateApp"];
         trace?: never;
     };
-    "/admin/tenants/{id}/rotate": {
+    "/admin/apps/{id}/disable": {
         parameters: {
             query?: never;
             header?: never;
@@ -409,12 +435,112 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Rotate a tenant's API key and secret
-         * @description Issues a new key and secret and invalidates the old pair immediately.
-         *     The new secret is returned in plaintext exactly once. Recorded in the
-         *     audit log as `tenant.rotate_credentials`.
+         * Disable an app
+         * @description Every later `/v1` request with any of the app's keys gets
+         *     `403 tenant_inactive`. Keys, payments and queued webhook forwards
+         *     are unchanged. Disabling a disabled app returns it unchanged and
+         *     records nothing; otherwise records `app.disable`.
          */
-        post: operations["rotateTenantCredentials"];
+        post: operations["disableApp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/apps/{id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enable an app
+         * @description Enabling an active app returns it unchanged and records nothing;
+         *     otherwise records `app.enable`.
+         */
+        post: operations["enableApp"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/apps/{id}/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List an app's API keys
+         * @description Cursor-paginated, newest first (`created_at` descending, then `id` descending). Includes revoked and expired keys.
+         */
+        get: operations["listAppApiKeys"];
+        put?: never;
+        /**
+         * Create an API key
+         * @description Issues a key in the app's environment. The key and its secret are
+         *     returned in plaintext exactly once. An app may have at most 10
+         *     usable (not revoked, not expired) keys; one more returns
+         *     `400 validation_failed`. Works on disabled apps too. Records
+         *     `api_key.create`.
+         */
+        post: operations["createAppApiKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/apps/{id}/keys/{key_id}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate an API key
+         * @description Issues a new key and secret with the same label and no expiry. The
+         *     rotated key stays valid until it is revoked or expires, so both
+         *     work while the app switches over. Rotating a revoked or expired
+         *     key returns `400 validation_failed`; the 10-key limit applies. A
+         *     key of another app returns `404 not_found`. Records
+         *     `api_key.rotate` (target: the new key; before: the rotated key;
+         *     after: the new key).
+         */
+        post: operations["rotateAppApiKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/apps/{id}/keys/{key_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke an API key
+         * @description Revokes the key at once: later requests with it get
+         *     `401 api_key_revoked`. Revoking the app's last usable key is
+         *     allowed. Revoking a revoked key returns it unchanged and records
+         *     nothing; otherwise records `api_key.revoke`. A key of another app
+         *     returns `404 not_found`.
+         */
+        post: operations["revokeAppApiKey"];
         delete?: never;
         options?: never;
         head?: never;
@@ -430,9 +556,11 @@ export interface paths {
         };
         /**
          * List payments
-         * @description Offset-paginated, newest first. Unparseable `tenant_id`, `from` and
-         *     `to` values are ignored, and an out-of-range `limit` falls back to the
-         *     default.
+         * @description Cursor-paginated, newest first (`created_at` descending, then `id`
+         *     descending). Every filter is optional. An invalid value returns
+         *     `400 invalid_request`: `app_id` rule `public_id`, `status` rule
+         *     `oneof`, `from` or `to` rule `datetime`. An `app_id` that matches
+         *     no app returns an empty page.
          */
         get: operations["listAdminPayments"];
         put?: never;
@@ -451,9 +579,11 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List ledger entries with a per-tenant summary
+         * List ledger entries with a per-app summary
          * @description Offset-paginated, newest first. Unparseable filters are ignored, and
-         *     an out-of-range `limit` falls back to the default.
+         *     an out-of-range `limit` falls back to the default. A well-formed
+         *     `app_id` that matches no app returns no entries and an empty
+         *     summary.
          */
         get: operations["listLedger"];
         put?: never;
@@ -473,8 +603,9 @@ export interface paths {
         };
         /**
          * List outbound webhook deliveries
-         * @description Offset-paginated, newest first. An unparseable `tenant_id` is
-         *     ignored, and an out-of-range `limit` falls back to the default.
+         * @description Offset-paginated, newest first. An unparseable `app_id` is
+         *     ignored; a well-formed `app_id` that matches no app returns an
+         *     empty list. An out-of-range `limit` falls back to the default.
          */
         get: operations["listWebhookDeliveries"];
         put?: never;
@@ -496,7 +627,7 @@ export interface paths {
         put?: never;
         /**
          * Replay a webhook delivery
-         * @description Re-enqueues the delivery. Delivery is at-least-once, so tenants must
+         * @description Re-enqueues the delivery. Delivery is at-least-once, so apps must
          *     already dedupe. Recorded in the audit log as `webhook_delivery.replay`.
          */
         post: operations["replayWebhookDelivery"];
@@ -538,11 +669,13 @@ export interface webhooks {
         get?: never;
         put?: never;
         /**
-         * Payment event forwarded to the tenant's webhook_url
-         * @description Sent when a payment changes status. Verify `X-Kei-Signature`
-         *     (hex HMAC-SHA256 of the raw body keyed with the tenant `api_secret`)
-         *     in constant time. Return any `2xx` to acknowledge; anything else is
-         *     retried. Delivery is at-least-once: dedupe on `payment_id` + `event`.
+         * Payment event forwarded to the app's webhook_url
+         * @description Sent when a payment changes status. Verify `X-Kei-Signature` (hex
+         *     HMAC-SHA256 of the raw body keyed with the app's webhook signing
+         *     secret; for apps that existed before apps replaced tenants, that is
+         *     their original `api_secret`) in constant time. Return any `2xx` to
+         *     acknowledge; anything else is retried. Delivery is at-least-once:
+         *     dedupe on `payment_public_id` (or `payment_id`) + `event`.
          */
         post: operations["paymentEventWebhook"];
         delete?: never;
@@ -569,20 +702,23 @@ export interface components {
          *     | `invalid_token` | 401 | Not returned since admin bearer tokens were replaced by session cookies; kept so the code keeps its meaning. |
          *     | `session_required` | 401 | Admin request without a `keipay_session` cookie. |
          *     | `session_expired` | 401 | The session is unknown, idle too long, past its absolute lifetime, or was ended (logout, user disabled, password changed or reset). Sign in again. |
-         *     | `missing_signature_headers` | 401 | Tenant request without `X-Api-Key`, `X-Timestamp` or `X-Signature`. |
+         *     | `missing_signature_headers` | 401 | App request without `X-Api-Key`, `X-Timestamp` or `X-Signature`. |
          *     | `invalid_timestamp` | 401 | `X-Timestamp` is not unix seconds. |
          *     | `timestamp_out_of_range` | 401 | `X-Timestamp` is more than 5 minutes from server time. |
-         *     | `unknown_api_key` | 401 | No tenant has this `X-Api-Key`. |
+         *     | `unknown_api_key` | 401 | No app key matches `X-Api-Key`. |
+         *     | `api_key_revoked` | 401 | The key was revoked. Use another key of the app. |
+         *     | `api_key_expired` | 401 | The key's `expires_at` has passed. Use another key of the app. |
          *     | `invalid_signature` | 401 | `X-Signature` does not match. |
          *     | `replayed_request` | 401 | This signature was already used. |
          *     | `invalid_callback_token` | 401 | Gateway callback token is missing or wrong. |
-         *     | `tenant_inactive` | 403 | The tenant is disabled. |
+         *     | `tenant_inactive` | 403 | The app is disabled. (The name dates from when apps were called tenants.) |
          *     | `forbidden` | 403 | The signed-in user's role lacks the operation's permission (`x-keipay-permission`). |
          *     | `password_change_required` | 403 | The user must change their password first (`POST /admin/me/password`). |
          *     | `invalid_csrf_token` | 403 | `X-CSRF-Token` is missing, does not match the `keipay_csrf` cookie, or does not match the session. |
          *     | `invalid_setup_token` | 403 | The server requires `SETUP_TOKEN` and `setup_token` is missing or wrong. |
          *     | `not_found` | 404 | The resource or route does not exist. |
-         *     | `conflict` | 409 | Duplicate (slug, email), or idempotent retry with different data. |
+         *     | `conflict` | 409 | Duplicate (slug within an environment, email), or an `order_id` repeated with a different amount or currency. |
+         *     | `idempotency_key_reused` | 409 | The `Idempotency-Key` was already used by this app for a different request. |
          *     | `setup_completed` | 409 | First-run setup already happened; sign in instead. |
          *     | `last_owner` | 409 | The change would leave no active owner. |
          *     | `cannot_modify_self` | 409 | Owners cannot disable themselves or reset their own password through the users API. |
@@ -590,7 +726,7 @@ export interface components {
          *     | `internal_error` | 500 | Unexpected server error. |
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "validation_failed" | "invalid_cursor" | "unauthorized" | "invalid_credentials" | "missing_token" | "invalid_token" | "missing_signature_headers" | "invalid_timestamp" | "timestamp_out_of_range" | "unknown_api_key" | "invalid_signature" | "replayed_request" | "invalid_callback_token" | "tenant_inactive" | "not_found" | "conflict" | "internal_error" | "session_required" | "session_expired" | "forbidden" | "password_change_required" | "invalid_csrf_token" | "invalid_setup_token" | "setup_completed" | "last_owner" | "cannot_modify_self" | "rate_limited";
+        ErrorCode: "invalid_request" | "validation_failed" | "invalid_cursor" | "unauthorized" | "invalid_credentials" | "missing_token" | "invalid_token" | "missing_signature_headers" | "invalid_timestamp" | "timestamp_out_of_range" | "unknown_api_key" | "invalid_signature" | "replayed_request" | "invalid_callback_token" | "tenant_inactive" | "not_found" | "conflict" | "internal_error" | "session_required" | "session_expired" | "forbidden" | "password_change_required" | "invalid_csrf_token" | "invalid_setup_token" | "setup_completed" | "last_owner" | "cannot_modify_self" | "rate_limited" | "api_key_revoked" | "api_key_expired" | "idempotency_key_reused";
         /**
          * @example {
          *       "error": {
@@ -664,7 +800,7 @@ export interface components {
             mobile_number?: string;
         };
         CreatePaymentRequest: {
-            /** @description Your order reference; unique per tenant. */
+            /** @description Your order reference; unique per app. */
             order_id: string;
             /**
              * Format: int64
@@ -687,10 +823,23 @@ export interface components {
              * @description Optional estimate you can show your user before funds settle.
              */
             expected_settlement_at?: string;
+            metadata?: components["schemas"]["Metadata"];
         };
         PaymentResponse: {
-            /** Format: int64 */
+            /** @example pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C */
+            id: string;
+            /**
+             * Format: int64
+             * @description Legacy integer id, kept for existing integrations. Prefer `id`.
+             */
             payment_id: number;
+            /**
+             * @description The reference KeiPay sent to the gateway (Xendit `external_id`):
+             *     `kp_` + `id` for payments created since apps replaced tenants,
+             *     `{slug}:{order_id}` for older ones.
+             * @example kp_pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C
+             */
+            reference: string;
             order_id: string;
             status: components["schemas"]["PaymentStatus"];
             /** Format: int64 */
@@ -699,6 +848,7 @@ export interface components {
             /** @description Hosted checkout URL to redirect the payer to. */
             invoice_url: string;
             items?: components["schemas"]["OrderItem"][];
+            metadata: components["schemas"]["Metadata"];
             /** Format: date-time */
             expires_at?: string;
             /** Format: date-time */
@@ -711,7 +861,7 @@ export interface components {
         /** @description The subset of the Xendit invoice callback KeiPay reads. Other fields are stored raw and ignored. */
         XenditInvoiceCallback: {
             id: string;
-            /** @description `{tenant_slug}:{order_id}`. */
+            /** @description The payment's reference, matched against stored references (`kp_pay_…`, or `{slug}:{order_id}` for older payments). It is never parsed. */
             external_id: string;
             /**
              * @example PAID
@@ -752,7 +902,7 @@ export interface components {
          * @description See "Roles and permissions" above. New permissions may be added.
          * @enum {string}
          */
-        Permission: "tenants:read" | "tenants:write" | "payments:read" | "deliveries:read" | "deliveries:replay" | "audit:read" | "users:manage";
+        Permission: "apps:read" | "apps:write" | "payments:read" | "deliveries:read" | "deliveries:replay" | "audit:read" | "users:manage";
         /**
          * Format: email
          * @description One address without a display name, for example `ops@example.com`.
@@ -858,60 +1008,198 @@ export interface components {
             /** @description Pass as `cursor` to get the next page; `null` on the last page. */
             next_cursor: string | null;
         };
-        Tenant: {
-            /** Format: int64 */
-            id: number;
-            name: string;
-            /** @description Lowercase, 3-32 chars of `a-z`, `0-9` and `-`; cannot change. */
+        /**
+         * @description `test` or `live`. Fixed when the app is created; the app's keys
+         *     carry it (`kp_test_…`, `kp_live_…`).
+         * @enum {string}
+         */
+        AppEnvironment: "test" | "live";
+        /**
+         * @description `disabled` apps get `403 tenant_inactive` on every `/v1` request.
+         * @enum {string}
+         */
+        AppStatus: "active" | "disabled";
+        /**
+         * @description 3-32 characters of `a-z`, `0-9` and `-`, starting and ending with a
+         *     letter or digit (surrounding spaces are trimmed and upper case is
+         *     lowered before checking). Unique within an environment; never
+         *     changes. Invalid: rule `slug`.
+         * @example acme-shop
+         */
+        AppSlug: string;
+        /**
+         * @description Display name, trimmed. Blank is rejected (`required`), more than 100 characters `max`, control characters `name`.
+         * @example Acme Shop
+         */
+        AppName: string;
+        /**
+         * @description Empty (none), or an absolute `http` or `https` URL with a host, at
+         *     most 2048 bytes, without whitespace or control characters.
+         *     Invalid: rule `url`.
+         * @example https://shop.example.com/hooks/keipay
+         */
+        HttpUrl: string;
+        /**
+         * @description Your own key-value data, stored and returned with the same keys
+         *     and values (key order is not kept; numbers are never rounded
+         *     through floating point). At most 50 keys; each key 1-40
+         *     characters (Unicode code points) without control characters; each
+         *     value a string of at most 500 characters, a number, a boolean or
+         *     `null` (no nested objects or arrays); no string may contain U+0000;
+         *     at most 8192 bytes as compact JSON. Omitted or `null` means `{}`.
+         *     Violations return `400 invalid_request` with `metadata` and rule
+         *     `object` (not an object), `max_keys`, `key` or `max_bytes`, or with
+         *     `metadata.<key>` and rule `type` (nested value), `max` (string too
+         *     long) or `invalid_character` (U+0000).
+         * @example {
+         *       "channel": "mobile",
+         *       "campaign": "promo-11.11",
+         *       "customer_tier": 2
+         *     }
+         */
+        Metadata: {
+            [key: string]: string | number | boolean | null;
+        };
+        App: {
+            /** @example app_01JBKQ7Z8M4X2Y6V3N9T5R1W0C */
+            id: string;
+            /** @description See `AppSlug`. Never changes. */
             slug: string;
-            /** @description Public key id sent as `X-Api-Key`. Not a secret. */
-            api_key: string;
+            name: string;
+            environment: components["schemas"]["AppEnvironment"];
+            status: components["schemas"]["AppStatus"];
+            metadata: components["schemas"]["Metadata"];
+            /** @description Where payment events are sent; empty means none. */
             webhook_url: string;
             redirect_success_url: string;
             redirect_failure_url: string;
-            active: boolean;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             updated_at: string;
         };
-        TenantCredentials: {
+        /** @description The app a row belongs to. */
+        AppSummary: {
+            id: string;
+            slug: string;
+            name: string;
+            environment: components["schemas"]["AppEnvironment"];
+        };
+        CreateAppRequest: {
+            name: components["schemas"]["AppName"];
+            slug: components["schemas"]["AppSlug"];
+            environment: components["schemas"]["AppEnvironment"];
+            webhook_url?: components["schemas"]["HttpUrl"];
+            redirect_success_url?: components["schemas"]["HttpUrl"];
+            redirect_failure_url?: components["schemas"]["HttpUrl"];
+            metadata?: components["schemas"]["Metadata"];
+        };
+        /**
+         * @description Send only the fields to change. `slug` or `environment` in the body
+         *     returns `400 invalid_request` with rule `immutable`.
+         */
+        UpdateAppRequest: {
+            name?: components["schemas"]["AppName"];
+            webhook_url?: components["schemas"]["HttpUrl"];
+            redirect_success_url?: components["schemas"]["HttpUrl"];
+            redirect_failure_url?: components["schemas"]["HttpUrl"];
+            metadata?: components["schemas"]["Metadata"];
+        };
+        AppResponse: {
+            app: components["schemas"]["App"];
+        };
+        AppListResponse: {
+            data: components["schemas"]["App"][];
+            /** @description Pass as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        AppCreatedResponse: {
+            app: components["schemas"]["App"];
+            key: components["schemas"]["ApiKey"];
+            /**
+             * @description The full API key for `X-Api-Key`. Shown once; KeiPay keeps only its hash.
+             * @example kp_test_3f9a0c1d2e4b5a69788796a5b4c3d2e1
+             */
             api_key: string;
-            /** @description HMAC signing secret. Shown once; store it now. */
+            /**
+             * Format: password
+             * @description The HMAC secret for `X-Signature`. Shown once; store it now.
+             */
+            api_secret: string;
+            /**
+             * Format: password
+             * @description The secret that signs outbound webhooks (`X-Kei-Signature`). Shown once; store it now.
+             */
+            webhook_secret: string;
+        };
+        /**
+         * @description Derived. `revoked` once `revoked_at` is set; else `expired` once `expires_at` has passed; else `active`.
+         * @enum {string}
+         */
+        ApiKeyStatus: "active" | "expired" | "revoked";
+        /**
+         * @description What the key is for, trimmed. Blank is rejected (`required`), more than 60 characters `max`, control characters `name`.
+         * @example Production server
+         */
+        ApiKeyLabel: string;
+        ApiKey: {
+            /** @example key_01JBKQ7Z8M4X2Y6V3N9T5R1W0C */
+            id: string;
+            app_id: string;
+            label: string;
+            environment: components["schemas"]["AppEnvironment"];
+            /**
+             * @description `kp_` for keys issued before apps replaced tenants. Display the key as `{prefix}…{last4}`.
+             * @enum {string}
+             */
+            prefix: "kp_test_" | "kp_live_" | "kp_";
+            last4: string;
+            status: components["schemas"]["ApiKeyStatus"];
+            /**
+             * Format: date-time
+             * @description Last successfully authenticated request; updated at most once a minute.
+             */
+            last_used_at: string | null;
+            /** Format: date-time */
+            expires_at: string | null;
+            /** Format: date-time */
+            revoked_at: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        CreateApiKeyRequest: {
+            label: components["schemas"]["ApiKeyLabel"];
+            /**
+             * Format: date-time
+             * @description Optional; must be in the future (rule `future`). Omitted or `null` means the key does not expire.
+             */
+            expires_at?: string | null;
+        };
+        ApiKeyResponse: {
+            key: components["schemas"]["ApiKey"];
+        };
+        ApiKeyListResponse: {
+            data: components["schemas"]["ApiKey"][];
+            /** @description Pass as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        ApiKeyCreatedResponse: {
+            key: components["schemas"]["ApiKey"];
+            /** @description The full API key for `X-Api-Key`. Shown once; KeiPay keeps only its hash. */
+            api_key: string;
+            /**
+             * Format: password
+             * @description The HMAC secret for `X-Signature`. Shown once; store it now.
+             */
             api_secret: string;
         };
-        CreateTenantRequest: {
-            name: string;
-            slug: string;
-            webhook_url?: string;
-            redirect_success_url?: string;
-            redirect_failure_url?: string;
-        };
-        UpdateTenantRequest: {
-            name: string;
-            webhook_url?: string;
-            redirect_success_url?: string;
-            redirect_failure_url?: string;
-            /** @default false */
-            active: boolean;
-        };
-        TenantResponse: {
-            tenant: components["schemas"]["Tenant"];
-        };
-        TenantWithCredentialsResponse: {
-            tenant: components["schemas"]["Tenant"];
-            credentials: components["schemas"]["TenantCredentials"];
-        };
-        TenantListResponse: {
-            tenants: components["schemas"]["Tenant"][];
-        };
         Payment: {
-            /** Format: int64 */
-            id: number;
-            /** Format: int64 */
-            tenant_id: number;
+            /** @example pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C */
+            id: string;
+            /** @description The gateway reference (Xendit `external_id`); `kp_pay_…`, or `{slug}:{order_id}` for older payments. */
+            reference: string;
+            app: components["schemas"]["AppSummary"];
             order_id: string;
-            external_id: string;
             xendit_invoice_id: string;
             /** Format: int64 */
             amount: number;
@@ -920,35 +1208,32 @@ export interface components {
             description: string;
             invoice_url: string;
             payer_email: string;
-            items?: components["schemas"]["OrderItem"][];
+            /** @description Empty when the order had no items. */
+            items: components["schemas"]["OrderItem"][];
+            metadata: components["schemas"]["Metadata"];
             /** Format: date-time */
-            expires_at?: string;
+            expires_at: string | null;
             /** Format: date-time */
-            paid_at?: string;
+            paid_at: string | null;
             /** Format: date-time */
-            settled_at?: string;
+            settled_at: string | null;
             /** Format: date-time */
-            expected_settlement_at?: string;
+            expected_settlement_at: string | null;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             updated_at: string;
         };
         PaymentListResponse: {
-            payments: components["schemas"]["Payment"][];
-            /**
-             * Format: int64
-             * @description Number of payments matching the filter, ignoring limit and offset.
-             */
-            total: number;
+            data: components["schemas"]["Payment"][];
+            /** @description Pass as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
         };
         LedgerEntry: {
             /** Format: int64 */
             id: number;
-            /** Format: int64 */
-            tenant_id: number;
-            /** Format: int64 */
-            payment_id: number;
+            app: components["schemas"]["AppSummary"];
+            payment_id: string;
             /** Format: int64 */
             amount: number;
             /** Format: int64 */
@@ -963,8 +1248,7 @@ export interface components {
             created_at: string;
         };
         LedgerSummary: {
-            /** Format: int64 */
-            tenant_id: number;
+            app: components["schemas"]["AppSummary"];
             /** Format: int64 */
             count: number;
             /** Format: int64 */
@@ -983,11 +1267,10 @@ export interface components {
         WebhookDelivery: {
             /** Format: int64 */
             id: number;
-            /** Format: int64 */
-            payment_id: number;
-            /** Format: int64 */
-            tenant_id: number;
+            payment_id: string;
+            app: components["schemas"]["AppSummary"];
             event_type: components["schemas"]["PaymentEventType"];
+            /** @description The body as sent. Deliveries created before apps replaced tenants have no `payment_public_id` or `metadata`. */
             payload: components["schemas"]["PaymentWebhookEvent"];
             status: components["schemas"]["WebhookDeliveryStatus"];
             attempts: number;
@@ -1006,10 +1289,18 @@ export interface components {
         };
         PaymentWebhookEvent: {
             event: components["schemas"]["PaymentEventType"];
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description Legacy integer id. Prefer `payment_public_id`.
+             */
             payment_id: number;
+            /** @description The payment's `pay_…` id. Sent on every event since apps replaced tenants. */
+            payment_public_id?: string;
             order_id: string;
+            /** @description The gateway reference (same as `reference` on the payment). */
             external_id: string;
+            /** @description The payment's `metadata`, `{}` when none. Sent on every event since apps replaced tenants. */
+            metadata?: components["schemas"]["Metadata"];
             status: components["schemas"]["PaymentStatus"];
             /** Format: int64 */
             amount: number;
@@ -1039,13 +1330,14 @@ export interface components {
         };
         AuditTarget: {
             /**
-             * @description Entries written before users existed use `admin_user` for the console admin.
-             * @example tenant
+             * @description Entries written before users existed use `admin_user` for the console admin; entries written before apps existed use `tenant` with the integer tenant id.
+             * @example app
+             * @example api_key
              * @example user
              * @example webhook_delivery
              */
             type: string;
-            /** @description The target's identifier as a string (`usr_…` for users). Empty for a failed sign-in with an unknown email. */
+            /** @description The target's identifier as a string (`app_…`, `key_…`, `usr_…`). Empty for a failed sign-in with an unknown email. */
             id: string;
         };
         AuditLog: {
@@ -1055,14 +1347,16 @@ export interface components {
             occurred_at: string;
             actor: components["schemas"]["AuditActor"];
             /**
-             * @description `{target_type}.{verb}`. Current values: `tenant.create`,
-             *     `tenant.update`, `tenant.rotate_credentials`,
-             *     `webhook_delivery.replay`, `user.setup`, `user.create`,
-             *     `user.update`, `user.disable`, `user.enable`,
-             *     `user.reset_password`, `user.change_password`, `user.login`,
-             *     `user.login_failed`, `user.logout`. Older entries may carry
-             *     `admin_user.change_password`. New actions may be added.
-             * @example tenant.update
+             * @description `{target_type}.{verb}`. Current values: `app.create`,
+             *     `app.update`, `app.disable`, `app.enable`, `api_key.create`,
+             *     `api_key.rotate`, `api_key.revoke`, `webhook_delivery.replay`,
+             *     `user.setup`, `user.create`, `user.update`, `user.disable`,
+             *     `user.enable`, `user.reset_password`, `user.change_password`,
+             *     `user.login`, `user.login_failed`, `user.logout`. Older entries
+             *     may carry `tenant.create`, `tenant.update`,
+             *     `tenant.rotate_credentials` or `admin_user.change_password`. New
+             *     actions may be added.
+             * @example app.update
              */
             action: string;
             target: components["schemas"]["AuditTarget"];
@@ -1104,7 +1398,8 @@ export interface components {
         /**
          * @description Authentication failed. The `code` says why: `session_required` or
          *     `session_expired` on admin routes, `invalid_credentials` on sign-in
-         *     and password change, the tenant signature codes on `/v1`, and
+         *     and password change, the app key and signature codes on `/v1`
+         *     (including `api_key_revoked` and `api_key_expired`), and
          *     `invalid_callback_token` on gateway callbacks.
          */
         Unauthorized: {
@@ -1118,7 +1413,8 @@ export interface components {
         /**
          * @description `forbidden` (the role lacks the operation's `x-keipay-permission`),
          *     `password_change_required`, `invalid_csrf_token`,
-         *     `invalid_setup_token`, or on `/v1` `tenant_inactive`.
+         *     `invalid_setup_token`, or on `/v1` `tenant_inactive` (the app is
+         *     disabled).
          */
         Forbidden: {
             headers: {
@@ -1138,9 +1434,10 @@ export interface components {
             };
         };
         /**
-         * @description `conflict` (duplicate slug or email, or an `order_id` reused with a
-         *     different amount or currency), `setup_completed`, `last_owner`, or
-         *     `cannot_modify_self`.
+         * @description `conflict` (duplicate slug within an environment or duplicate
+         *     email, or an `order_id` reused with a different amount or
+         *     currency), `idempotency_key_reused`, `setup_completed`,
+         *     `last_owner`, or `cannot_modify_self`.
          */
         Conflict: {
             headers: {
@@ -1176,11 +1473,33 @@ export interface components {
          *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
          */
         UserIdPath: string;
-        /** @description Payment id. A non-integer returns `400 invalid_request`; an integer below 1 matches nothing and returns `404 not_found`. */
-        PaymentIdPath: number;
-        /** @description Tenant id. A non-integer returns `400 invalid_request`; an integer below 1 matches nothing and returns `404 not_found`. */
-        TenantIdPath: number;
-        TenantIdFilter: number;
+        /**
+         * @description The payment's `pay_…` id (lower case accepted) or its legacy integer
+         *     `payment_id`. Anything else returns `400 invalid_request` with
+         *     `details.fields` `[{"field": "id", "rule": "public_id"}]`. A payment
+         *     of another app, or an integer below 1, returns `404 not_found`.
+         */
+        PaymentIdPath: string;
+        /**
+         * @description App id (`app_…`; lower case is accepted). Any other format returns
+         *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+         */
+        AppIdPath: string;
+        /**
+         * @description API key id (`key_…`; lower case is accepted). Any other format
+         *     returns `400 invalid_request` with `details.fields`
+         *     `[{"field": "key_id", "rule": "public_id"}]`.
+         */
+        ApiKeyIdPath: string;
+        /** @description Only rows of this app (`app_…`). On these legacy offset lists an unparseable value is ignored; a well-formed id that matches no app still filters, so no rows are returned. */
+        AppIdFilter: string;
+        /**
+         * @description Optional retry key, unique per app (see Idempotency). 1-255
+         *     printable ASCII characters without spaces; an empty header counts as
+         *     absent. Invalid: `400 invalid_request` with field `Idempotency-Key`
+         *     and rule `max` (longer than 255) or `format`.
+         */
+        IdempotencyKey: string;
         /** @description Inclusive lower bound on `created_at` (RFC 3339). */
         FromFilter: string;
         /** @description Inclusive upper bound on `created_at` (RFC 3339). */
@@ -1202,6 +1521,8 @@ export interface components {
         SessionCookies: string;
         /** @description Seconds until the rate limit window ends. */
         RetryAfter: number;
+        /** @description `true` when the response is an existing payment returned for a repeated `order_id` or `Idempotency-Key`; absent on a newly created payment. */
+        IdempotentReplayed: "true";
     };
     pathItems: never;
 }
@@ -1230,7 +1551,15 @@ export interface operations {
     createPayment: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /**
+                 * @description Optional retry key, unique per app (see Idempotency). 1-255
+                 *     printable ASCII characters without spaces; an empty header counts as
+                 *     absent. Invalid: `400 invalid_request` with field `Idempotency-Key`
+                 *     and rule `max` (longer than 255) or `format`.
+                 */
+                "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+            };
             path?: never;
             cookie?: never;
         };
@@ -1240,9 +1569,10 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Payment created, or the existing payment for this `order_id`. */
+            /** @description Payment created, or the existing payment for this `order_id` or `Idempotency-Key`. */
             201: {
                 headers: {
+                    "Idempotent-Replayed": components["headers"]["IdempotentReplayed"];
                     [name: string]: unknown;
                 };
                 content: {
@@ -1261,7 +1591,12 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description Payment id. A non-integer returns `400 invalid_request`; an integer below 1 matches nothing and returns `404 not_found`. */
+                /**
+                 * @description The payment's `pay_…` id (lower case accepted) or its legacy integer
+                 *     `payment_id`. Anything else returns `400 invalid_request` with
+                 *     `details.fields` `[{"field": "id", "rule": "public_id"}]`. A payment
+                 *     of another app, or an integer below 1, returns `404 not_found`.
+                 */
                 id: components["parameters"]["PaymentIdPath"];
             };
             cookie?: never;
@@ -1684,30 +2019,38 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
-    listTenants: {
+    listApps: {
         parameters: {
-            query?: never;
+            query?: {
+                environment?: components["schemas"]["AppEnvironment"];
+                status?: components["schemas"]["AppStatus"];
+                /** @description Page size. Outside 1-200 returns `400 invalid_request`. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Opaque `next_cursor` from the previous page. A malformed cursor returns `400 invalid_cursor`. */
+                cursor?: components["parameters"]["Cursor"];
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description All tenants, oldest first. */
+            /** @description A page of apps. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TenantListResponse"];
+                    "application/json": components["schemas"]["AppListResponse"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
         };
     };
-    createTenant: {
+    createApp: {
         parameters: {
             query?: never;
             header?: never;
@@ -1716,17 +2059,17 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CreateTenantRequest"];
+                "application/json": components["schemas"]["CreateAppRequest"];
             };
         };
         responses: {
-            /** @description Tenant created, with one-time credentials. */
+            /** @description The app, its first key and the one-time secrets. */
             201: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TenantWithCredentialsResponse"];
+                    "application/json": components["schemas"]["AppCreatedResponse"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -1736,29 +2079,28 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
-    updateTenant: {
+    getApp: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Tenant id. A non-integer returns `400 invalid_request`; an integer below 1 matches nothing and returns `404 not_found`. */
-                id: components["parameters"]["TenantIdPath"];
+                /**
+                 * @description App id (`app_…`; lower case is accepted). Any other format returns
+                 *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["AppIdPath"];
             };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdateTenantRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description The updated tenant. */
+            /** @description The app. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TenantResponse"];
+                    "application/json": components["schemas"]["AppResponse"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -1768,25 +2110,239 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
-    rotateTenantCredentials: {
+    updateApp: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                /** @description Tenant id. A non-integer returns `400 invalid_request`; an integer below 1 matches nothing and returns `404 not_found`. */
-                id: components["parameters"]["TenantIdPath"];
+                /**
+                 * @description App id (`app_…`; lower case is accepted). Any other format returns
+                 *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["AppIdPath"];
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAppRequest"];
+            };
+        };
         responses: {
-            /** @description New credentials. */
+            /** @description The app. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TenantWithCredentialsResponse"];
+                    "application/json": components["schemas"]["AppResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    disableApp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description App id (`app_…`; lower case is accepted). Any other format returns
+                 *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["AppIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The app. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    enableApp: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description App id (`app_…`; lower case is accepted). Any other format returns
+                 *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["AppIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The app. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AppResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listAppApiKeys: {
+        parameters: {
+            query?: {
+                /** @description Page size. Outside 1-200 returns `400 invalid_request`. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Opaque `next_cursor` from the previous page. A malformed cursor returns `400 invalid_cursor`. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description App id (`app_…`; lower case is accepted). Any other format returns
+                 *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["AppIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of keys. Secrets and full keys are never returned here. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKeyListResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createAppApiKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description App id (`app_…`; lower case is accepted). Any other format returns
+                 *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["AppIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateApiKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description The key and its one-time secret. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKeyCreatedResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    rotateAppApiKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description App id (`app_…`; lower case is accepted). Any other format returns
+                 *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["AppIdPath"];
+                /**
+                 * @description API key id (`key_…`; lower case is accepted). Any other format
+                 *     returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "key_id", "rule": "public_id"}]`.
+                 */
+                key_id: components["parameters"]["ApiKeyIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The new key and its one-time secret. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKeyCreatedResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    revokeAppApiKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description App id (`app_…`; lower case is accepted). Any other format returns
+                 *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["AppIdPath"];
+                /**
+                 * @description API key id (`key_…`; lower case is accepted). Any other format
+                 *     returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "key_id", "rule": "public_id"}]`.
+                 */
+                key_id: components["parameters"]["ApiKeyIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The revoked key. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiKeyResponse"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -1799,15 +2355,17 @@ export interface operations {
     listAdminPayments: {
         parameters: {
             query?: {
-                tenant_id?: components["parameters"]["TenantIdFilter"];
+                /** @description Only payments of this app. */
+                app_id?: string;
                 status?: components["schemas"]["PaymentStatus"];
                 /** @description Inclusive lower bound on `created_at` (RFC 3339). */
                 from?: components["parameters"]["FromFilter"];
                 /** @description Inclusive upper bound on `created_at` (RFC 3339). */
                 to?: components["parameters"]["ToFilter"];
-                /** @description 1-200, default 50. */
-                limit?: number;
-                offset?: components["parameters"]["Offset"];
+                /** @description Page size. Outside 1-200 returns `400 invalid_request`. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Opaque `next_cursor` from the previous page. A malformed cursor returns `400 invalid_cursor`. */
+                cursor?: components["parameters"]["Cursor"];
             };
             header?: never;
             path?: never;
@@ -1815,7 +2373,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description A page of payments and the total match count. */
+            /** @description A page of payments. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1824,6 +2382,7 @@ export interface operations {
                     "application/json": components["schemas"]["PaymentListResponse"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
@@ -1832,7 +2391,8 @@ export interface operations {
     listLedger: {
         parameters: {
             query?: {
-                tenant_id?: components["parameters"]["TenantIdFilter"];
+                /** @description Only rows of this app (`app_…`). On these legacy offset lists an unparseable value is ignored; a well-formed id that matches no app still filters, so no rows are returned. */
+                app_id?: components["parameters"]["AppIdFilter"];
                 /** @description Inclusive lower bound on `created_at` (RFC 3339). */
                 from?: components["parameters"]["FromFilter"];
                 /** @description Inclusive upper bound on `created_at` (RFC 3339). */
@@ -1847,7 +2407,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Ledger entries and per-tenant totals for the same filter. */
+            /** @description Ledger entries and per-app totals for the same filter. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -1864,7 +2424,8 @@ export interface operations {
     listWebhookDeliveries: {
         parameters: {
             query?: {
-                tenant_id?: components["parameters"]["TenantIdFilter"];
+                /** @description Only rows of this app (`app_…`). On these legacy offset lists an unparseable value is ignored; a well-formed id that matches no app still filters, so no rows are returned. */
+                app_id?: components["parameters"]["AppIdFilter"];
                 status?: components["schemas"]["WebhookDeliveryStatus"];
                 /** @description 1-200, default 50. */
                 limit?: number;

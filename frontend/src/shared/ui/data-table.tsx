@@ -1,5 +1,5 @@
 import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, Loader2Icon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { strings } from "@/shared/lib/strings";
 import { useIsMobile } from "@/shared/lib/use-media-query";
@@ -39,6 +39,13 @@ export interface CursorPagination {
   onPageChange: (cursor: string | null) => void;
 }
 
+/** "Load more" below the rows, for lists that append the next cursor page. */
+export interface LoadMorePagination {
+  hasMore: boolean;
+  loading: boolean;
+  onLoadMore: () => void;
+}
+
 export interface DataTableProps<T> {
   columns: DataColumn<T>[];
   data: T[] | undefined;
@@ -56,12 +63,18 @@ export interface DataTableProps<T> {
   hasActiveFilters?: boolean;
   onClearFilters?: () => void;
   pagination?: CursorPagination;
+  loadMore?: LoadMorePagination;
   /** Changing this value returns cursor pagination to the first page. */
   resetKey?: string;
   onRowClick?: (row: T) => void;
   footer?: ReactNode;
   skeletonRows?: number;
 }
+
+// One stable empty array: TanStack Table resets its page index whenever `data`
+// changes identity, and a fresh `[]` on every render while loading turned that
+// into an endless render loop.
+const NO_ROWS: never[] = [];
 
 export function DataTable<T>({
   columns,
@@ -77,6 +90,7 @@ export function DataTable<T>({
   hasActiveFilters,
   onClearFilters,
   pagination,
+  loadMore,
   resetKey,
   onRowClick,
   footer,
@@ -110,7 +124,9 @@ export function DataTable<T>({
   );
 
   const table = useReactTable({
-    data: data ?? [],
+    data: data ?? NO_ROWS,
+    // Paging is the server's (cursor or Load more), never the table's.
+    manualPagination: true,
     columns: tableColumns,
     getCoreRowModel: getCoreRowModel(),
     getRowId: (row) => getRowId(row),
@@ -208,6 +224,7 @@ export function DataTable<T>({
 
   const hasPrevious = page > 1;
   const hasNext = Boolean(pagination?.nextCursor);
+  const showLoadMore = Boolean(loadMore?.hasMore) && !isLoading && !showError && !showEmpty;
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-3">
@@ -248,6 +265,15 @@ export function DataTable<T>({
       )}
 
       {body}
+
+      {showLoadMore && loadMore && (
+        <div className="flex justify-center">
+          <Button variant="outline" onClick={loadMore.onLoadMore} disabled={loadMore.loading}>
+            {loadMore.loading && <Loader2Icon className="animate-spin" aria-hidden="true" />}
+            {loadMore.loading ? strings.common.loadingMore : strings.common.loadMore}
+          </Button>
+        </div>
+      )}
 
       {(footer || (pagination && !showError && (hasPrevious || hasNext))) && (
         <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-muted-foreground">

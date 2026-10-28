@@ -2,8 +2,7 @@ import { ScaleIcon } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { AppFilterSelect } from "@/features/apps/components/app-filter-select";
-import { AppName } from "@/features/apps/components/app-name";
-import { useTenantNames } from "@/features/apps/api/tenants";
+import { AppLabel } from "@/features/apps/components/app-label";
 import { strings } from "@/shared/lib/strings";
 import { Button } from "@/shared/ui/button";
 import { DataTable, type DataColumn } from "@/shared/ui/data-table";
@@ -16,9 +15,8 @@ import { useLedger, type LedgerEntry } from "../api/ledger";
 import { LedgerSummary } from "../components/ledger-summary";
 
 export function ReconciliationPage() {
-  const [tenantId, setTenantId] = useState<number | null>(null);
-  const ledger = useLedger(tenantId);
-  const names = useTenantNames();
+  const [appId, setAppId] = useState<string | null>(null);
+  const ledger = useLedger(appId);
 
   const columns: DataColumn<LedgerEntry>[] = [
     {
@@ -30,9 +28,10 @@ export function ReconciliationPage() {
     {
       id: "payment",
       header: strings.reconciliation.payment,
-      cell: (e) => <IdText value={e.payment_id} prefix="#" label={strings.reconciliation.payment} />,
+      className: "max-w-60",
+      cell: (e) => <IdText value={e.payment_id} label={strings.reconciliation.payment} />,
     },
-    { id: "app", header: strings.common.app, cell: (e) => <AppName id={e.tenant_id} names={names} /> },
+    { id: "app", header: strings.common.app, className: "max-w-56", cell: (e) => <AppLabel app={e.app} /> },
     { id: "type", header: strings.reconciliation.type, cell: (e) => <span className="font-mono text-xs">{e.type}</span> },
     { id: "gross", header: strings.reconciliation.gross, align: "right", cell: (e) => <MoneyText amount={e.amount} /> },
     { id: "fee", header: strings.reconciliation.fee, align: "right", cell: (e) => <MoneyText amount={e.xendit_fee} /> },
@@ -49,14 +48,14 @@ export function ReconciliationPage() {
     <>
       <PageHeader title={strings.reconciliation.title} description={strings.reconciliation.subtitle} />
       <div className="flex flex-wrap items-center gap-2">
-        <AppFilterSelect value={tenantId} onChange={setTenantId} />
+        <AppFilterSelect value={appId} onChange={setAppId} />
       </div>
       {!ledger.error && (ledger.isPending || (ledger.data?.summary.length ?? 0) > 0) && (
         <section className="grid gap-3" aria-labelledby="ledger-summary-heading">
           <h2 id="ledger-summary-heading" className="text-base font-semibold">
             {strings.reconciliation.summaryTitle}
           </h2>
-          <LedgerSummary summary={ledger.data?.summary} names={names} isLoading={ledger.isPending} />
+          <LedgerSummary summary={ledger.data?.summary} isLoading={ledger.isPending} />
         </section>
       )}
       <section className="grid gap-3" aria-labelledby="ledger-entries-heading">
@@ -71,8 +70,8 @@ export function ReconciliationPage() {
           isLoading={ledger.isPending}
           error={ledger.error}
           onRetry={() => void ledger.refetch()}
-          hasActiveFilters={tenantId !== null}
-          onClearFilters={() => setTenantId(null)}
+          hasActiveFilters={appId !== null}
+          onClearFilters={() => setAppId(null)}
           emptyState={
             <EmptyState
               icon={ScaleIcon}

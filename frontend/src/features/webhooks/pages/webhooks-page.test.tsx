@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
-import { delivery, tenant } from "@/test/fixtures";
+import { app, APP_ID, delivery, page, PAY_ID } from "@/test/fixtures";
 import { errorBody, json, mockApi } from "@/test/http";
 import { setViewport } from "@/test/media";
 import { renderApp } from "@/test/render";
@@ -12,7 +12,7 @@ beforeEach(() => {
 describe("Webhooks page", () => {
   it("lists outbound deliveries and replays one with feedback", async () => {
     const api = mockApi({
-      "GET /admin/tenants": { tenants: [tenant()] },
+      "GET /admin/apps": page([app()]),
       "GET /admin/webhook-deliveries": { deliveries: [delivery()] },
       "POST /admin/webhook-deliveries/7/replay": () => json(202, { requeued: true }),
     });
@@ -25,9 +25,34 @@ describe("Webhooks page", () => {
     expect(api.to("POST", "/admin/webhook-deliveries/7/replay")).toHaveLength(1);
   });
 
+  it("shows the app from the row's summary and the pay_ payment id (T-47)", async () => {
+    mockApi({ "GET /admin/apps": page([]), "GET /admin/webhook-deliveries": { deliveries: [delivery()] } });
+    renderApp("/webhooks");
+    await screen.findByText("connection refused");
+    const table = screen.getByRole("table", { name: "Outbound" });
+    expect(within(table).getByRole("link", { name: "Demo App" })).toHaveAttribute("href", `/apps/${APP_ID}`);
+    expect(within(table).getByText("Test")).toBeInTheDocument();
+    expect(within(table).getByText(PAY_ID)).toBeInTheDocument();
+  });
+
+  it("filters by app public id (T-47)", async () => {
+    const api = mockApi({
+      "GET /admin/apps": page([app()]),
+      "GET /admin/webhook-deliveries": { deliveries: [delivery()] },
+    });
+    const { user } = renderApp("/webhooks");
+    await screen.findByText("connection refused");
+    await user.click(screen.getByRole("combobox", { name: "App" }));
+    await user.click(await screen.findByRole("option", { name: "Demo App (Test)" }));
+    await waitFor(() => {
+      const requests = api.to("GET", "/admin/webhook-deliveries");
+      expect(new URL(requests[requests.length - 1]!.url).searchParams.get("app_id")).toBe(APP_ID);
+    });
+  });
+
   it("shows a toast when replay fails", async () => {
     mockApi({
-      "GET /admin/tenants": { tenants: [] },
+      "GET /admin/apps": page([]),
       "GET /admin/webhook-deliveries": { deliveries: [delivery()] },
       "POST /admin/webhook-deliveries/7/replay": () => json(404, errorBody("not_found", "not found")),
     });
@@ -38,7 +63,7 @@ describe("Webhooks page", () => {
 
   it("filters by delivery status", async () => {
     const api = mockApi({
-      "GET /admin/tenants": { tenants: [] },
+      "GET /admin/apps": page([]),
       "GET /admin/webhook-deliveries": { deliveries: [] },
     });
     const { user } = renderApp("/webhooks");
@@ -52,7 +77,7 @@ describe("Webhooks page", () => {
   });
 
   it("shows inbound as coming soon", async () => {
-    mockApi({ "GET /admin/tenants": { tenants: [] }, "GET /admin/webhook-deliveries": { deliveries: [] } });
+    mockApi({ "GET /admin/apps": page([]), "GET /admin/webhook-deliveries": { deliveries: [] } });
     const { user } = renderApp("/webhooks");
     await user.click(await screen.findByRole("tab", { name: "Inbound" }));
     const panel = screen.getByRole("tabpanel");

@@ -59,6 +59,28 @@ export const routes: RouteObject[] = [
         lazy: async () => ({ Component: (await import("@/features/apps/pages/apps-page")).AppsPage }),
       },
       {
+        path: "apps/:id",
+        lazy: async () => ({ Component: (await import("@/features/apps/pages/app-detail-page")).AppDetailPage }),
+        children: [
+          {
+            index: true,
+            lazy: async () => ({ Component: (await import("@/features/apps/pages/app-overview-tab")).AppOverviewTab }),
+          },
+          {
+            path: "keys",
+            lazy: async () => ({ Component: (await import("@/features/apps/pages/app-keys-tab")).AppKeysTab }),
+          },
+          {
+            path: "webhooks",
+            lazy: async () => ({ Component: (await import("@/features/apps/pages/app-coming-tabs")).AppWebhooksTab }),
+          },
+          {
+            path: "routing",
+            lazy: async () => ({ Component: (await import("@/features/apps/pages/app-coming-tabs")).AppRoutingTab }),
+          },
+        ],
+      },
+      {
         path: "connections",
         lazy: async () => ({
           Component: (await import("@/features/connections/pages/connections-page")).ConnectionsPage,

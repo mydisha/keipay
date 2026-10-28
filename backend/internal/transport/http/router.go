@@ -22,6 +22,9 @@ type Deps struct {
 	Payment *handler.PaymentHandler
 	Webhook *handler.WebhookHandler
 	Admin   *handler.AdminHandler
+
+	// FrontendDir is the admin console build (frontend/dist). Empty disables it.
+	FrontendDir string
 }
 
 // NewRouter builds the Gin engine with all routes mounted.
@@ -69,6 +72,11 @@ func NewRouter(d Deps) *gin.Engine {
 			auth.GET("/webhook-deliveries", d.Admin.ListDeliveries)
 			auth.POST("/webhook-deliveries/:id/replay", d.Admin.ReplayDelivery)
 		}
+	}
+
+	// Admin console: everything that is not an API route.
+	if d.FrontendDir != "" {
+		r.NoRoute(handler.SPA(d.FrontendDir, "/v1", "/webhooks", "/admin", "/healthz"))
 	}
 
 	return r

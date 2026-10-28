@@ -128,6 +128,16 @@ func main() {
 	authSvc := service.NewAuthService(adminRepo, cfg.JWTSecret)
 	log.Debug("services initialized")
 
+	frontendDir := resolveFrontendDir(cfg.FrontendDir)
+	switch {
+	case frontendDir != "":
+		log.Info("serving admin console", zap.String("dir", frontendDir))
+	case cfg.FrontendDir != "":
+		log.Warn("FRONTEND_DIR has no index.html; admin console disabled", zap.String("dir", cfg.FrontendDir))
+	default:
+		log.Info("no frontend build found; admin console disabled (run the Vite dev server or build frontend/)")
+	}
+
 	// Initialize handlers and router.
 	log.Debug("initializing HTTP router")
 	deps := transport.Deps{
@@ -140,6 +150,7 @@ func main() {
 		Payment:         handler.NewPaymentHandler(paymentSvc),
 		Webhook:         handler.NewWebhookHandler(webhookSvc, log),
 		Admin:           handler.NewAdminHandler(authSvc, tenantSvc, paymentSvc, ledgerSvc, webhookRepo, enqueuer),
+		FrontendDir:     frontendDir,
 	}
 	router := transport.NewRouter(deps)
 

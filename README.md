@@ -31,9 +31,13 @@ that use.
 
 ## Features
 
-- Tenant API `POST /v1/payments` with HMAC-SHA256 signing, timestamp window
+- App API `POST /v1/payments` with HMAC-SHA256 signing, timestamp window
   and Redis nonce replay protection.
-- Idempotent payment creation per `order_id`.
+- Apps with a `test` or `live` environment and any number of API keys
+  (`kp_test_…` / `kp_live_…`), each with its own secret, optional expiry,
+  last-used time, overlapping rotation and revocation.
+- Idempotent payment creation per `order_id` and optional `Idempotency-Key`,
+  with your own `metadata` echoed back in every webhook.
 - Webhook ingestion that is idempotent (Redis fast path + durable DB guard in
   one transaction), applies status in order, and rejects callbacks whose
   amount or currency does not match the payment.
@@ -44,7 +48,8 @@ that use.
   `owner`, `admin` and `viewer` roles, cookie sessions stored in Redis, CSRF
   protection, rate-limited sign-in, and an audit log of every admin change
   and sign-in.
-- Tenant secrets encrypted at rest with AES-256-GCM.
+- API and webhook secrets encrypted at rest with AES-256-GCM; API keys
+  stored only as SHA-256 hashes.
 
 ## Repository layout
 
@@ -74,7 +79,8 @@ Requirements: Go 1.26+, Node.js 22+, Docker, `openssl`.
 make setup   # .env with generated secrets, deps, postgres + redis, migrate + seed
 ```
 
-`make setup` prints the **demo tenant credentials** once. Then set
+`make setup` prints the **demo app credentials** (a `test` app with one
+API key, its secret and the webhook signing secret) once. Then set
 `XENDIT_SECRET_KEY` and `XENDIT_CALLBACK_TOKEN` in `.env` (Xendit dashboard →
 API keys / Webhooks) and run:
 
@@ -115,7 +121,7 @@ docker compose up -d --build
 
 This starts Postgres, Redis, a one-shot migration, and a single `keipay`
 container serving the API, the webhook worker and the admin console on
-`http://localhost:8080`. Optionally create a demo tenant (its credentials are
+`http://localhost:8080`. Optionally create a demo app (its credentials are
 printed once):
 
 ```bash
@@ -192,63 +198,101 @@ Branch on `code`; it is stable and listed under `ErrorCode` in the spec
 `not_found`). `message` is for humans and may change. `details` is always an
 object.
 
-## Tenant API
+## App API
+
+Create an app in the console (Apps → Create app). You get three values,
+shown once:
+
+- **API key** (`kp_test_…` or `kp_live_…`): identifies the app and its
+  environment; send it as `X-Api-Key`.
+- **API secret** (`kps_test_…` / `kps_live_…`): signs your requests.
+- **Webhook signing secret** (`kpwh_…`): verifies the webhooks KeiPay sends
+  you.
+
+An app can have several API keys (Apps → app → API keys). To rotate, create
+the new key with **Rotate**, deploy it, then **Revoke** the old one; both
+work in the meantime. Revoked and expired keys get `401 api_key_revoked` or
+`401 api_key_expired`; a disabled app gets `403 tenant_inactive`.
+
+Apps that existed before apps replaced tenants keep working unchanged: their
+`kp_…` key and `api_secret` became the app's first key (environment `live`),
+and that `api_secret` is also their webhook signing secret.
 
 Every `/v1/*` request carries:
 
-- `X-Api-Key`: tenant `api_key`
+- `X-Api-Key`: the API key
 - `X-Timestamp`: unix seconds (±5 min window)
-- `X-Signature`: hex HMAC-SHA256 of `"{timestamp}.{rawBody}"` keyed with the tenant `api_secret`
+- `X-Signature`: hex HMAC-SHA256 of `"{timestamp}.{rawBody}"` keyed with the API secret
 
 ### Create a payment
 
 ```bash
-SECRET='sk_...'   # tenant api_secret
-APIKEY='kp_...'   # tenant api_key
+SECRET='kps_test_...'   # API secret
+APIKEY='kp_test_...'    # API key
 TS=$(date +%s)
-BODY='{"order_id":"ord-123","amount":150000,"currency":"IDR","description":"Order 123","payer_email":"buyer@example.com"}'
+BODY='{"order_id":"ord-123","amount":150000,"currency":"IDR","description":"Order 123","payer_email":"buyer@example.com","metadata":{"channel":"mobile"}}'
 SIG=$(printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
 
 curl -s -X POST http://localhost:8080/v1/payments \
   -H "X-Api-Key: $APIKEY" -H "X-Timestamp: $TS" -H "X-Signature: $SIG" \
+  -H "Idempotency-Key: 3f1c2d9e-7b1a-4c55-9a1e-2f0f6f1b9c11" \
   -H "Content-Type: application/json" -d "$BODY"
 ```
 
 ```json
 {
+  "id": "pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C",
   "payment_id": 1,
+  "reference": "kp_pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C",
   "order_id": "ord-123",
   "status": "PENDING",
   "amount": 150000,
   "currency": "IDR",
-  "invoice_url": "https://checkout.xendit.co/web/..."
+  "invoice_url": "https://checkout.xendit.co/web/...",
+  "metadata": { "channel": "mobile" }
 }
 ```
 
-Creation is idempotent per `order_id`: a retry with the same amount and
-currency returns the original payment; a different amount or currency returns
-`409`. An expired payment is returned as-is, so use a new `order_id` to retry.
+Creation is idempotent per `order_id` within your app: a retry with the same
+amount and currency returns the original payment; a different amount or
+currency returns `409 conflict`. With `Idempotency-Key`, the same key and the
+same request return the original payment, and the same key with a different
+request returns `409 idempotency_key_reused`. Replays answer `201` with
+`Idempotent-Replayed: true`. An expired payment is returned as-is, so use a
+new `order_id` to retry.
+
+`metadata` is a flat object (at most 50 keys; values are strings up to 500
+characters, numbers, booleans or `null`; 8 KB in total). It is stored with
+the payment and sent back in every webhook for it.
+
+`payment_id` (integer) is kept for existing integrations; use `id`
+(`pay_…`) in new code.
 
 ### Get a payment
 
-`GET /v1/payments/:id`, signed the same way (empty body).
+`GET /v1/payments/:id`, signed the same way (empty body). `:id` is the
+`pay_…` id or the legacy integer `payment_id`.
 
 ## Webhooks forwarded to your app
 
-KeiPay POSTs to the tenant `webhook_url` with:
+KeiPay POSTs to the app's `webhook_url` with:
 
 - `X-Kei-Event`: e.g. `payment.paid`
-- `X-Kei-Signature`: hex HMAC-SHA256 of the raw body keyed with the tenant `api_secret`
+- `X-Kei-Signature`: hex HMAC-SHA256 of the raw body keyed with the app's
+  webhook signing secret (for apps from before apps replaced tenants: their
+  original `api_secret`)
 
 ```json
 {
   "event": "payment.paid",
   "payment_id": 1,
+  "payment_public_id": "pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C",
   "order_id": "ord-123",
-  "external_id": "demo:ord-123",
+  "external_id": "kp_pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C",
   "status": "PAID",
   "amount": 150000,
   "currency": "IDR",
+  "metadata": { "channel": "mobile" },
   "paid_at": "2026-01-01T10:00:00Z",
   "timestamp": "2026-01-01T10:00:01Z"
 }
@@ -257,10 +301,14 @@ KeiPay POSTs to the tenant `webhook_url` with:
 Verify by recomputing the HMAC over the raw body and comparing in constant
 time. Return 2xx to ack; anything else is retried.
 
-Delivery is **at-least-once**: dedupe on `payment_id` + `event`. Status only
-moves forward (`PENDING` → `PAID` → `SETTLED`); if callbacks arrive out of order
-the stale one is dropped, so you may get `payment.settled` without
+Delivery is **at-least-once**: dedupe on `payment_public_id` + `event`. Status
+only moves forward (`PENDING` → `PAID` → `SETTLED`); if callbacks arrive out
+of order the stale one is dropped, so you may get `payment.settled` without
 `payment.paid`. Treat settled as paid.
+
+KeiPay matches gateway callbacks to payments by the stored reference
+(`kp_pay_…`, or `{slug}:{order_id}` for payments created before apps), never
+by parsing it.
 
 ## Admin API
 
@@ -275,16 +323,21 @@ Sessions expire after 30 minutes idle or 12 hours in total
 - `GET /admin/me`, `POST /admin/me/password`
 - `GET/POST /admin/users`, `GET/PATCH /admin/users/:id`,
   `POST /admin/users/:id/disable|enable|reset-password` (owner only)
-- `POST/GET /admin/tenants`, `PUT /admin/tenants/:id`, `POST /admin/tenants/:id/rotate`
-- `GET /admin/payments`, `GET /admin/ledger`
+- `GET/POST /admin/apps`, `GET/PATCH /admin/apps/:id`,
+  `POST /admin/apps/:id/disable|enable`
+- `GET/POST /admin/apps/:id/keys`, `POST /admin/apps/:id/keys/:key_id/rotate|revoke`
+- `GET /admin/payments` (cursor-paginated), `GET /admin/ledger`
 - `GET /admin/webhook-deliveries`, `POST /admin/webhook-deliveries/:id/replay`
-- `GET /admin/audit-logs` (cursor-paginated: `limit`, `cursor`, `next_cursor`)
+- `GET /admin/audit-logs`
+
+Cursor-paginated lists take `limit` and `cursor` and return `next_cursor`.
+Resources use prefixed ids (`app_…`, `key_…`, `pay_…`, `usr_…`).
 
 The server checks each operation's permission against the caller's role
 (`403 forbidden` otherwise); the table is in the spec and `GET /admin/me`
 returns the caller's permissions.
 
-Every admin change (users, tenants, password changes, replays) and every
+Every admin change (users, apps, API keys, password changes, replays) and every
 sign-in, failed sign-in and sign-out is recorded in the audit log with who,
 what, when and before/after values, never secrets or passwords.
 

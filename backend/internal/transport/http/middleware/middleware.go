@@ -1,0 +1,58 @@
+// Package middleware holds Gin middleware for auth, request id, and recovery.
+package middleware
+
+import (
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"go.uber.org/zap"
+
+	"github.com/mydisha/keipay/backend/internal/pkg/logger"
+)
+
+const (
+	ctxRequestID = "request_id"
+	ctxTenant    = "tenant"
+)
+
+// RequestID attaches a unique id to each request, propagates it into the
+// request context (so service/repository layers can correlate logs), and
+// echoes it back in the X-Request-ID response header.
+func RequestID() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		id := c.GetHeader("X-Request-ID")
+		if id == "" {
+			id = uuid.NewString()
+		}
+		c.Set(ctxRequestID, id)
+		c.Header("X-Request-ID", id)
+		// Propagate down the call chain for end-to-end tracing.
+		c.Request = c.Request.WithContext(logger.WithRequestID(c.Request.Context(), id))
+		c.Next()
+	}
+}
+
+// RequestIDFromContext returns the request id stored by the RequestID
+// middleware in the gin context, or "" if absent.
+func RequestIDFromContext(c *gin.Context) string {
+	return c.GetString(ctxRequestID)
+}
+
+// Recover logs panics and returns 500 instead of crashing the server.
+func Recover(log *zap.Logger) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Error("panic recovered",
+					zap.String(logger.FieldLogType, logger.LogTypeApp),
+					zap.Any("error", r),
+					zap.String("method", c.Request.Method),
+					zap.String("path", c.FullPath()),
+					zap.String(logger.FieldRequestID, c.GetString(ctxRequestID)),
+					zap.Stack("stack"),
+				)
+				c.AbortWithStatusJSON(500, gin.H{"error": "internal server error"})
+			}
+		}()
+		c.Next()
+	}
+}

@@ -1,0 +1,1361 @@
+openapi: 3.1.0
+info:
+  title: KeiPay API
+  version: 0.1.0
+  summary: Self-hosted payment orchestrator.
+  description: |
+    KeiPay gives your apps one API and one credential for payment gateways.
+    This document is the source of truth for the HTTP contract. Frontend
+    types are generated from it (`make gen`); do not hand-write them.
+
+    ## Surfaces
+
+    - `/v1/*`: the tenant (app) API, signed with HMAC-SHA256.
+    - `/webhooks/*`: inbound gateway callbacks. Every callback lives below
+      `/webhooks/`; `GET /webhooks` itself is the console's Webhooks page.
+    - `/admin/*`: the admin console API, authenticated with a bearer token.
+    - `/healthz`: liveness.
+
+    Every response carries an `X-Request-ID` header. Send your own
+    `X-Request-ID` to correlate logs; otherwise KeiPay generates one.
+
+    ## Errors
+
+    Every error response, on every surface, has the same shape:
+
+    ```json
+    {"error": {"code": "not_found", "message": "not found", "details": {}}}
+    ```
+
+    `code` is stable and listed in `ErrorCode`; branch on it. `message` is
+    for humans and may change. `details` is always an object; it is empty
+    unless a code documents its keys.
+
+    ## Pagination
+
+    New list endpoints use cursor pagination: `limit` (1-200, default 50)
+    and an opaque `cursor`; the response carries `data` and `next_cursor`
+    (`null` on the last page). The older admin lists (`/admin/payments`,
+    `/admin/ledger`, `/admin/webhook-deliveries`) still use `limit` and
+    `offset` and move to cursors when their features are reworked.
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: /
+    description: The KeiPay deployment serving this document (same origin).
+tags:
+  - name: health
+    description: Liveness.
+  - name: payments
+    description: Tenant API for payments.
+  - name: gateway-webhooks
+    description: Inbound callbacks from payment gateways.
+  - name: admin-auth
+    description: Admin console sign-in.
+  - name: admin-tenants
+    description: Tenant (app) management.
+  - name: admin-payments
+    description: Payment and ledger reporting.
+  - name: admin-webhooks
+    description: Outbound webhook deliveries to tenants.
+  - name: admin-audit
+    description: Audit trail of admin mutations.
+
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getHealth
+      summary: Liveness probe
+      security: []
+      responses:
+        '200':
+          description: The process is up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /v1/payments:
+    post:
+      tags: [payments]
+      operationId: createPayment
+      summary: Create a payment
+      description: |
+        Creates a hosted checkout on the gateway and returns its URL.
+        Idempotent per `order_id`: a retry with the same amount and currency
+        returns the original payment (also `201`); a different amount or
+        currency returns `409 conflict`. An expired payment is returned
+        as-is, so use a new `order_id` to retry.
+
+        A body that breaks the schema, including any entry of `items`,
+        returns `400 invalid_request` with `details.fields` (for example
+        `items.0.quantity`). `400 validation_failed` is for business rules.
+      security:
+        - tenantApiKey: []
+          tenantTimestamp: []
+          tenantSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePaymentRequest'
+      responses:
+        '201':
+          description: Payment created, or the existing payment for this `order_id`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/payments/{id}:
+    get:
+      tags: [payments]
+      operationId: getPayment
+      summary: Get a payment
+      description: Returns a payment owned by the calling tenant. Sign an empty body.
+      security:
+        - tenantApiKey: []
+          tenantTimestamp: []
+          tenantSignature: []
+      parameters:
+        - $ref: '#/components/parameters/PaymentIdPath'
+      responses:
+        '200':
+          description: The payment.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /webhooks/xendit:
+    post:
+      tags: [gateway-webhooks]
+      operationId: receiveXenditInvoiceCallback
+      summary: Receive a Xendit invoice callback
+      description: |
+        Configure this URL in the Xendit dashboard. Duplicate and stale
+        callbacks, and callbacks whose amount or currency does not match the
+        payment, are acknowledged with `200` so Xendit stops retrying; real
+        processing failures return `500` so Xendit retries.
+      security:
+        - xenditCallbackToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/XenditInvoiceCallback'
+      responses:
+        '200':
+          description: Accepted (applied, duplicate, stale or recorded mismatch).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceivedResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/login:
+    post:
+      tags: [admin-auth]
+      operationId: adminLogin
+      summary: Sign in
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Signed in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/change-password:
+    post:
+      tags: [admin-auth]
+      operationId: adminChangePassword
+      summary: Change the signed-in admin's password
+      description: Clears `must_change_password`. Recorded in the audit log as `admin_user.change_password`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+      responses:
+        '200':
+          description: Password changed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/tenants:
+    get:
+      tags: [admin-tenants]
+      operationId: listTenants
+      summary: List tenants
+      responses:
+        '200':
+          description: All tenants, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [admin-tenants]
+      operationId: createTenant
+      summary: Create a tenant
+      description: |
+        Returns the API secret in plaintext exactly once. Recorded in the
+        audit log as `tenant.create`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTenantRequest'
+      responses:
+        '201':
+          description: Tenant created, with one-time credentials.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantWithCredentialsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/tenants/{id}:
+    put:
+      tags: [admin-tenants]
+      operationId: updateTenant
+      summary: Update a tenant
+      description: |
+        Replaces every mutable field; an omitted `active` means `false`.
+        The slug cannot be changed. Recorded in the audit log as
+        `tenant.update`.
+      parameters:
+        - $ref: '#/components/parameters/TenantIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTenantRequest'
+      responses:
+        '200':
+          description: The updated tenant.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/tenants/{id}/rotate:
+    post:
+      tags: [admin-tenants]
+      operationId: rotateTenantCredentials
+      summary: Rotate a tenant's API key and secret
+      description: |
+        Issues a new key and secret and invalidates the old pair immediately.
+        The new secret is returned in plaintext exactly once. Recorded in the
+        audit log as `tenant.rotate_credentials`.
+      parameters:
+        - $ref: '#/components/parameters/TenantIdPath'
+      responses:
+        '200':
+          description: New credentials.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantWithCredentialsResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/payments:
+    get:
+      tags: [admin-payments]
+      operationId: listAdminPayments
+      summary: List payments
+      description: |
+        Offset-paginated, newest first. Unparseable `tenant_id`, `from` and
+        `to` values are ignored, and an out-of-range `limit` falls back to the
+        default.
+      parameters:
+        - $ref: '#/components/parameters/TenantIdFilter'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/PaymentStatus'
+        - $ref: '#/components/parameters/FromFilter'
+        - $ref: '#/components/parameters/ToFilter'
+        - name: limit
+          in: query
+          required: false
+          description: 1-200, default 50.
+          schema:
+            type: integer
+            default: 50
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of payments and the total match count.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/ledger:
+    get:
+      tags: [admin-payments]
+      operationId: listLedger
+      summary: List ledger entries with a per-tenant summary
+      description: |
+        Offset-paginated, newest first. Unparseable filters are ignored, and
+        an out-of-range `limit` falls back to the default.
+      parameters:
+        - $ref: '#/components/parameters/TenantIdFilter'
+        - $ref: '#/components/parameters/FromFilter'
+        - $ref: '#/components/parameters/ToFilter'
+        - name: limit
+          in: query
+          required: false
+          description: 1-500, default 100.
+          schema:
+            type: integer
+            default: 100
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: Ledger entries and per-tenant totals for the same filter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/webhook-deliveries:
+    get:
+      tags: [admin-webhooks]
+      operationId: listWebhookDeliveries
+      summary: List outbound webhook deliveries
+      description: |
+        Offset-paginated, newest first. An unparseable `tenant_id` is
+        ignored, and an out-of-range `limit` falls back to the default.
+      parameters:
+        - $ref: '#/components/parameters/TenantIdFilter'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/WebhookDeliveryStatus'
+        - name: limit
+          in: query
+          required: false
+          description: 1-200, default 50.
+          schema:
+            type: integer
+            default: 50
+        - $ref: '#/components/parameters/Offset'
+      responses:
+        '200':
+          description: A page of deliveries.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeliveryListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/webhook-deliveries/{id}/replay:
+    post:
+      tags: [admin-webhooks]
+      operationId: replayWebhookDelivery
+      summary: Replay a webhook delivery
+      description: |
+        Re-enqueues the delivery. Delivery is at-least-once, so tenants must
+        already dedupe. Recorded in the audit log as `webhook_delivery.replay`.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Delivery id. A non-integer returns `400 invalid_request`; an integer below 1 matches nothing and returns `404 not_found`.
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
+      responses:
+        '202':
+          description: Re-enqueued.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReplayResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/audit-logs:
+    get:
+      tags: [admin-audit]
+      operationId: listAuditLogs
+      summary: List audit log entries
+      description: Cursor-paginated, newest first (`occurred_at` descending, then `id` descending).
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of audit entries.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+webhooks:
+  paymentEvent:
+    post:
+      operationId: paymentEventWebhook
+      summary: Payment event forwarded to the tenant's webhook_url
+      description: |
+        Sent when a payment changes status. Verify `X-Kei-Signature`
+        (hex HMAC-SHA256 of the raw body keyed with the tenant `api_secret`)
+        in constant time. Return any `2xx` to acknowledge; anything else is
+        retried. Delivery is at-least-once: dedupe on `payment_id` + `event`.
+      security: []
+      parameters:
+        - name: X-Kei-Event
+          in: header
+          required: true
+          schema:
+            $ref: '#/components/schemas/PaymentEventType'
+        - name: X-Kei-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{64}$'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentWebhookEvent'
+      responses:
+        '200':
+          description: Acknowledged. Any 2xx status works.
+
+components:
+  securitySchemes:
+    adminBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Token from `POST /admin/login`.
+    tenantApiKey:
+      type: apiKey
+      in: header
+      name: X-Api-Key
+      description: The tenant `api_key`.
+    tenantTimestamp:
+      type: apiKey
+      in: header
+      name: X-Timestamp
+      description: Unix seconds; must be within 5 minutes of server time.
+    tenantSignature:
+      type: apiKey
+      in: header
+      name: X-Signature
+      description: |
+        Hex HMAC-SHA256 of `"{X-Timestamp}.{rawBody}"` keyed with the tenant
+        `api_secret`. Each signature is accepted once (replay protection).
+    xenditCallbackToken:
+      type: apiKey
+      in: header
+      name: x-callback-token
+      description: The webhook verification token from the Xendit dashboard.
+
+  parameters:
+    PaymentIdPath:
+      name: id
+      in: path
+      required: true
+      description: Payment id. A non-integer returns `400 invalid_request`; an integer below 1 matches nothing and returns `404 not_found`.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+    TenantIdPath:
+      name: id
+      in: path
+      required: true
+      description: Tenant id. A non-integer returns `400 invalid_request`; an integer below 1 matches nothing and returns `404 not_found`.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
+    TenantIdFilter:
+      name: tenant_id
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int64
+    FromFilter:
+      name: from
+      in: query
+      required: false
+      description: Inclusive lower bound on `created_at` (RFC 3339).
+      schema:
+        type: string
+        format: date-time
+    ToFilter:
+      name: to
+      in: query
+      required: false
+      description: Inclusive upper bound on `created_at` (RFC 3339).
+      schema:
+        type: string
+        format: date-time
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 0
+        default: 0
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Page size. Outside 1-200 returns `400 invalid_request`.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque `next_cursor` from the previous page. A malformed cursor returns `400 invalid_cursor`.
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: |
+        `invalid_request` (malformed body, failed field validation, a
+        non-integer path id, or a bad `limit` on a cursor-paginated list;
+        `details.fields` lists offending fields), `validation_failed`
+        (business validation), or `invalid_cursor`. The legacy
+        offset-paginated lists ignore unparseable filters instead.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Authentication failed. The `code` says why.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: '`tenant_inactive`: the tenant exists but is disabled.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: '`not_found`.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: '`conflict`: duplicate slug, or an `order_id` reused with a different amount or currency.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InternalError:
+      description: '`internal_error`. The message never contains internal details.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    ErrorCode:
+      type: string
+      description: |
+        Stable machine-readable error code. New codes may be added; existing
+        codes keep their meaning.
+
+        | code | status | meaning |
+        |---|---|---|
+        | `invalid_request` | 400 | Malformed JSON, failed field validation, a non-integer path id, or a bad `limit` on a cursor-paginated list. `details.fields` is a list of `{field, rule}`. The legacy offset-paginated lists ignore unparseable query filters instead of rejecting them. |
+        | `validation_failed` | 400 | The request is well-formed but breaks a business rule. |
+        | `invalid_cursor` | 400 | The `cursor` is malformed or was not issued by this endpoint. |
+        | `unauthorized` | 401 | Authentication failed for a reason not listed below. |
+        | `invalid_credentials` | 401 | Wrong username or password, or wrong current password. |
+        | `missing_token` | 401 | Admin request without a bearer token. |
+        | `invalid_token` | 401 | Admin bearer token is invalid or expired. |
+        | `missing_signature_headers` | 401 | Tenant request without `X-Api-Key`, `X-Timestamp` or `X-Signature`. |
+        | `invalid_timestamp` | 401 | `X-Timestamp` is not unix seconds. |
+        | `timestamp_out_of_range` | 401 | `X-Timestamp` is more than 5 minutes from server time. |
+        | `unknown_api_key` | 401 | No tenant has this `X-Api-Key`. |
+        | `invalid_signature` | 401 | `X-Signature` does not match. |
+        | `replayed_request` | 401 | This signature was already used. |
+        | `invalid_callback_token` | 401 | Gateway callback token is missing or wrong. |
+        | `tenant_inactive` | 403 | The tenant is disabled. |
+        | `not_found` | 404 | The resource or route does not exist. |
+        | `conflict` | 409 | Duplicate, or idempotent retry with different data. |
+        | `internal_error` | 500 | Unexpected server error. |
+      enum:
+        - invalid_request
+        - validation_failed
+        - invalid_cursor
+        - unauthorized
+        - invalid_credentials
+        - missing_token
+        - invalid_token
+        - missing_signature_headers
+        - invalid_timestamp
+        - timestamp_out_of_range
+        - unknown_api_key
+        - invalid_signature
+        - replayed_request
+        - invalid_callback_token
+        - tenant_inactive
+        - not_found
+        - conflict
+        - internal_error
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required: [error]
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, details]
+          properties:
+            code:
+              $ref: '#/components/schemas/ErrorCode'
+            message:
+              type: string
+              description: Human-readable; may change. Never contains secrets or internal errors.
+            details:
+              type: object
+              description: Always present; empty unless the code documents keys.
+              additionalProperties: true
+              properties:
+                fields:
+                  type: array
+                  description: Set for `invalid_request` caused by field validation.
+                  items:
+                    $ref: '#/components/schemas/FieldError'
+      example:
+        error:
+          code: invalid_request
+          message: invalid request body
+          details:
+            fields:
+              - field: order_id
+                rule: required
+
+    FieldError:
+      type: object
+      additionalProperties: false
+      required: [field, rule]
+      properties:
+        field:
+          type: string
+          description: JSON field name (dot path for nested fields).
+          examples: [order_id, items.0.quantity]
+        rule:
+          type: string
+          description: The failed rule, e.g. `required`, `min`, `gt`, `type`.
+
+    HealthResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: ok
+
+    PaymentStatus:
+      type: string
+      description: Normalized lifecycle. Status only moves forward (PENDING → PAID → SETTLED); a late success after EXPIRED or FAILED is still applied.
+      enum: [PENDING, PAID, SETTLED, EXPIRED, FAILED]
+
+    PaymentEventType:
+      type: string
+      enum: [payment.paid, payment.settled, payment.expired, payment.failed]
+
+    OrderItem:
+      type: object
+      required: [name, quantity, price]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        quantity:
+          type: integer
+          format: int32
+          minimum: 1
+        price:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Unit price in minor units of the payment currency.
+        category:
+          type: string
+        reference_id:
+          type: string
+        url:
+          type: string
+
+    Customer:
+      type: object
+      properties:
+        given_names:
+          type: string
+        surname:
+          type: string
+        email:
+          type: string
+        mobile_number:
+          type: string
+
+    CreatePaymentRequest:
+      type: object
+      required: [order_id, amount]
+      properties:
+        order_id:
+          type: string
+          minLength: 1
+          description: Your order reference; unique per tenant.
+        amount:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Minor units of `currency` (for IDR, whole rupiah).
+        currency:
+          type: string
+          default: IDR
+          description: ISO 4217 code.
+        description:
+          type: string
+        payer_email:
+          type: string
+        invoice_duration:
+          type: integer
+          description: Checkout lifetime in seconds. Zero or omitted uses the gateway default.
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        customer:
+          $ref: '#/components/schemas/Customer'
+        expected_settlement_at:
+          type: string
+          format: date-time
+          description: Optional estimate you can show your user before funds settle.
+
+    PaymentResponse:
+      type: object
+      required: [payment_id, order_id, status, amount, currency, invoice_url]
+      properties:
+        payment_id:
+          type: integer
+          format: int64
+        order_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/PaymentStatus'
+        amount:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        invoice_url:
+          type: string
+          description: Hosted checkout URL to redirect the payer to.
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        expires_at:
+          type: string
+          format: date-time
+        paid_at:
+          type: string
+          format: date-time
+        settled_at:
+          type: string
+          format: date-time
+        expected_settlement_at:
+          type: string
+          format: date-time
+
+    XenditInvoiceCallback:
+      type: object
+      description: The subset of the Xendit invoice callback KeiPay reads. Other fields are stored raw and ignored.
+      required: [id, external_id, status]
+      properties:
+        id:
+          type: string
+        external_id:
+          type: string
+          description: '`{tenant_slug}:{order_id}`.'
+        status:
+          type: string
+          examples: [PAID, SETTLED, EXPIRED]
+        amount:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        paid_amount:
+          type: integer
+          format: int64
+        fees_paid_amount:
+          type: integer
+          format: int64
+        paid_at:
+          type: string
+        settlement_date:
+          type: string
+        updated:
+          type: string
+      additionalProperties: true
+
+    ReceivedResponse:
+      type: object
+      required: [received]
+      properties:
+        received:
+          type: boolean
+          const: true
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+          format: password
+
+    LoginResponse:
+      type: object
+      required: [token, must_change_password]
+      properties:
+        token:
+          type: string
+          description: Bearer token, valid for 12 hours.
+        must_change_password:
+          type: boolean
+
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password:
+          type: string
+          minLength: 1
+          format: password
+        new_password:
+          type: string
+          minLength: 8
+          format: password
+
+    MessageResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+
+    Tenant:
+      type: object
+      required: [id, name, slug, api_key, webhook_url, redirect_success_url, redirect_failure_url, active, created_at, updated_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        slug:
+          type: string
+          description: Lowercase, 3-32 chars of `a-z`, `0-9` and `-`; cannot change.
+        api_key:
+          type: string
+          description: Public key id sent as `X-Api-Key`. Not a secret.
+        webhook_url:
+          type: string
+        redirect_success_url:
+          type: string
+        redirect_failure_url:
+          type: string
+        active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    TenantCredentials:
+      type: object
+      required: [api_key, api_secret]
+      properties:
+        api_key:
+          type: string
+        api_secret:
+          type: string
+          description: HMAC signing secret. Shown once; store it now.
+
+    CreateTenantRequest:
+      type: object
+      required: [name, slug]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        slug:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$'
+        webhook_url:
+          type: string
+        redirect_success_url:
+          type: string
+        redirect_failure_url:
+          type: string
+
+    UpdateTenantRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+        webhook_url:
+          type: string
+        redirect_success_url:
+          type: string
+        redirect_failure_url:
+          type: string
+        active:
+          type: boolean
+          default: false
+
+    TenantResponse:
+      type: object
+      required: [tenant]
+      properties:
+        tenant:
+          $ref: '#/components/schemas/Tenant'
+
+    TenantWithCredentialsResponse:
+      type: object
+      required: [tenant, credentials]
+      properties:
+        tenant:
+          $ref: '#/components/schemas/Tenant'
+        credentials:
+          $ref: '#/components/schemas/TenantCredentials'
+
+    TenantListResponse:
+      type: object
+      required: [tenants]
+      properties:
+        tenants:
+          type: array
+          items:
+            $ref: '#/components/schemas/Tenant'
+
+    Payment:
+      type: object
+      required: [id, tenant_id, order_id, external_id, xendit_invoice_id, amount, currency, status, description, invoice_url, payer_email, created_at, updated_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        tenant_id:
+          type: integer
+          format: int64
+        order_id:
+          type: string
+        external_id:
+          type: string
+        xendit_invoice_id:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        status:
+          $ref: '#/components/schemas/PaymentStatus'
+        description:
+          type: string
+        invoice_url:
+          type: string
+        payer_email:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        expires_at:
+          type: string
+          format: date-time
+        paid_at:
+          type: string
+          format: date-time
+        settled_at:
+          type: string
+          format: date-time
+        expected_settlement_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PaymentListResponse:
+      type: object
+      required: [payments, total]
+      properties:
+        payments:
+          type: array
+          items:
+            $ref: '#/components/schemas/Payment'
+        total:
+          type: integer
+          format: int64
+          description: Number of payments matching the filter, ignoring limit and offset.
+
+    LedgerEntry:
+      type: object
+      required: [id, tenant_id, payment_id, amount, xendit_fee, net_amount, type, created_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        tenant_id:
+          type: integer
+          format: int64
+        payment_id:
+          type: integer
+          format: int64
+        amount:
+          type: integer
+          format: int64
+        xendit_fee:
+          type: integer
+          format: int64
+        net_amount:
+          type: integer
+          format: int64
+        type:
+          type: string
+          enum: [PAYMENT, REFUND]
+        settled_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    LedgerSummary:
+      type: object
+      required: [tenant_id, count, gross_amount, total_fee, net_amount]
+      properties:
+        tenant_id:
+          type: integer
+          format: int64
+        count:
+          type: integer
+          format: int64
+        gross_amount:
+          type: integer
+          format: int64
+        total_fee:
+          type: integer
+          format: int64
+        net_amount:
+          type: integer
+          format: int64
+
+    LedgerListResponse:
+      type: object
+      required: [entries, summary]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/LedgerEntry'
+        summary:
+          type: array
+          items:
+            $ref: '#/components/schemas/LedgerSummary'
+
+    WebhookDeliveryStatus:
+      type: string
+      enum: [PENDING, DELIVERED, FAILED]
+
+    WebhookDelivery:
+      type: object
+      required: [id, payment_id, tenant_id, event_type, payload, status, attempts, last_error, created_at, updated_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        payment_id:
+          type: integer
+          format: int64
+        tenant_id:
+          type: integer
+          format: int64
+        event_type:
+          $ref: '#/components/schemas/PaymentEventType'
+        payload:
+          $ref: '#/components/schemas/PaymentWebhookEvent'
+        status:
+          $ref: '#/components/schemas/WebhookDeliveryStatus'
+        attempts:
+          type: integer
+        last_error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    DeliveryListResponse:
+      type: object
+      required: [deliveries]
+      properties:
+        deliveries:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookDelivery'
+
+    ReplayResponse:
+      type: object
+      required: [requeued]
+      properties:
+        requeued:
+          type: boolean
+          const: true
+
+    PaymentWebhookEvent:
+      type: object
+      required: [event, payment_id, order_id, external_id, status, amount, currency, timestamp]
+      properties:
+        event:
+          $ref: '#/components/schemas/PaymentEventType'
+        payment_id:
+          type: integer
+          format: int64
+        order_id:
+          type: string
+        external_id:
+          type: string
+        status:
+          $ref: '#/components/schemas/PaymentStatus'
+        amount:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        paid_at:
+          type: string
+          format: date-time
+        settled_at:
+          type: string
+          format: date-time
+        timestamp:
+          type: string
+          format: date-time
+
+    AuditActor:
+      type: object
+      required: [type, id]
+      properties:
+        type:
+          type: string
+          description: '`admin` (a signed-in console user) or `system` (seed, CLI, background job).'
+          examples: [admin, system]
+        id:
+          type: string
+          description: Admin username today (a `usr_` id once users exist), or the system component name such as `seed`.
+
+    AuditTarget:
+      type: object
+      required: [type, id]
+      properties:
+        type:
+          type: string
+          examples: [tenant, admin_user, webhook_delivery]
+        id:
+          type: string
+          description: The target's identifier as a string.
+
+    AuditLog:
+      type: object
+      required: [id, occurred_at, actor, action, target, before, after, ip, user_agent, request_id]
+      properties:
+        id:
+          type: string
+          pattern: '^aud_[0-9A-HJKMNP-TV-Z]{26}$'
+          examples: [aud_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+        occurred_at:
+          type: string
+          format: date-time
+        actor:
+          $ref: '#/components/schemas/AuditActor'
+        action:
+          type: string
+          description: |
+            `{target_type}.{verb}`. Current values: `tenant.create`,
+            `tenant.update`, `tenant.rotate_credentials`,
+            `admin_user.change_password`, `webhook_delivery.replay`.
+            New actions may be added.
+          examples: [tenant.update]
+        target:
+          $ref: '#/components/schemas/AuditTarget'
+        before:
+          description: Snapshot before the change, without secrets; `null` on create.
+          type: [object, 'null']
+          additionalProperties: true
+        after:
+          description: Snapshot after the change, without secrets; `null` when nothing persistent changed.
+          type: [object, 'null']
+          additionalProperties: true
+        ip:
+          type: string
+          description: Client IP, empty for system actors.
+        user_agent:
+          type: string
+        request_id:
+          type: string
+
+    AuditLogListResponse:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditLog'
+        next_cursor:
+          type: [string, 'null']
+          description: Pass as `cursor` to get the next page; `null` on the last page.
+
+security:
+  - adminBearer: []

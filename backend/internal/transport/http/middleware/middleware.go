@@ -6,7 +6,9 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 
+	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/pkg/logger"
+	"github.com/mydisha/keipay/backend/internal/transport/http/response"
 )
 
 const (
@@ -50,7 +52,7 @@ func Recover(log *zap.Logger) gin.HandlerFunc {
 					zap.String(logger.FieldRequestID, c.GetString(ctxRequestID)),
 					zap.Stack("stack"),
 				)
-				c.AbortWithStatusJSON(500, gin.H{"error": "internal server error"})
+				response.Error(c, domain.NewError(domain.CodeInternal, "internal server error"))
 			}
 		}()
 		c.Next()

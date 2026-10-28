@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
@@ -25,16 +26,61 @@ type SecretCipher interface {
 	Decrypt(ciphertext string) (string, error)
 }
 
-// TenantService manages tenant lifecycle and credentials.
+// TenantService manages tenant lifecycle and credentials. Every mutation and
+// its audit entry commit in one transaction.
 type TenantService struct {
 	repo   domain.TenantRepository
 	cache  TenantCacheInvalidator
 	cipher SecretCipher
+	tx     domain.TxManager
+	audit  Auditor
 }
 
 // NewTenantService constructs a TenantService. cache may be nil.
-func NewTenantService(repo domain.TenantRepository, cache TenantCacheInvalidator, cipher SecretCipher) *TenantService {
-	return &TenantService{repo: repo, cache: cache, cipher: cipher}
+func NewTenantService(repo domain.TenantRepository, cache TenantCacheInvalidator, cipher SecretCipher, tx domain.TxManager, audit Auditor) *TenantService {
+	return &TenantService{repo: repo, cache: cache, cipher: cipher, tx: tx, audit: audit}
+}
+
+// tenantSnapshot is the audited view of a tenant. It must never hold the API
+// secret, its ciphertext or the full API key.
+type tenantSnapshot struct {
+	ID                 int64  `json:"id"`
+	Name               string `json:"name"`
+	Slug               string `json:"slug"`
+	APIKeyLast4        string `json:"api_key_last4"`
+	WebhookURL         string `json:"webhook_url"`
+	RedirectSuccessURL string `json:"redirect_success_url"`
+	RedirectFailureURL string `json:"redirect_failure_url"`
+	Active             bool   `json:"active"`
+}
+
+func snapshotTenant(t *domain.Tenant) tenantSnapshot {
+	return tenantSnapshot{
+		ID:                 t.ID,
+		Name:               t.Name,
+		Slug:               t.Slug,
+		APIKeyLast4:        last4(t.APIKey),
+		WebhookURL:         t.WebhookURL,
+		RedirectSuccessURL: t.RedirectSuccessURL,
+		RedirectFailureURL: t.RedirectFailureURL,
+		Active:             t.Active,
+	}
+}
+
+// apiKeySnapshot is the audited view of a credential rotation.
+type apiKeySnapshot struct {
+	APIKeyLast4 string `json:"api_key_last4"`
+}
+
+func last4(s string) string {
+	if len(s) <= 4 {
+		return s
+	}
+	return s[len(s)-4:]
+}
+
+func tenantTarget(id int64) domain.AuditTarget {
+	return domain.AuditTarget{Type: TargetTenant, ID: strconv.FormatInt(id, 10)}
 }
 
 // CreateTenantInput is the request to register a new tenant.
@@ -66,7 +112,7 @@ func (s *TenantService) Create(ctx context.Context, in CreateTenantInput) (*doma
 	secret := keygen.Secret()
 	enc, err := s.cipher.Encrypt(secret)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("encrypt secret: %w", err)
 	}
 
 	t := &domain.Tenant{
@@ -79,8 +125,14 @@ func (s *TenantService) Create(ctx context.Context, in CreateTenantInput) (*doma
 		RedirectFailureURL: in.RedirectFailureURL,
 		Active:             true,
 	}
-	if err := s.repo.Create(ctx, t); err != nil {
-		return nil, nil, err
+	err = s.tx.WithinTx(ctx, func(ctx context.Context) error {
+		if err := s.repo.Create(ctx, t); err != nil {
+			return err
+		}
+		return s.audit.Record(ctx, ActionTenantCreate, tenantTarget(t.ID), nil, snapshotTenant(t))
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("create tenant: %w", err)
 	}
 	return t, &Credentials{APIKey: apiKey, APISecret: secret}, nil
 }
@@ -96,17 +148,26 @@ type UpdateTenantInput struct {
 
 // Update persists mutable fields and invalidates cache.
 func (s *TenantService) Update(ctx context.Context, id int64, in UpdateTenantInput) (*domain.Tenant, error) {
-	t, err := s.repo.GetByID(ctx, id)
+	var t *domain.Tenant
+	err := s.tx.WithinTx(ctx, func(ctx context.Context) error {
+		var err error
+		t, err = s.repo.GetByIDForUpdate(ctx, id)
+		if err != nil {
+			return err
+		}
+		before := snapshotTenant(t)
+		t.Name = in.Name
+		t.WebhookURL = in.WebhookURL
+		t.RedirectSuccessURL = in.RedirectSuccessURL
+		t.RedirectFailureURL = in.RedirectFailureURL
+		t.Active = in.Active
+		if err := s.repo.Update(ctx, t); err != nil {
+			return err
+		}
+		return s.audit.Record(ctx, ActionTenantUpdate, tenantTarget(t.ID), before, snapshotTenant(t))
+	})
 	if err != nil {
-		return nil, err
-	}
-	t.Name = in.Name
-	t.WebhookURL = in.WebhookURL
-	t.RedirectSuccessURL = in.RedirectSuccessURL
-	t.RedirectFailureURL = in.RedirectFailureURL
-	t.Active = in.Active
-	if err := s.repo.Update(ctx, t); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("update tenant %d: %w", id, err)
 	}
 	s.invalidate(ctx, t.APIKey)
 	return t, nil
@@ -114,21 +175,31 @@ func (s *TenantService) Update(ctx context.Context, id int64, in UpdateTenantInp
 
 // RotateCredentials issues a new API key + secret for a tenant.
 func (s *TenantService) RotateCredentials(ctx context.Context, id int64) (*domain.Tenant, *Credentials, error) {
-	t, err := s.repo.GetByID(ctx, id)
-	if err != nil {
-		return nil, nil, err
-	}
-	oldKey := t.APIKey
 	apiKey := keygen.APIKey()
 	secret := keygen.Secret()
 	enc, err := s.cipher.Encrypt(secret)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("encrypt secret: %w", err)
 	}
-	t.APIKey = apiKey
-	t.APISecretEnc = enc
-	if err := s.repo.Update(ctx, t); err != nil {
-		return nil, nil, err
+	var t *domain.Tenant
+	var oldKey string
+	err = s.tx.WithinTx(ctx, func(ctx context.Context) error {
+		var err error
+		t, err = s.repo.GetByIDForUpdate(ctx, id)
+		if err != nil {
+			return err
+		}
+		oldKey = t.APIKey
+		t.APIKey = apiKey
+		t.APISecretEnc = enc
+		if err := s.repo.Update(ctx, t); err != nil {
+			return err
+		}
+		return s.audit.Record(ctx, ActionTenantRotate, tenantTarget(t.ID),
+			apiKeySnapshot{APIKeyLast4: last4(oldKey)}, apiKeySnapshot{APIKeyLast4: last4(apiKey)})
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("rotate tenant %d credentials: %w", id, err)
 	}
 	s.invalidate(ctx, oldKey)
 	return t, &Credentials{APIKey: apiKey, APISecret: secret}, nil

@@ -5,6 +5,7 @@ import (
 	"context"
 	cryptorand "crypto/rand"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/mydisha/keipay/backend/internal/config"
@@ -71,7 +73,7 @@ func main() {
 }
 
 func seedDemoTenant(cfg *config.Config) error {
-	ctx := context.Background()
+	ctx := domain.WithActor(context.Background(), domain.SystemActor("seed"))
 	pool, err := postgres.NewPool(ctx, cfg.PostgresDSN)
 	if err != nil {
 		return err
@@ -83,17 +85,14 @@ func seedDemoTenant(cfg *config.Config) error {
 		return err
 	}
 
-	repo := postgres.NewTenantRepo(pool)
-	svc := service.NewTenantService(repo, nil, cipher)
-
-	const name, slug = "Demo App", "demo"
-	if existing, err := repo.GetBySlug(ctx, slug); err == nil && existing != nil {
-		fmt.Printf("tenant %s already exists (id=%d), skipping\n", slug, existing.ID)
-		return nil
-	}
-	t, creds, err := svc.Create(ctx, service.CreateTenantInput{Name: name, Slug: slug})
+	const slug = "demo"
+	t, creds, err := seedTenant(ctx, pool, cipher, "Demo App", slug)
 	if err != nil {
-		return fmt.Errorf("seed %s: %w", slug, err)
+		return err
+	}
+	if t == nil {
+		fmt.Printf("tenant %s already exists, skipping\n", slug)
+		return nil
 	}
 	fmt.Printf("created tenant %s (id=%d)\n  api_key=%s\n  api_secret=%s\n",
 		t.Slug, t.ID, creds.APIKey, creds.APISecret)
@@ -101,8 +100,26 @@ func seedDemoTenant(cfg *config.Config) error {
 	return nil
 }
 
+// seedTenant creates a tenant through TenantService, so it is audited as the
+// actor in ctx. It returns nil values when the slug already exists.
+func seedTenant(ctx context.Context, pool *pgxpool.Pool, cipher service.SecretCipher, name, slug string) (*domain.Tenant, *service.Credentials, error) {
+	repo := postgres.NewTenantRepo(pool)
+	if _, err := repo.GetBySlug(ctx, slug); err == nil {
+		return nil, nil, nil
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		return nil, nil, fmt.Errorf("check tenant %s: %w", slug, err)
+	}
+	audit := service.NewAuditService(postgres.NewAuditRepo(pool))
+	svc := service.NewTenantService(repo, nil, cipher, postgres.NewTxManager(pool), audit)
+	t, creds, err := svc.Create(ctx, service.CreateTenantInput{Name: name, Slug: slug})
+	if err != nil {
+		return nil, nil, fmt.Errorf("seed %s: %w", slug, err)
+	}
+	return t, creds, nil
+}
+
 func seedAdmin(cfg *config.Config) error {
-	ctx := context.Background()
+	ctx := domain.WithActor(context.Background(), domain.SystemActor("seed"))
 	pool, err := postgres.NewPool(ctx, cfg.PostgresDSN)
 	if err != nil {
 		return err
@@ -154,7 +171,7 @@ func seedAdmin(cfg *config.Config) error {
 }
 
 func resetAdminPassword(cfg *config.Config, password string) error {
-	ctx := context.Background()
+	ctx := domain.WithActor(context.Background(), domain.SystemActor("cli"))
 	pool, err := postgres.NewPool(ctx, cfg.PostgresDSN)
 	if err != nil {
 		return err

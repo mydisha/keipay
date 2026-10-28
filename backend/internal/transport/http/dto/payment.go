@@ -47,7 +47,7 @@ type CreatePaymentRequest struct {
 	Description          string             `json:"description"`
 	PayerEmail           string             `json:"payer_email"`
 	InvoiceDuration      int                `json:"invoice_duration"`
-	Items                []OrderItemRequest `json:"items"`
+	Items                []OrderItemRequest `json:"items" binding:"omitempty,dive"`
 	Customer             *CustomerRequest   `json:"customer"`
 	ExpectedSettlementAt *time.Time         `json:"expected_settlement_at"`
 }

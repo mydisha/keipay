@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/pkg/logger"
 	"github.com/mydisha/keipay/backend/internal/service"
 	"github.com/mydisha/keipay/backend/internal/transport/http/dto"
@@ -47,7 +48,7 @@ func (h *WebhookHandler) Xendit(c *gin.Context) {
 			zap.String(logger.FieldEvent, "webhook.inbound.read_error"),
 			zap.Error(err),
 		)
-		response.BadRequest(c, "cannot read body")
+		response.Error(c, invalidBody())
 		return
 	}
 
@@ -59,7 +60,7 @@ func (h *WebhookHandler) Xendit(c *gin.Context) {
 			zap.Int("bytes", len(raw)),
 			zap.Error(err),
 		)
-		response.BadRequest(c, "invalid json")
+		response.Error(c, invalidBody())
 		return
 	}
 
@@ -103,7 +104,9 @@ func (h *WebhookHandler) Xendit(c *gin.Context) {
 			zap.Int64(logger.FieldLatencyMS, time.Since(start).Milliseconds()),
 			zap.Error(err),
 		)
-		response.InternalError(c, "processing failed")
+		// Every processing failure is a 500, including an unknown external_id,
+		// so Xendit retries once the payment row exists.
+		response.Error(c, domain.Internal(err))
 		return
 	}
 

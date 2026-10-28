@@ -43,7 +43,7 @@ func (r *TenantRepo) Create(ctx context.Context, t *domain.Tenant) error {
 		redirect_success_url, redirect_failure_url, active)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 		RETURNING id, created_at, updated_at`
-	err := r.db.QueryRow(ctx, q, t.Name, t.Slug, t.APIKey, t.APISecretEnc,
+	err := conn(ctx, r.db).QueryRow(ctx, q, t.Name, t.Slug, t.APIKey, t.APISecretEnc,
 		t.WebhookURL, t.RedirectSuccessURL, t.RedirectFailureURL, t.Active).
 		Scan(&t.ID, &t.CreatedAt, &t.UpdatedAt)
 	if err != nil {
@@ -61,7 +61,7 @@ func (r *TenantRepo) Update(ctx context.Context, t *domain.Tenant) error {
 	const q = `UPDATE tenants SET name=$2, api_key=$3, api_secret_enc=$4, webhook_url=$5,
 		redirect_success_url=$6, redirect_failure_url=$7, active=$8, updated_at=now()
 		WHERE id=$1 RETURNING updated_at`
-	err := r.db.QueryRow(ctx, q, t.ID, t.Name, t.APIKey, t.APISecretEnc,
+	err := conn(ctx, r.db).QueryRow(ctx, q, t.ID, t.Name, t.APIKey, t.APISecretEnc,
 		t.WebhookURL, t.RedirectSuccessURL, t.RedirectFailureURL, t.Active).
 		Scan(&t.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -73,25 +73,32 @@ func (r *TenantRepo) Update(ctx context.Context, t *domain.Tenant) error {
 // GetByID loads a tenant by primary key.
 func (r *TenantRepo) GetByID(ctx context.Context, id int64) (*domain.Tenant, error) {
 	q := `SELECT ` + tenantColumns + ` FROM tenants WHERE id=$1`
-	return scanTenant(r.db.QueryRow(ctx, q, id))
+	return scanTenant(conn(ctx, r.db).QueryRow(ctx, q, id))
+}
+
+// GetByIDForUpdate loads a tenant and locks its row until the transaction in
+// ctx ends.
+func (r *TenantRepo) GetByIDForUpdate(ctx context.Context, id int64) (*domain.Tenant, error) {
+	q := `SELECT ` + tenantColumns + ` FROM tenants WHERE id=$1 FOR UPDATE`
+	return scanTenant(conn(ctx, r.db).QueryRow(ctx, q, id))
 }
 
 // GetByAPIKey loads a tenant by its public API key.
 func (r *TenantRepo) GetByAPIKey(ctx context.Context, apiKey string) (*domain.Tenant, error) {
 	q := `SELECT ` + tenantColumns + ` FROM tenants WHERE api_key=$1`
-	return scanTenant(r.db.QueryRow(ctx, q, apiKey))
+	return scanTenant(conn(ctx, r.db).QueryRow(ctx, q, apiKey))
 }
 
 // GetBySlug loads a tenant by slug.
 func (r *TenantRepo) GetBySlug(ctx context.Context, slug string) (*domain.Tenant, error) {
 	q := `SELECT ` + tenantColumns + ` FROM tenants WHERE slug=$1`
-	return scanTenant(r.db.QueryRow(ctx, q, slug))
+	return scanTenant(conn(ctx, r.db).QueryRow(ctx, q, slug))
 }
 
 // List returns all tenants ordered by id.
 func (r *TenantRepo) List(ctx context.Context) ([]domain.Tenant, error) {
 	q := `SELECT ` + tenantColumns + ` FROM tenants ORDER BY id`
-	rows, err := r.db.Query(ctx, q)
+	rows, err := conn(ctx, r.db).Query(ctx, q)
 	if err != nil {
 		return nil, err
 	}

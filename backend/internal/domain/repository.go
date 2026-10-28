@@ -29,6 +29,9 @@ type TenantRepository interface {
 	Create(ctx context.Context, t *Tenant) error
 	Update(ctx context.Context, t *Tenant) error
 	GetByID(ctx context.Context, id int64) (*Tenant, error)
+	// GetByIDForUpdate is GetByID that also row-locks the tenant until the
+	// surrounding transaction ends. Call it inside TxManager.WithinTx.
+	GetByIDForUpdate(ctx context.Context, id int64) (*Tenant, error)
 	GetByAPIKey(ctx context.Context, apiKey string) (*Tenant, error)
 	GetBySlug(ctx context.Context, slug string) (*Tenant, error)
 	List(ctx context.Context) ([]Tenant, error)

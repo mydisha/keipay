@@ -618,21 +618,27 @@ GET             /admin/health                    (state breaker per connection/c
 GET             /admin/reports                   (rekap per app × provider; export CSV)
 ```
 
-Semua list memakai pagination. Endpoint yang mengubah state dicatat di `audit_logs`. Tabel ini belum ada migrasinya, jadi perlu dibuat di fase 2.
+Semua list baru memakai cursor pagination (lihat [Konvensi](#konvensi)). Setiap endpoint admin yang mengubah state dicatat di `audit_logs` (tabelnya dibuat di fase 0).
 
 ## Admin Console (frontend/)
 
-Stack tetap: React, Tailwind, Phosphor icons, motion. **Sebelum layar baru dibuat**, tulis `DESIGN.md` berisi token warna, badge status (sehat, menurun, down, maintenance, circuit open), pola tabel, dan state kosong/loading/error.
+Stack (diputuskan di fase 0): React 19 + Vite + TypeScript sebagai SPA yang disajikan backend Go; Tailwind v4 dengan shadcn/ui (style new-york, Radix, CSS variables untuk light dan dark); ikon lucide; font IBM Plex Sans dan IBM Plex Mono; react-router 7; TanStack Query untuk server state dan TanStack Table untuk tabel; react-hook-form + zod; sonner; cmdk; openapi-typescript + openapi-fetch untuk client dari kontrak. Test memakai Vitest + Testing Library dan Playwright (headless). Phosphor dan motion dihapus. Library UI atau state management lain hanya ditambah dengan alasan yang dicatat di dokumen ini.
 
-| Menu | Isi |
-|---|---|
-| Dashboard | Volume per provider, success rate create, status health, delivery gagal |
-| Apps | List → detail dengan tab Overview, API keys, Webhook, Routing, Logs |
-| Connections | List + wizard tambah connection, health per channel, toggle maintenance |
-| Payments | List + **timeline** per payment |
-| Webhooks | Tab Inbound (dari PG, raw + hasil verifikasi) dan Outbound (ke app), replay |
-| Reports | Rekap per app × provider, export CSV |
-| Settings | User, role, audit log |
+Token, komponen dasar, pola tabel, pola halaman detail, aturan state loading/empty/error, mobile, dark mode, dan format Rp/tanggal/ID ada di `DESIGN.md` di root repo. Badge health (sehat, menurun, down, maintenance, circuit open) ditambahkan ke sana di fase 9.
+
+Struktur kode: `src/app` (router, providers, layout), `src/features/<fitur>/{api,components,pages,schemas}`, `src/shared/{ui,lib,api}`. Tipe API di `src/shared/api/schema.d.ts` di-generate dari `api/openapi.yaml` (`make gen`) dan tidak diedit tangan.
+
+Navigasi final (sidebar yang bisa diciutkan, top bar dengan switch Test/Live dan banner amber saat Test, command palette ⌘K, toggle tema):
+
+| Menu | Isi akhir | Fase 0 |
+|---|---|---|
+| Dashboard | Volume per provider, success rate create, status health, delivery gagal, item rekonsiliasi belum resolved | Empty state "segera hadir" |
+| Apps | List → detail dengan tab Overview, API keys, Webhooks, Routing | Halaman tenant lama dipindah ke sini |
+| Connections | List + wizard tambah connection, health per channel, toggle maintenance | Empty state "segera hadir" |
+| Webhooks | Tab Outbound (delivery ke app, replay) dan Inbound (dari PG, raw + hasil verifikasi) | Halaman delivery lama (Outbound) |
+| Payments | List + **timeline** per payment | Halaman payment lama |
+| Reconciliation | Run rekonsiliasi per connection, ringkasan per app × connection × periode, export CSV | Halaman ledger lama (ringkasan per tenant) |
+| Settings | User, role, audit log | Audit log (read-only) dan ganti password |
 
 Layar kunci:
 
@@ -642,6 +648,66 @@ Layar kunci:
 4. **Onboarding saat pertama dijalankan:** tambah connection sandbox → buat app → copy kredensial → kirim payment uji → lihat webhook sampai.
 
 Status selalu ditampilkan sebagai teks label, tidak hanya warna. Setiap layar dicek di lebar mobile.
+
+## Konvensi
+
+Diputuskan di fase 0 dan berlaku untuk semua fase berikutnya.
+
+### Kontrak HTTP
+
+- `api/openapi.yaml` (OpenAPI 3.1) adalah sumber kebenaran kontrak. Setiap perubahan endpoint mengubah spec di commit yang sama. Spec di-lint dengan Redocly (`make lint-api`, aturan di `api/redocly.yaml`).
+- Tipe TypeScript di-generate dengan openapi-typescript ke `frontend/src/shared/api/schema.d.ts` (`make gen`) dan dipakai lewat openapi-fetch. Hasil generate di-commit; gerbang `make ci` gagal kalau hasilnya tidak sinkron dengan spec.
+- Webhook keluar ke app didokumentasikan di bagian `webhooks` spec.
+
+### ID publik
+
+- Format `<prefix>_<ULID>`, misalnya `pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C`: ULID 26 karakter Crockford base32 huruf besar, sehingga ID terurut menurut waktu pembuatan. Parse menerima huruf kecil dan menormalkannya.
+- Prefix: `app_`, `pay_`, `con_`, `whe_`, `evt_`, `usr_`, `key_`, `rec_`, `aud_`. Paket `internal/pkg/id` membuat, mem-parse, dan memvalidasi ID; prefix yang salah ditolak.
+- Kolom `public_id TEXT NOT NULL UNIQUE` disimpan di samping `id BIGSERIAL` internal. ID bigint tidak pernah keluar lewat API baru.
+- Pengecualian sementara: endpoint lama (`/v1/payments`, `/admin/tenants`, `/admin/payments`, `/admin/ledger`, `/admin/webhook-deliveries`) masih memakai ID bigint sampai entitasnya dipindah (user di fase 1, app dan payment di fase 2, delivery di fase 4).
+
+### Error
+
+- Semua error, di semua surface, berbentuk `{"error":{"code":"...","message":"...","details":{}}}`. `details` selalu objek.
+- `code` stabil dan didefinisikan sebagai konstanta di `internal/domain`; `response.Error` memetakan error domain ke status HTTP dan code. Daftar lengkap ada di `ErrorCode` di spec dan dijaga sinkron oleh test backend. Code baru boleh ditambah; arti code lama tidak berubah.
+- Error 5xx selalu memakai message generik; detail internal hanya masuk log.
+- Kegagalan validasi field memakai `invalid_request` dengan `details.fields = [{field, rule}]` (nama field JSON, dot path untuk field bersarang). Pelanggaran aturan bisnis memakai `validation_failed`.
+- Elemen array di body ikut divalidasi per elemen. Contoh: item `POST /v1/payments` yang tidak valid menghasilkan `400 invalid_request` dengan `details.fields` berisi `{field: "items.0.quantity", ...}`, bukan `validation_failed`. Status tetap 400.
+- Path id yang bukan integer → `400 invalid_request` (`field: "id"`, `rule: "int"`). Id integer di bawah 1 tidak divalidasi terpisah: tidak cocok dengan baris mana pun, jadi hasilnya `404 not_found` seperti id yang tidak ada. Spec tetap mencantumkan `minimum: 1` sebagai rentang id yang valid. Endpoint dengan ID publik (`pay_…`, dst.) memvalidasi format dan prefix lewat `internal/pkg/id`.
+- Query parameter yang tidak valid ditolak (`400 invalid_request`) hanya di list cursor (`limit` di luar 1–200). List offset lama (`/admin/payments`, `/admin/ledger`, `/admin/webhook-deliveries`) tetap mengabaikan `tenant_id`/`from`/`to` yang tidak bisa di-parse dan memakai default untuk `limit` di luar rentang, sampai list itu pindah ke cursor.
+
+### Pagination
+
+- List baru memakai cursor: query `limit` (1–200, default 50; di luar rentang → `400 invalid_request`) dan `cursor`; respons `{"data": [...], "next_cursor": "..." | null}`.
+- Cursor bersifat opaque: base64url dari JSON berversi yang berisi nilai kolom urutan dan ID publik sebagai tie-breaker, misalnya `(occurred_at, public_id)`. Cursor tidak memuat ID bigint. Cursor rusak → `400 invalid_cursor`.
+- Query memakai keyset (`WHERE (sort_col, public_id) < ($1, $2) ORDER BY sort_col DESC, public_id DESC LIMIT n+1`) dengan index yang sesuai, bukan offset.
+- Helper ada di `internal/domain/pagination.go` (tipe dan codec cursor) dan transport (parsing query). List lama (`/admin/payments`, `/admin/ledger`, `/admin/webhook-deliveries`) masih offset dan pindah ke cursor saat fiturnya dikerjakan ulang (payment di fase 2, delivery di fase 4, ledger di fase 5).
+
+### Audit log
+
+- Tabel `audit_logs`: `public_id` (`aud_`), `occurred_at`, aktor (`actor_type` = `admin` | `system`, `actor_id`), `action` (`{target}.{verb}`, misalnya `tenant.update`), target (`target_type`, `target_id` sebagai teks), `before`/`after` JSONB, `ip`, `user_agent`, `request_id`.
+- Setiap mutasi admin mencatat satu baris di transaksi yang sama dengan perubahannya, lewat `AuditService`. Aktor dibawa lewat `context` (diisi middleware admin; `system` untuk seed, CLI, dan job). Pencatatan tanpa aktor ditolak.
+- Snapshot `before`/`after` dibentuk eksplisit per jenis target dan tidak pernah memuat secret: field rahasia dihilangkan, API key hanya 4 karakter terakhir. Sebagai pengaman kedua, key yang namanya (huruf kecil) mengandung `password`, `secret`, atau `token`, atau berakhiran `_enc`, disamarkan menjadi `"[REDACTED]"` di kedalaman mana pun sebelum disimpan.
+- Pengecualian redaksi: key seperti secret yang nilainya boolean atau `null` disimpan apa adanya, karena nilai itu tidak bisa membawa secret. Contohnya `must_change_password` di snapshot `admin_user.change_password`. Nilai string, angka, objek, dan array tetap disamarkan. Dipilih daripada allowlist nama key supaya flag baru tidak perlu didaftarkan satu per satu.
+- Sampai fase 1, `actor_id` berisi username admin; setelah tabel `users` ada, berisi `usr_…`.
+- `GET /admin/audit-logs` (cursor) adalah konsumen pertama cursor pagination dan ditampilkan di Settings.
+
+### Penyajian konsol
+
+- Di production, server Go menyajikan build konsol (`handler.SPA`) untuk `GET`/`HEAD` yang tidak cocok dengan route API. File yang ada disajikan langsung; path lain mendapat `index.html` supaya reload dan deep link berfungsi.
+- Path API yang tidak cocok mendapat `404 not_found` dalam envelope JSON, bukan `index.html`: `/v1`, `/admin`, `/healthz` beserta semua path di bawahnya, dan semua path di bawah `/webhooks/`. Method selain `GET`/`HEAD` di path konsol juga mendapat envelope JSON.
+- `/webhooks` persis (tanpa segmen berikutnya) adalah halaman Webhooks di konsol, jadi `GET /webhooks` menyajikan `index.html`. Ini aman karena callback gateway selalu di bawah `/webhooks/<gateway>` (sekarang `/webhooks/xendit`, nanti `/webhooks/<connection>`), dan aturannya berbasis path, bukan header `Accept`, supaya respons tidak bergantung pada klien. Route konsol baru tidak boleh memakai `/v1`, `/admin`, `/healthz`, atau path di bawah `/webhooks/`.
+- Di dev, proxy Vite meneruskan prefix yang sama ke backend dan melewatkan navigasi browser (`GET` dengan `Accept: text/html`) ke SPA.
+
+### Uang dan waktu
+
+- Uang: `int64` dalam minor unit + kode ISO 4217. Untuk IDR, minor unit yang dipakai KeiPay adalah rupiah utuh (eksponen 0), sesuai gateway; tampilan `Rp150.000`.
+- Waktu disimpan `timestamptz` UTC dan dikirim RFC 3339; konsol menampilkan Asia/Jakarta (WIB).
+
+### Port lokal dan gerbang kualitas
+
+- Port bisa diatur lewat `.env` (`HTTP_PORT`, `UI_PORT`, `POSTGRES_PORT`, `REDIS_PORT`) atau per perintah (`make dev API_PORT=18080 UI_PORT=15173`). Vite membaca target proxy dari `VITE_API_TARGET`.
+- `make ci` (`scripts/ci.sh`) adalah gerbang sebelum merge: gofmt, `go vet`, lint spec, cek hasil generate, migrasi up/down/up, `go test` dengan Postgres dan Redis asli, typecheck, test, dan build frontend, lalu smoke e2e Playwright terhadap server yang menyajikan build konsol. Postgres dan Redis jalan di project compose `keipay-ci` pada port 25432/26379 (API 28080) supaya tidak bentrok dengan stack dev, dan selalu dibongkar di akhir, juga saat gagal. CI di kemudian hari cukup memanggil target yang sama.
 
 ## Correctness Properties
 
@@ -669,22 +735,24 @@ Disusun supaya bisa dijadikan property-based atau table test.
 - **Sandbox (manual/CI opsional):** satu skenario end-to-end per PG dengan kredensial sandbox dari env CI. Dilewati kalau env tidak tersedia.
 - **Regresi:** semua test KeiPayment yang ada (`webhook_service_test.go`, `payment_service_test.go`, `sweeper_test.go`) tetap harus lulus setelah fase refactor, dan baru diubah setelah perilakunya memang sengaja diubah.
 
-## Rencana migrasi dari KeiPayment
+## Rencana fase
 
-Setiap fase bisa di-merge dan dijalankan sendiri. Fase 1–2 tidak boleh mengubah perilaku untuk app yang sudah ada.
+Setiap fase adalah satu branch dan satu PR yang bisa di-merge dan dijalankan sendiri. Fase 0–5 membuat KeiPay lengkap untuk satu gateway dengan konsol yang utuh; fase 6 ke atas menambah multi-gateway. Perubahan untuk app yang sudah ada dilakukan expand/contract, sehingga integrasi lama tetap jalan selama masa transisi.
 
-| Fase | Isi | Selesai kalau |
-|---|---|---|
-| 0. Persiapan OSS | Repo baru tanpa history (`keipay`) berbentuk monorepo `backend/` + `frontend/`, lisensi MIT, README, `SECURITY.md`, `CONTRIBUTING.md`; buang seed tenant internal dan contoh dengan nama produk internal; satu image Docker yang menyajikan API dan admin console | Repo publik bisa `make up && make seed && make dev`, dan `docker compose up` menjalankan semuanya |
-| 1. Port provider | `internal/provider` + adapter Xendit hasil pindahan `internal/xendit`; `PaymentService`/`WebhookService` memakai port | Semua test lama lulus tanpa perubahan perilaku |
-| 2. Model data | `merchants`, `connections`, `apps`, `app_connections`; migrasi mengubah env `XENDIT_SECRET_KEY`/`XENDIT_CALLBACK_TOKEN` menjadi satu connection milik merchant default; route `/webhooks/:provider/:public_id`; `/webhooks/xendit` tetap ada sebagai alias ke connection default | Webhook lama dan baru sama-sama berfungsi |
-| 3. Attempt dan routing dasar | `payment_attempts`, `RoutingService` (explicit, priority, weighted statis), attempt loop + adopsi, reconciler | Properti 1–7, 10, 11 lulus |
-| 4. Adapter Midtrans | Snap + webhook + status + cancel | Skenario sandbox end-to-end lulus |
-| 5. Adapter DOKU | Checkout + webhook + status | Skenario sandbox end-to-end lulus |
-| 6. Health dan UI | Breaker Redis, maintenance, halaman Connections/Routing/Timeline, onboarding | Diverifikasi di browser, termasuk lebar mobile |
-| 7. v2 | Bobot adaptif, `cheapest`, refund lewat port | Spec terpisah |
+| Fase | Isi | Butuh | Selesai kalau |
+|---|---|---|---|
+| 0. Fondasi | Konvensi backend (ID berprefix, error envelope, cursor pagination, audit log), kontrak `api/openapi.yaml` + `make gen`, fondasi frontend (stack, struktur per fitur, `DESIGN.md`, komponen bersama, app shell), port lokal yang bisa diatur, gerbang `make ci` | – | `make ci` lulus; konsol lama tetap berfungsi, rapi di mobile |
+| 1. Auth dan user | `admin_users` → `users` (`usr_`, role owner/admin/viewer), session cookie di Redis, CSRF, first-run setup, rate limit login, matriks otorisasi per role | 0 | Matriks role × endpoint teruji |
+| 2. Apps dan identifier | `tenants` → `apps` (`app_`, environment test/live), `app_api_keys` dengan rotasi tumpang tindih, payment `pay_` + metadata + `Idempotency-Key`, reference `kp_<pay id>` lewat tabel dengan fallback `external_id` lama, `/admin/apps` | 1 | Lookup legacy dan key per environment teruji |
+| 3. Connections | `internal/provider` (port, registry, kelas error), Xendit dipindah ke `internal/provider/xendit`, `merchants`, `connections` (`con_`), `connection_channels`, migrasi env Xendit menjadi connection, webhook per connection dengan alias `/webhooks/xendit`, form dari schema | 2 | Verifikasi webhook per connection dan alias lama berfungsi |
+| 4. Webhook router | Katalog event, `webhook_endpoints` (`whe_`) per app, `events` (`evt_`) + delivery fan-out, envelope v2 dan `X-KeiPay-Signature`, header lama untuk endpoint hasil migrasi, auto-disable, `inbound_webhooks` | 2, 3 | Fan-out, signature v1, dan replay teruji |
+| 5. Rekonsiliasi | `ledger_entries` → `payment_reports`, matcher independen sumber, `reconciliation_runs` (`rec_`) + item sebagai job asynq, resolve dengan audit, export CSV streaming | 3, 4 | Setiap jenis hasil match teruji |
+| 6. Routing multi-gateway | `app_connections`, konfigurasi routing berversi, `payment_attempts`, attempt loop + adopsi, `RoutingService`, reconciler, simulate, timeline payment | 3, 4 | Properti 1–7, 10, 11 lulus |
+| 7. Adapter Midtrans | Snap + webhook + status + cancel, tanpa perubahan frontend | 6 | Skenario sandbox end-to-end lulus |
+| 8. Adapter DOKU | Jalur Checkout atau SNAP BI (lihat Open Questions), tanpa perubahan frontend | 6 | Skenario sandbox end-to-end lulus |
+| 9. Health dan dashboard | Circuit breaker Redis, maintenance manual/terjadwal, `/admin/health`, dashboard | 6 | Transisi breaker dan fail-open teruji, diverifikasi di browser |
 
-Di fase 2, kalau ada app yang memakai KeiPayment untuk bisnis di luar pemilik akun Xendit, app itu harus dipindah ke connection milik pemiliknya sendiri. Jangan terus memakai connection default.
+Di fase 3, kalau ada app yang dipakai untuk bisnis di luar pemilik akun Xendit, app itu harus dipindah ke connection milik pemiliknya sendiri. Jangan terus memakai connection default.
 
 ## Catatan hukum
 
@@ -696,6 +764,6 @@ Di fase 2, kalau ada app yang memakai KeiPayment untuk bisnis di luar pemilik ak
 
 1. ~~Nama repo dan lisensi~~ Diputuskan: `keipay`, MIT.
 2. DOKU: integrasi Checkout biasa atau jalur SNAP BI? Ini memengaruhi skema signature dan kredensial.
-3. Apakah `payment_id` publik perlu diganti ke format ULID (`pay_...`) sekarang? Ini memengaruhi `reference` dan URL, dan lebih murah dilakukan di fase 2.
+3. ~~Format `payment_id` publik~~ Diputuskan: `pay_<ULID>` di fase 2 (lihat [Konvensi](#konvensi)).
 4. Perlu dukungan multi-currency di v1, atau IDR saja?
 5. Batas waktu masa transisi header `X-Kei-Signature` lama.

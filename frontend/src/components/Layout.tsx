@@ -33,7 +33,7 @@ export default function Layout() {
             <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-ink">
               <span className="text-caption font-medium text-canvas">K</span>
             </div>
-            <span className="text-title-sm text-ink">KeiPayment</span>
+            <span className="text-title-sm text-ink">KeiPay</span>
           </div>
 
           <div className="flex items-center gap-4">

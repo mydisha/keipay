@@ -1,4 +1,4 @@
-// Package handler contains HTTP handlers for the KeiPayment API.
+// Package handler contains HTTP handlers for the KeiPay API.
 //
 // Handler Responsibilities:
 // - Parse HTTP requests (JSON body, query params, path params)

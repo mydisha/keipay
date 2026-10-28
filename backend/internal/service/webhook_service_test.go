@@ -375,7 +375,7 @@ func TestProcessLatePaidAfterSettledIsIgnored(t *testing.T) {
 }
 
 // Regression: a callback whose amount differs from the payment (e.g. an invoice
-// made outside KeiPayment that reused the external_id) must not mark it paid.
+// made outside KeiPay that reused the external_id) must not mark it paid.
 func TestProcessAmountMismatchIsNotApplied(t *testing.T) {
 	svc, pr, lr, wr, _ := newSvc()
 	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", Amount: 1000, PaidAmount: 1000}

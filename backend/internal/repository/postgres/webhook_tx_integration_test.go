@@ -19,7 +19,7 @@ import (
 // These tests need a migrated Postgres. They are skipped unless
 // KEI_TEST_POSTGRES_DSN is set, e.g.
 //
-//	KEI_TEST_POSTGRES_DSN=postgres://kei:kei@localhost:5432/kei_payment?sslmode=disable \
+//	KEI_TEST_POSTGRES_DSN=postgres://keipay:keipay@localhost:5432/keipay?sslmode=disable \
 //	  go test ./internal/repository/postgres/ -run Integration
 
 type fixture struct {

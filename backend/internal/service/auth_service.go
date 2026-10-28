@@ -54,7 +54,7 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (*Lo
 		Subject:   username,
 		ExpiresAt: jwt.NewNumericDate(time.Now().Add(s.ttl)),
 		IssuedAt:  jwt.NewNumericDate(time.Now()),
-		Issuer:    "kei-payment",
+		Issuer:    "keipay",
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString(s.jwtSecret)

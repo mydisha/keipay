@@ -1,4 +1,4 @@
-// Command server runs the KeiPayment HTTP API and (optionally) the asynq worker.
+// Command server runs the KeiPay HTTP API and (optionally) the asynq worker.
 package main
 
 import (
@@ -43,7 +43,7 @@ func main() {
 
 	// Initialize logger.
 	log, err := logger.New(logger.Options{
-		Service:    "kei-payment",
+		Service:    "keipay",
 		Env:        cfg.AppEnv,
 		Level:      cfg.LogLevel,
 		Format:     cfg.LogFormat,
@@ -55,7 +55,7 @@ func main() {
 	defer func() { _ = log.Sync() }()
 
 	// Log build and startup information.
-	log.Info("starting kei-payment",
+	log.Info("starting keipay",
 		zap.String("version", Version),
 		zap.String("commit", Commit),
 		zap.String("build_time", BuildTime),

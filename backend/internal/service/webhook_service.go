@@ -73,7 +73,7 @@ func NewWebhookService(
 	return &WebhookService{payments: payments, ledger: ledger, webhooks: webhooks, tx: tx, idemp: idemp, enqueuer: enqueuer}
 }
 
-// ForwardPayload is the normalized event KeiPayment forwards to tenants.
+// ForwardPayload is the normalized event KeiPay forwards to tenants.
 type ForwardPayload struct {
 	Event      string               `json:"event"`
 	PaymentID  int64                `json:"payment_id"`
@@ -162,7 +162,7 @@ func (s *WebhookService) apply(ctx context.Context, cb XenditInvoiceCallback, ra
 	}
 
 	// Invoices have a fixed amount, so a mismatch means the callback is not for
-	// this payment (e.g. an invoice made outside KeiPayment reused external_id).
+	// this payment (e.g. an invoice made outside KeiPay reused external_id).
 	// A missing amount/currency is not treated as a mismatch.
 	if (cb.Amount != 0 && cb.Amount != p.Amount) || (cb.Currency != "" && cb.Currency != p.Currency) {
 		return applyResult{rejected: fmt.Errorf("%w: payment %d is %d %s, callback has %d %s",

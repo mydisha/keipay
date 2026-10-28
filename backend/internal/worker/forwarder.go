@@ -71,7 +71,7 @@ func (f *Forwarder) HandleWebhookForward(ctx context.Context, task *asynq.Task) 
 	}
 
 	// Sign the forward with the tenant's plaintext secret (decrypted at rest) so
-	// the tenant verifies using the same secret KeiPayment issued to them.
+	// the tenant verifies using the same secret KeiPay issued to them.
 	secret, err := f.cipher.Decrypt(t.APISecretEnc)
 	if err != nil {
 		_ = f.webhooks.MarkFailed(ctx, d.ID, d.Attempts+1, "secret decrypt failed")

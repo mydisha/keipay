@@ -38,7 +38,7 @@ export default function Login() {
           <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-ink">
             <span className="text-title-md font-medium text-canvas">K</span>
           </div>
-          <h1 className="text-display-md text-ink">KeiPayment</h1>
+          <h1 className="text-display-md text-ink">KeiPay</h1>
           <p className="mt-2 text-body-md text-muted">
             Sign in to the admin dashboard
           </p>

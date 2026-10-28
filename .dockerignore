@@ -1,0 +1,16 @@
+.git/
+.github/
+docs/
+.env
+.env.*
+!.env.example
+/keipay
+/keipay-migrate
+backend/bin/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.md
+.DS_Store
+.idea/
+.vscode/

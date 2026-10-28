@@ -1,0 +1,107 @@
+name: keipay
+
+# `docker compose up -d` runs the whole stack: Postgres, Redis, migrations,
+# and one keipay container serving the API, worker and admin console on :8080.
+# For local development, `make up` starts only postgres + redis.
+#
+# Required in .env (or the shell): JWT_SECRET and ENCRYPTION_KEY
+# (`openssl rand -hex 32` each), XENDIT_SECRET_KEY, XENDIT_CALLBACK_TOKEN.
+# They are not enforced here so `make up` works before .env is filled in;
+# migrate and keipay exit with a "missing required config" error instead.
+#
+# Host ports: KEIPAY_PORT (8080), POSTGRES_PORT (5432), REDIS_PORT (6379).
+# If you change POSTGRES_PORT or REDIS_PORT, update POSTGRES_DSN / REDIS_ADDR
+# in .env for `make dev` to match.
+
+x-keipay-build: &keipay-build
+  context: .
+  dockerfile: deploy/Dockerfile
+  args:
+    VERSION: ${KEIPAY_VERSION:-dev}
+    SOURCE_COMMIT: ${SOURCE_COMMIT:-}
+
+x-keipay-env: &keipay-env
+  APP_ENV: ${APP_ENV:-production}
+  HTTP_PORT: 8080
+  HTTP_BASE_URL: ${HTTP_BASE_URL:-http://localhost:8080}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  LOG_FORMAT: ${LOG_FORMAT:-json}
+  POSTGRES_DSN: postgres://keipay:${POSTGRES_PASSWORD:-keipay}@postgres:5432/keipay?sslmode=disable
+  REDIS_ADDR: redis:6379
+  REDIS_PASSWORD: ""
+  REDIS_DB: 0
+  XENDIT_SECRET_KEY: ${XENDIT_SECRET_KEY:-}
+  XENDIT_CALLBACK_TOKEN: ${XENDIT_CALLBACK_TOKEN:-}
+  JWT_SECRET: ${JWT_SECRET:-}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+  RUN_WORKER: "true"
+  WEBHOOK_MAX_RETRY: ${WEBHOOK_MAX_RETRY:-5}
+  SHUTDOWN_TIMEOUT: 30s
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: keipay
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-keipay}
+      POSTGRES_DB: keipay
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keipay -d keipay"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: applies migrations, then exits.
+  migrate:
+    image: ${KEIPAY_IMAGE:-keipay:local}
+    build: *keipay-build
+    entrypoint: ["/app/keipay-migrate"]
+    environment: *keipay-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  keipay:
+    image: ${KEIPAY_IMAGE:-keipay:local}
+    build: *keipay-build
+    restart: unless-stopped
+    environment: *keipay-env
+    ports:
+      - "${KEIPAY_PORT:-8080}:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+
+  # Optional queue UI: docker compose --profile tools up -d asynqmon
+  asynqmon:
+    image: hibiken/asynqmon:latest
+    profiles: ["tools"]
+    command: ["--redis-addr=redis:6379"]
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      - redis
+
+volumes:
+  pgdata:

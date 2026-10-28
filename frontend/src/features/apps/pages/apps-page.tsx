@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { toast } from "sonner";
 import { usePermission } from "@/features/auth/components/can";
-import { useMode, type Mode } from "@/shared/lib/mode";
+import { useEnvironmentFilter } from "@/shared/lib/mode";
 import { strings } from "@/shared/lib/strings";
 import { loadMoreList } from "@/shared/lib/use-cursor-pages";
 import { Button } from "@/shared/ui/button";
@@ -22,7 +22,6 @@ import {
   useApps,
   type App,
   type AppCreated,
-  type AppEnvironment,
   type AppStatus,
 } from "../api/apps";
 import { CreateAppDialog } from "../components/create-app-dialog";
@@ -40,19 +39,10 @@ function createdSecrets(result: AppCreated) {
   ];
 }
 
-/** The environment chip starts at the mode and goes back to it whenever the mode switch changes. */
-function useEnvironmentFilter(mode: Mode) {
-  const [state, setState] = useState<{ mode: Mode; environment: AppEnvironment | null }>({ mode, environment: mode });
-  if (state.mode !== mode) setState({ mode, environment: mode });
-  const environment = state.mode === mode ? state.environment : mode;
-  return [environment, (next: AppEnvironment | null) => setState({ mode, environment: next })] as const;
-}
-
 export function AppsPage() {
   const canWrite = usePermission("apps:write");
   const navigate = useNavigate();
-  const { mode } = useMode();
-  const [environment, setEnvironment] = useEnvironmentFilter(mode);
+  const [environment, setEnvironment] = useEnvironmentFilter();
   const [status, setStatus] = useState<AppStatus | null>(null);
   const apps = useApps({ environment, status });
   const list = loadMoreList(apps);

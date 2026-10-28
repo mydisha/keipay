@@ -4,6 +4,7 @@ type Schemas = components["schemas"];
 
 export const APP_ID = "app_01JBKQ7Z8M4X2Y6V3N9T5R1W0C";
 export const PAY_ID = "pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0D";
+export const CON_ID = "con_01JBKQ7Z8M4X2Y6V3N9T5R1W0G";
 
 export function app(overrides: Partial<Schemas["App"]> = {}): Schemas["App"] {
   return {
@@ -16,6 +17,7 @@ export function app(overrides: Partial<Schemas["App"]> = {}): Schemas["App"] {
     webhook_url: "https://demo.example.com/webhooks/kei",
     redirect_success_url: "",
     redirect_failure_url: "",
+    default_connection: null,
     created_at: "2026-01-01T00:00:00Z",
     updated_at: "2026-01-01T00:00:00Z",
     ...overrides,
@@ -134,14 +136,25 @@ export const ROLE_PERMISSIONS: Record<Schemas["UserRole"], Schemas["Permission"]
   owner: [
     "apps:read",
     "apps:write",
+    "connections:read",
+    "connections:write",
     "audit:read",
     "deliveries:read",
     "deliveries:replay",
     "payments:read",
     "users:manage",
   ],
-  admin: ["apps:read", "apps:write", "audit:read", "deliveries:read", "deliveries:replay", "payments:read"],
-  viewer: ["apps:read", "deliveries:read", "payments:read"],
+  admin: [
+    "apps:read",
+    "apps:write",
+    "connections:read",
+    "connections:write",
+    "audit:read",
+    "deliveries:read",
+    "deliveries:replay",
+    "payments:read",
+  ],
+  viewer: ["apps:read", "connections:read", "deliveries:read", "payments:read"],
 };
 
 export function user(overrides: Partial<Schemas["User"]> = {}): Schemas["User"] {
@@ -167,4 +180,131 @@ export function me(
 ): Schemas["MeResponse"] {
   const u = user(overrides);
   return { user: u, permissions: permissions ?? ROLE_PERMISSIONS[u.role] };
+}
+
+/** A provider descriptor shaped like Xendit's, with one field of every type. */
+export function provider(overrides: Partial<Schemas["Provider"]> = {}): Schemas["Provider"] {
+  return {
+    name: "xendit",
+    display_name: "Xendit",
+    description: "Invoices on your own Xendit account.",
+    docs_url: "https://docs.example.com/xendit",
+    credential_schema: {
+      fields: [
+        {
+          key: "secret_key",
+          type: "string",
+          label: "Secret API key",
+          description: "Dashboard → Settings → API keys.",
+          placeholder: "xnd_development_…",
+          secret: true,
+          required: true,
+          default: null,
+          max_length: 255,
+          pattern: "^xnd_(development|production)_[A-Za-z0-9]+$",
+          pattern_hint: "Starts with xnd_development_ (test) or xnd_production_ (live).",
+        },
+        {
+          key: "callback_token",
+          type: "string",
+          label: "Webhook verification token",
+          description: "Dashboard → Settings → Webhooks.",
+          secret: true,
+          required: true,
+          default: null,
+          min_length: 8,
+          max_length: 255,
+        },
+      ],
+    },
+    settings_schema: {
+      fields: [
+        {
+          key: "invoice_duration",
+          type: "integer",
+          label: "Invoice lifetime (seconds)",
+          description: "Empty uses the provider's default.",
+          secret: false,
+          required: false,
+          default: null,
+          minimum: 60,
+          maximum: 31536000,
+        },
+        {
+          key: "locale",
+          type: "enum",
+          label: "Checkout language",
+          description: "",
+          secret: false,
+          required: false,
+          default: null,
+          options: [
+            { value: "id", label: "Indonesian" },
+            { value: "en", label: "English" },
+          ],
+        },
+      ],
+    },
+    capabilities: {
+      channels: [
+        { code: "QRIS", label: "QRIS" },
+        { code: "VA_BCA", label: "BCA Virtual Account" },
+        { code: "EWALLET_OVO", label: "OVO" },
+      ],
+      currencies: ["IDR"],
+      can_restrict_channels: true,
+      can_cancel: true,
+      reports_fee: true,
+    },
+    webhook_setup: {
+      instructions: ["Open Settings → Webhooks.", "Paste the URL into Invoices paid.", "Save."],
+      dashboard_url: "https://dashboard.example.com/settings/webhooks",
+    },
+    ...overrides,
+  };
+}
+
+export function connectionListItem(
+  overrides: Partial<Schemas["ConnectionListItem"]> = {},
+): Schemas["ConnectionListItem"] {
+  return {
+    id: CON_ID,
+    name: "xendit-test",
+    provider: "xendit",
+    environment: "test",
+    status: "active",
+    legacy_webhook_alias: false,
+    last_tested_at: null,
+    last_test_status: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
+export function connection(overrides: Partial<Schemas["Connection"]> = {}): Schemas["Connection"] {
+  return {
+    ...connectionListItem(),
+    credentials: [
+      { key: "secret_key", last4: "a1b2" },
+      { key: "callback_token", last4: null },
+    ],
+    settings: {},
+    channels: [
+      { channel: "QRIS", label: "QRIS", enabled: true },
+      { channel: "VA_BCA", label: "BCA Virtual Account", enabled: true },
+      { channel: "EWALLET_OVO", label: "OVO", enabled: true },
+    ],
+    webhook_url: `https://pay.example.com/webhooks/xendit/${CON_ID}`,
+    last_test_error: null,
+    ...overrides,
+  };
+}
+
+/** The `default_connection` an app carries; follows `connection()` unless overridden. */
+export function connectionSummary(
+  overrides: Partial<Schemas["ConnectionSummary"]> = {},
+): Schemas["ConnectionSummary"] {
+  const { id, name, provider: providerName, environment, status } = connection();
+  return { id, name, provider: providerName, environment, status, ...overrides };
 }

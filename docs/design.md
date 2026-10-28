@@ -46,7 +46,7 @@ App C ─┘        ▲                 └─► DOKU     (API key milik mercha
 | **Merchant** | Pemilik bisnis dan pemilik akun PG. Self-host untuk satu bisnis berarti satu merchant default. |
 | **Connection** | Satu set kredensial ke satu akun PG milik merchant, misalnya `xendit-prod` atau `midtrans-sandbox`. |
 | **Channel** | Metode pembayaran yang dinormalisasi: `QRIS`, `VA_BCA`, `EWALLET_OVO`, `CARD`, dan seterusnya. |
-| **App** | Aplikasi klien yang memanggil KeiPay. Pengganti `tenant` di KeiPayment. Punya `api_key`/`api_secret` dan `webhook_url`. |
+| **App** | Aplikasi klien yang memanggil KeiPay. Pengganti `tenant` di KeiPayment. Punya satu environment (`test` atau `live`), banyak API key (`app_api_keys`, masing-masing dengan secret HMAC sendiri), satu webhook signing secret, dan `webhook_url`. |
 | **Payment** | Satu permintaan pembayaran dari app, unik per `(app_id, order_id)`. |
 | **Attempt** | Satu percobaan membuat checkout di satu connection. Satu payment bisa punya beberapa attempt karena fallback, tapi paling banyak **satu** yang aktif. |
 
@@ -421,7 +421,8 @@ CREATE TABLE connection_channels (
   PRIMARY KEY (connection_id, channel)
 );
 
-ALTER TABLE tenants RENAME TO apps;
+-- apps dibuat di fase 2 sebagai tabel baru (lihat "Apps, API key, dan identifier");
+-- tenants tidak di-rename.
 ALTER TABLE apps ADD COLUMN merchant_id BIGINT REFERENCES merchants(id);
 ALTER TABLE apps ADD COLUMN routing_config JSONB NOT NULL DEFAULT '{}';
 -- setelah backfill: SET NOT NULL pada merchant_id
@@ -436,7 +437,7 @@ CREATE TABLE app_connections (
 );
 -- invariant merchant sama dicek di service (ConnectionService/AppService), bukan FK
 
-ALTER TABLE payments RENAME COLUMN tenant_id TO app_id;
+-- payments.app_id ditambahkan di fase 2; tenant_id di-drop di migrasi contract.
 ALTER TABLE payments RENAME COLUMN invoice_url TO checkout_url;
 ALTER TABLE payments ADD COLUMN provider TEXT;
 ALTER TABLE payments ADD COLUMN connection_id BIGINT REFERENCES connections(id);
@@ -481,9 +482,8 @@ ALTER TABLE inbound_webhooks ADD COLUMN result TEXT;        -- applied|stale|mis
 -- UNIQUE (xendit_id, status) lama diganti UNIQUE (connection_id, event_key, status),
 -- dengan status = status asli PG; semantik dedupe sama seperti sekarang, tapi per connection
 
-ALTER TABLE webhook_deliveries RENAME COLUMN tenant_id TO app_id;
+-- webhook_deliveries.app_id dan ledger_entries.app_id ditambahkan di fase 2.
 ALTER TABLE ledger_entries RENAME TO payment_reports;       -- laporan, bukan settlement
-ALTER TABLE payment_reports RENAME COLUMN tenant_id TO app_id;
 ALTER TABLE payment_reports RENAME COLUMN xendit_fee TO provider_fee;
 ALTER TABLE payment_reports ADD COLUMN connection_id BIGINT REFERENCES connections(id);
 -- UNIQUE (payment_id, type) tetap
@@ -493,7 +493,7 @@ Catatan terhadap skema yang ada (`000001_init.up.sql`):
 
 - `payments.external_id` (`NOT NULL UNIQUE`, format `{slug}:{order_id}`) tidak lagi dipakai untuk routing. Kolom ini dibiarkan untuk data lama dan diisi `kp_<payment_public_id>` untuk payment baru, lalu `NOT NULL` dilepas di versi mayor berikutnya.
 - `payments.xendit_invoice_id` dan index `idx_payments_xendit_invoice_id` di-backfill ke `payment_attempts` (satu attempt `CREATED` per payment lama, `reference = external_id`), lalu di-drop setelah adapter Xendit hanya membaca dari attempt.
-- Index lama yang memakai `tenant_id` ikut ter-rename kolomnya. Nama index (`idx_payments_tenant_status`, `idx_deliveries_tenant_status`, `idx_ledger_tenant_created`) di-rename supaya konsisten.
+- Index lama yang memakai `tenant_id` dibiarkan sampai migrasi contract; fase 2 menambah index padanannya di `app_id`.
 
 ### Penyimpanan kredensial
 
@@ -602,9 +602,11 @@ GET/PUT         /admin/connections/:id/channels
 POST            /admin/connections/:id/maintenance
 GET             /admin/providers                 (daftar adapter + CredentialSchema untuk form UI)
 
-GET/POST        /admin/apps                      (pengganti /admin/tenants)
-GET/PUT         /admin/apps/:id
-POST            /admin/apps/:id/rotate
+GET/POST        /admin/apps                      (pengganti /admin/tenants, fase 2)
+GET/PATCH       /admin/apps/:id
+POST            /admin/apps/:id/disable | /enable
+GET/POST        /admin/apps/:id/keys
+POST            /admin/apps/:id/keys/:key_id/rotate | /revoke
 GET/PUT         /admin/apps/:id/routing
 POST            /admin/apps/:id/routing/simulate (dry-run Plan, tidak memanggil PG)
 POST            /admin/apps/:id/webhook/test     (kirim event uji ke webhook_url)
@@ -633,7 +635,7 @@ Navigasi final (sidebar yang bisa diciutkan, top bar dengan switch Test/Live dan
 | Menu | Isi akhir | Fase 0 |
 |---|---|---|
 | Dashboard | Volume per provider, success rate create, status health, delivery gagal, item rekonsiliasi belum resolved | Empty state "segera hadir" |
-| Apps | List → detail dengan tab Overview, API keys, Webhooks, Routing | Halaman tenant lama dipindah ke sini |
+| Apps | List → detail dengan tab Overview, API keys, Webhooks, Routing | Halaman tenant lama dipindah ke sini; fase 2: list cursor + detail dengan tab (Webhooks dan Routing masih empty state) |
 | Connections | List + wizard tambah connection, health per channel, toggle maintenance | Empty state "segera hadir" |
 | Webhooks | Tab Outbound (delivery ke app, replay) dan Inbound (dari PG, raw + hasil verifikasi) | Halaman delivery lama (Outbound) |
 | Payments | List + **timeline** per payment | Halaman payment lama |
@@ -664,7 +666,7 @@ Diputuskan di fase 0 dan berlaku untuk semua fase berikutnya.
 - Format `<prefix>_<ULID>`, misalnya `pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C`: ULID 26 karakter Crockford base32 huruf besar, sehingga ID terurut menurut waktu pembuatan. Parse menerima huruf kecil dan menormalkannya.
 - Prefix: `app_`, `pay_`, `con_`, `whe_`, `evt_`, `usr_`, `key_`, `rec_`, `aud_`. Paket `internal/pkg/id` membuat, mem-parse, dan memvalidasi ID; prefix yang salah ditolak.
 - Kolom `public_id TEXT NOT NULL UNIQUE` disimpan di samping `id BIGSERIAL` internal. ID bigint tidak pernah keluar lewat API baru.
-- Pengecualian sementara: endpoint lama (`/v1/payments`, `/admin/tenants`, `/admin/payments`, `/admin/ledger`, `/admin/webhook-deliveries`) masih memakai ID bigint sampai entitasnya dipindah (app dan payment di fase 2, delivery di fase 4). User sudah memakai `usr_` sejak fase 1.
+- Pengecualian sementara: id bigint delivery (`/admin/webhook-deliveries`, replay) dan ledger entry (`/admin/ledger`) tetap keluar sampai entitasnya dipindah (delivery di fase 4, ledger di fase 5). Sejak fase 2, app (`app_`), API key (`key_`), dan payment (`pay_`) memakai ID publik di semua respons admin, termasuk referensi app/payment di baris ledger dan delivery. Satu-satunya bigint app/payment yang masih keluar adalah `payment_id` di `/v1` dan di payload webhook v1, demi kompatibilitas integrasi lama; `GET /v1/payments/{id}` menerima `pay_…` maupun integer lama.
 
 ### Error
 
@@ -674,18 +676,18 @@ Diputuskan di fase 0 dan berlaku untuk semua fase berikutnya.
 - Kegagalan validasi field memakai `invalid_request` dengan `details.fields = [{field, rule}]` (nama field JSON, dot path untuk field bersarang). Pelanggaran aturan bisnis memakai `validation_failed`.
 - Elemen array di body ikut divalidasi per elemen. Contoh: item `POST /v1/payments` yang tidak valid menghasilkan `400 invalid_request` dengan `details.fields` berisi `{field: "items.0.quantity", ...}`, bukan `validation_failed`. Status tetap 400.
 - Path id yang bukan integer → `400 invalid_request` (`field: "id"`, `rule: "int"`). Id integer di bawah 1 tidak divalidasi terpisah: tidak cocok dengan baris mana pun, jadi hasilnya `404 not_found` seperti id yang tidak ada. Spec tetap mencantumkan `minimum: 1` sebagai rentang id yang valid. Endpoint dengan ID publik (`pay_…`, dst.) memvalidasi format dan prefix lewat `internal/pkg/id`.
-- Query parameter yang tidak valid ditolak (`400 invalid_request`) hanya di list cursor (`limit` di luar 1–200). List offset lama (`/admin/payments`, `/admin/ledger`, `/admin/webhook-deliveries`) tetap mengabaikan `tenant_id`/`from`/`to` yang tidak bisa di-parse dan memakai default untuk `limit` di luar rentang, sampai list itu pindah ke cursor.
+- Query parameter yang tidak valid ditolak (`400 invalid_request`) di list cursor: `limit` di luar 1–200, enum yang tidak dikenal (rule `oneof`), ID publik yang salah format (rule `public_id`), dan waktu yang bukan RFC 3339 (rule `datetime`). List offset lama (`/admin/ledger`, `/admin/webhook-deliveries`) tetap mengabaikan `app_id`/`from`/`to` yang tidak bisa di-parse dan memakai default untuk `limit` di luar rentang, sampai list itu pindah ke cursor. `app_id` yang formatnya benar tapi tidak cocok dengan app mana pun tetap menjadi filter, jadi hasilnya kosong, sama seperti `/admin/payments`.
 
 ### Pagination
 
 - List baru memakai cursor: query `limit` (1–200, default 50; di luar rentang → `400 invalid_request`) dan `cursor`; respons `{"data": [...], "next_cursor": "..." | null}`.
 - Cursor bersifat opaque: base64url dari JSON berversi yang berisi nilai kolom urutan dan ID publik sebagai tie-breaker, misalnya `(occurred_at, public_id)`. Cursor tidak memuat ID bigint. Cursor rusak → `400 invalid_cursor`.
 - Query memakai keyset (`WHERE (sort_col, public_id) < ($1, $2) ORDER BY sort_col DESC, public_id DESC LIMIT n+1`) dengan index yang sesuai, bukan offset.
-- Helper ada di `internal/domain/pagination.go` (tipe dan codec cursor) dan transport (parsing query). List lama (`/admin/payments`, `/admin/ledger`, `/admin/webhook-deliveries`) masih offset dan pindah ke cursor saat fiturnya dikerjakan ulang (payment di fase 2, delivery di fase 4, ledger di fase 5).
+- Helper ada di `internal/domain/pagination.go` (tipe dan codec cursor) dan transport (parsing query). `/admin/payments` pindah ke cursor di fase 2; `/admin/ledger` dan `/admin/webhook-deliveries` masih offset dan pindah saat fiturnya dikerjakan ulang (delivery di fase 4, ledger di fase 5).
 
 ### Audit log
 
-- Tabel `audit_logs`: `public_id` (`aud_`), `occurred_at`, aktor (`actor_type` = `admin` | `system`, `actor_id`), `action` (`{target}.{verb}`, misalnya `tenant.update`), target (`target_type`, `target_id` sebagai teks), `before`/`after` JSONB, `ip`, `user_agent`, `request_id`.
+- Tabel `audit_logs`: `public_id` (`aud_`), `occurred_at`, aktor (`actor_type` = `admin` | `system`, `actor_id`), `action` (`{target}.{verb}`, misalnya `app.update`), target (`target_type`, `target_id` sebagai teks), `before`/`after` JSONB, `ip`, `user_agent`, `request_id`.
 - Setiap mutasi admin mencatat satu baris di transaksi yang sama dengan perubahannya, lewat `AuditService`. Aktor dibawa lewat `context` (diisi middleware admin; `system` untuk seed, CLI, dan job). Pencatatan tanpa aktor ditolak.
 - Snapshot `before`/`after` dibentuk eksplisit per jenis target dan tidak pernah memuat secret: field rahasia dihilangkan, API key hanya 4 karakter terakhir. Sebagai pengaman kedua, key yang namanya (huruf kecil) mengandung `password`, `secret`, atau `token`, atau berakhiran `_enc`, disamarkan menjadi `"[REDACTED]"` di kedalaman mana pun sebelum disimpan.
 - Pengecualian redaksi: key seperti secret yang nilainya boolean atau `null` disimpan apa adanya, karena nilai itu tidak bisa membawa secret. Contohnya `must_change_password` di snapshot `admin_user.change_password`. Nilai string, angka, objek, dan array tetap disamarkan. Dipilih daripada allowlist nama key supaya flag baru tidak perlu didaftarkan satu per satu.
@@ -714,17 +716,50 @@ Diputuskan di fase 1.
 
 | Permission | owner | admin | viewer |
 |---|---|---|---|
-| `tenants:read`, `payments:read`, `deliveries:read` | ya | ya | ya |
-| `tenants:write`, `deliveries:replay`, `audit:read` | ya | ya | tidak |
+| `apps:read`, `payments:read`, `deliveries:read` | ya | ya | ya |
+| `apps:write`, `deliveries:replay`, `audit:read` | ya | ya | tidak |
 | `users:manage` | ya | tidak | tidak |
 
-Viewer tidak membaca audit log karena isinya (email, IP, perubahan user) setara dengan manajemen user. Fase berikutnya menambah permission per resource (`apps:*`, `connections:*`, dst.) dengan pola yang sama.
+Viewer tidak membaca audit log karena isinya (email, IP, perubahan user) setara dengan manajemen user. Fase 2 mengganti `tenants:read`/`tenants:write` dengan `apps:read`/`apps:write` (route tenant dihapus, jadi permission lamanya ikut hilang; konsol adalah satu-satunya klien `/admin`). Fase berikutnya menambah permission per resource (`connections:*`, dst.) dengan pola yang sama.
 
 Aturan user: selalu minimal satu owner aktif (`409 last_owner` untuk demote atau disable owner aktif terakhir); owner tidak bisa men-disable dirinya sendiri atau me-reset password sendiri lewat API users (`409 cannot_modify_self`). Validasi `role` di `POST`/`PATCH /admin/users`: kosong → rule `required`, nilai di luar `owner`/`admin`/`viewer` → rule `oneof` (keduanya `400 invalid_request`). Semua mutasi user dijalankan di transaksi dengan advisory lock yang sama dengan setup, supaya cek owner terakhir tidak bisa di-race. User dengan `must_change_password` hanya boleh memanggil `GET /admin/me`, `POST /admin/me/password`, dan `POST /admin/logout` (`403 password_change_required`), dicek di server.
 
 Audit: `user.setup`, `user.create`, `user.update`, `user.disable`, `user.enable`, `user.reset_password`, `user.change_password`, `user.login`, `user.login_failed` (actor `anonymous`, `after` berisi email kanonik dan alasan: `invalid_credentials` atau `user_disabled`), `user.logout`. Login yang ditolak rate limit tidak diaudit (hanya security log), supaya audit log tidak bisa dibanjiri.
 
 Dependensi: `golang-jwt` dihapus (JWT tidak dipakai lagi), `golang.org/x/text` dipakai langsung untuk normalisasi NFC email. Frontend tidak menambah library.
+
+### Apps, API key, dan identifier
+
+Diputuskan di fase 2. Tujuannya: KeiPay selalu tahu sebuah request, payment, atau webhook milik app mana lewat lookup tabel, tidak lewat parsing string.
+
+**Expand/contract `tenants` → `apps`.** Migrasi `000007` membuat tabel baru `apps` dan menyalin setiap baris `tenants` dengan `id` yang sama (sequence `apps` dimajukan sesudahnya), `public_id` `app_<ULID>` dari `created_at`, `environment = live`, `status` dari `active`, dan `webhook_secret_enc` = `api_secret_enc` lama. `payments`, `webhook_deliveries`, dan `ledger_entries` mendapat kolom `app_id` (FK ke `apps`, di-backfill dari `tenant_id`, lalu `NOT NULL`), sedangkan `tenant_id` menjadi nullable dan tidak ditulis lagi. Tabel `tenants` dan kolom `tenant_id` dibiarkan read-only, lalu di-drop di migrasi contract setelah satu rilis, sama seperti `admin_users`. Dipilih daripada `RENAME TABLE` supaya rollback (`down`) dan binary lama tetap punya data aslinya. Deploy tetap urutan biasa: hentikan, migrate, jalankan. `down` mengembalikan data app ke `tenants` sebisanya; key yang dicabut setelah migrasi hidup lagi dan app baru mendapat `api_key` placeholder yang tidak bisa dipakai, karena `down` hanya alat development.
+
+Legacy tenant menjadi `live` karena integrasi yang sudah ada memakai akun Xendit sungguhan. Fase 3 boleh menyesuaikan environment app hasil migrasi kalau connection Xendit dari env ternyata kunci development (`xnd_development_…`), sebelum aturan "environment app = environment connection" ditegakkan.
+
+**App.** `public_id` (`app_`), `slug`, `name`, `environment` (`test` | `live`), `status` (`active` | `disabled`), `metadata` JSONB, `webhook_url`, `redirect_success_url`, `redirect_failure_url`, `webhook_secret_enc`. `slug` unik per environment (`UNIQUE (environment, slug)`), jadi `acme` boleh ada di test dan live. `slug` dan `environment` tidak pernah berubah: `PATCH` yang mengirim salah satunya ditolak dengan rule `immutable`, bukan diabaikan, supaya pemanggil tahu perubahannya tidak terjadi. Disable/enable punya endpoint sendiri (aksi audit sendiri, konfirmasi di UI). Kosakata environment `test`/`live` juga dipakai connection di fase 3 (bukan `sandbox`/`production` seperti sketsa data model di atas), supaya aturan "environment app = environment connection" cukup membandingkan string.
+
+**API key.** Tabel `app_api_keys`: `public_id` (`key_`), `app_id`, `environment`, `label`, `key_prefix` (`kp_test_`, `kp_live_`, atau `kp_` untuk key hasil migrasi), `key_last4`, `key_hash` (hex SHA-256 dari key utuh, `UNIQUE`), `secret_enc` (AES-256-GCM), `last_used_at`, `expires_at`, `revoked_at`. Format key `kp_<env>_` + 32 hex, secret `kps_<env>_` + 48 hex. Key dicari lewat hash-nya, jadi dump database tidak berisi key yang bisa dipakai; key dan secret hanya ditampilkan sekali. Prefix `kps_`/`kpwh_` sengaja tidak memakai `sk_`/`whsec_` supaya secret scanner tidak salah mengira secret KeiPay sebagai secret Stripe.
+
+- **Environment dijaga tiga lapis.** FK komposit `(app_id, environment) → apps (id, environment)` membuat key tidak mungkin tersimpan dengan environment berbeda dari app-nya, `CHECK` mengikat `key_prefix` ke `environment`, dan middleware `/v1` menolak (sebagai `unknown_api_key`, dengan security event) kalau prefix di header tidak cocok dengan environment baris key atau app.
+- **Status turunan.** `revoked` kalau `revoked_at` terisi, `expired` kalau `expires_at` sudah lewat, selain itu `active`. Paling banyak 10 key usable per app (dicek di transaksi yang mengunci baris app), supaya rotasi yang lupa mencabut key lama tetap terbatas.
+- **Rotasi tumpang tindih.** Rotate membuat key baru dengan label yang sama dan tidak menyentuh key lama; key lama berlaku sampai dicabut atau kedaluwarsa. Alurnya: rotate, pasang key baru di app, cabut key lama. Tidak ada expiry otomatis untuk key lama, karena app yang belum sempat deploy akan putus tanpa peringatan.
+- **Urutan cek `/v1`.** Header, timestamp, lookup key (`unknown_api_key`), signature, lalu status key (`api_key_revoked`, `api_key_expired`) dan app (`tenant_inactive`), lalu nonce. Status dicek sesudah signature supaya hanya pemegang secret yang tahu sebuah key dicabut. Code `tenant_inactive` dipertahankan untuk app yang disabled karena code tidak boleh berubah arti atau hilang.
+- **Tanpa cache key.** Cache tenant di Redis dihapus: satu query `JOIN` key + app lewat index unik `key_hash` per request sudah murah, dan pencabutan berlaku seketika tanpa invalidasi. (Cache lama juga menyimpan tenant tanpa `api_secret_enc`, sehingga request kedua dalam 5 menit gagal; masalah itu hilang bersama cache-nya.) `last_used_at` diperbarui dengan `UPDATE … WHERE last_used_at IS NULL OR last_used_at < now() - interval '1 minute'`, best effort: kegagalannya hanya dicatat di log.
+
+**Webhook signing secret per app.** Karena app sekarang punya banyak key dengan secret berbeda, webhook keluar tidak lagi ditandatangani dengan secret key. Setiap app punya `webhook_secret_enc` sendiri (`kpwh_` + 48 hex, ditampilkan sekali saat app dibuat); app hasil migrasi memakai `api_secret` lamanya, jadi verifikasi `X-Kei-Signature` di app yang sudah ada tidak berubah. Rotasi API key tidak pernah memutus verifikasi webhook. Rotasi secret webhook belum ada di fase 2; fase 4 memindahkan secret ini ke `webhook_endpoints` hasil migrasi dan menambah rotasinya.
+
+**Payment.** `payments` mendapat `public_id` (`pay_`, backfill dari `created_at`), `app_id`, `metadata` JSONB (default `{}`), `idempotency_key`, dan `idempotency_fingerprint`. Index unik baru `(app_id, order_id)` dan `(app_id, idempotency_key) WHERE idempotency_key IS NOT NULL`, jadi dua app boleh memakai `order_id` atau key yang sama.
+
+- **Reference ke gateway** untuk payment baru adalah `kp_<public_id>` (misalnya `kp_pay_01JB…`), disimpan di `payments.external_id` dan dikirim sebagai `external_id` Xendit. Callback dicari dengan `WHERE external_id = $1` lewat index unik yang sudah ada. Payment lama yang memakai `{slug}:{order_id}` ditemukan dengan query yang sama karena nilainya tersimpan di kolom itu; tidak ada kode yang mem-parse slug. Payment lama yang tidak ditemukan tetap `500` supaya Xendit mengulang, seperti sebelumnya. Fase 6 memindahkan reference ke `payment_attempts` dan lookup ini ikut pindah.
+- **Idempotency.** Kalau `Idempotency-Key` dikirim, key dicek lebih dulu: key sama dan fingerprint sama → payment lama (`201` + `Idempotent-Replayed: true`); key sama dengan fingerprint berbeda → `409 idempotency_key_reused`. Fingerprint = hex SHA-256 dari JSON kanonik input yang sudah divalidasi (`order_id`, `amount`, `currency`, `description`, `payer_email`, `invoice_duration`, `items`, `customer`, `expected_settlement_at`, `metadata`), bukan raw body, supaya urutan key JSON atau spasi tidak membuat retry yang sah ditolak. Kalau tidak ada key yang cocok, aturan `order_id` lama berlaku apa adanya (amount dan currency sama → payment lama, beda → `409 conflict`), sehingga integrasi lama tidak berubah perilakunya. Request ber-key yang jatuh ke payment lama lewat `order_id` tidak menempelkan key-nya ke payment itu. Key tidak kedaluwarsa. Pembuatan invoice tetap seperti sebelumnya (buat di Xendit, lalu insert; kalah race → expire invoice yatim dan kembalikan pemenangnya kalau cocok).
+- **Metadata** (payment dan app) adalah objek datar: maksimal 50 key, key 1–40 code point tanpa karakter kontrol, nilai string (maksimal 500 code point, tanpa U+0000 karena Postgres JSONB menolaknya), angka, boolean, atau `null`, total maksimal 8192 byte JSON kompak. Angka di-decode dengan `json.Number` supaya tidak dibulatkan lewat float; urutan key tidak dijaga (JSONB mengurutkan ulang). Objek datar dipilih karena cukup untuk tag dan ID eksternal, mudah ditampilkan di konsol, dan bisa dilonggarkan nanti tanpa breaking change. Metadata payment ikut dikirim di setiap webhook payment itu.
+- **Kontrak `/v1` hanya bertambah.** Respons payment menambah `id` (`pay_…`), `reference`, dan `metadata`; `payment_id` integer tetap ada. Payload webhook v1 menambah `payment_public_id` dan `metadata`. Envelope berversi datang di fase 4.
+
+**Admin.** `/admin/tenants` dihapus dan diganti `/admin/apps`, `/admin/apps/{id}`, disable/enable, dan `/admin/apps/{id}/keys` (list, create, rotate, revoke). `/admin/payments` pindah ke cursor dengan filter `app_id`, `status`, `from`, `to` yang divalidasi ketat dan tanpa `total` (count penuh mahal dan tidak dibutuhkan UI). Baris payment, ledger, dan delivery membawa ringkasan app (`{id, slug, name, environment}`) hasil `JOIN`, jadi konsol tidak perlu memuat semua app untuk menampilkan nama.
+
+Audit: `app.create` dan `api_key.create` (dua baris di satu transaksi saat app dibuat), `app.update` (hanya field yang berubah), `app.disable`, `app.enable`, `api_key.create`, `api_key.rotate` (target key baru, `before` key lama, `after` key baru), `api_key.revoke`. Snapshot key berisi `id`, `app_id`, `label`, `environment`, `prefix`, `last4`, `expires_at`, `revoked_at`, tanpa key utuh, hash, maupun secret. Entri lama `tenant.*` tetap seperti adanya.
+
+**Konsol.** Switch Test/Live di top bar sekarang punya arti: list Apps memakai mode itu sebagai filter environment awal (chip environment tetap bisa diganti ke All), dan dialog buat app memilih environment sesuai mode. Halaman lain belum difilter per mode; itu menunggu payment punya kolom environment sendiri (fase 3).
 
 ### Penyajian konsol
 

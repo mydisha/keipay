@@ -44,14 +44,15 @@ Status tones. Each has a tinted background, a text colour and a border:
 
 | Tone | Tokens | Used for |
 |---|---|---|
-| success | `success`, `success-foreground`, `success-border` | `PAID`, `DELIVERED`, active |
-| warning | `warning`, `warning-foreground`, `warning-border` | `PENDING` |
-| danger | `danger`, `danger-foreground`, `danger-border` | `FAILED`, errors, field messages |
+| success | `success`, `success-foreground`, `success-border` | `PAID`, `DELIVERED`, active (apps, users, API keys) |
+| warning | `warning`, `warning-foreground`, `warning-border` | `PENDING`, expired API key |
+| danger | `danger`, `danger-foreground`, `danger-border` | `FAILED`, revoked API key, errors, field messages |
 | info | `info`, `info-foreground`, `info-border` | `SETTLED` |
-| neutral | `neutral`, `neutral-foreground`, `neutral-border` | `EXPIRED`, inactive, anything unknown |
+| neutral | `neutral`, `neutral-foreground`, `neutral-border` | `EXPIRED` payment, disabled, inactive, anything unknown |
 
 Test mode: `test-mode`, `test-mode-foreground`, `test-mode-border` (amber). Use
-them only for the test-mode banner and switch.
+them only for the test-mode banner, the switch and the `Test` environment
+badge, so "amber" always means test.
 
 Every text/background pair above is at least 4.5:1 in both themes (body text is
 about 17:1, status badges 6:1 or more), and control borders and the focus ring
@@ -84,7 +85,7 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 | Component | Use it for |
 |---|---|
 | `Button` | Every action. Variants: `default` (one per view), `outline`, `ghost`, `secondary`, `destructive`, `link`. Sizes reach 44px below 768px. |
-| `Input`, `Select`, `Checkbox`, `Switch`, `Label` | Form controls. Always with a visible label. `SelectItem` takes an optional one-line `description` (shown in the list, not in the trigger), used for the role picker. |
+| `Input`, `Textarea`, `Select`, `Checkbox`, `RadioGroup`, `Switch`, `Label` | Form controls. Always with a visible label. `SelectItem` takes an optional one-line `description` (shown in the list, not in the trigger), used for the role picker. A `RadioGroup` is named by its field label (`aria-labelledby`) and each item has its own `Label`; use it for a short fixed choice such as the app environment. |
 | `Form` (`FormField`, `FormItem`, `FormLabel`, `FormControl`, `FormDescription`, `FormMessage`) | Every form: react-hook-form + a zod schema that mirrors the contract. Server field errors go on their field; other failures in an `Alert` above the form. |
 | `DataTable` | Every list. See the table pattern. |
 | `StatusBadge` | Any status. Always text; the tone only reinforces it. |
@@ -96,13 +97,15 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 | `ForbiddenState` | A page or tab the signed-in user's role can't open: "You don't have access to this page" plus who to ask. Shown in place of the content, never as a redirect. |
 | `Skeleton` | Loading placeholders that match the final layout. |
 | `Dialog` | Short focused tasks: forms, details. |
-| `ConfirmDialog` | Any mutation the user might regret. Pass `confirmText` (the app slug or resource name) for destructive actions: rotate, revoke, delete. |
-| `SecretRevealDialog` | Showing a secret once (app credentials, a user's temporary password). Copy buttons, a warning (overridable per use), and a required "I have saved this" checkbox before it closes. Escape and outside clicks do not dismiss it. |
+| `ConfirmDialog` | Any mutation the user might regret. Pass `confirmText` when the action breaks a live integration at once (see Type-to-confirm). |
+| `SecretRevealDialog` | Showing secrets once (a new app's three credentials, a new or rotated API key, a user's temporary password). One row per secret with its label and a copy button, a warning (overridable per use), and a required "I have saved this" checkbox before it closes. Escape and outside clicks do not dismiss it. |
 | `JsonViewer` | Raw payloads and before/after snapshots. Collapsible, pretty-printed, copyable; long payloads are cut in the view but copied in full. |
 | `Timeline` | Ordered events (payment lifecycle, delivery attempts) with time, title, a text status and an optional body. |
 | `PageHeader` | The `h1`, one sentence of context, and page actions. |
 | `Alert` | Inline messages inside forms and sections. |
-| `Tabs` | Sibling views of one resource (Webhooks: Outbound, Inbound). When each view has its own URL (Settings: Account, Users, Audit log), use links styled as tabs inside a labelled `nav`, with `aria-current="page"` on the active one. |
+| `Tabs` | Sibling views of one resource (Webhooks: Outbound, Inbound) that share a URL. |
+| `LinkTabs` | Sibling views that each have their own URL (Settings: Account, Users, Audit log; an app's Overview, API keys, Webhooks, Routing): links styled as tabs inside a labelled `nav`, `aria-current="page"` on the active one. |
+| `EnvironmentBadge` (`features/apps`) | An app's environment as text: `Test` in the amber test-mode tokens, `Live` in neutral card colours. Shown next to every app name (`AppLabel` in payments, webhooks and reconciliation rows). |
 | toasts (`sonner`) | Outcome of an action the user just took: "Delivery 7 queued", "Couldn't replay". Never for load errors (use `ErrorState`). |
 
 ## Dense table pattern
@@ -112,10 +115,22 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 - Filters sit above the table as chips (`filters`: single choice per group,
   clicking the active chip clears it), plus extra controls such as the app
   select in `toolbar`. "Clear filters" appears whenever any filter is set.
-- Cursor pagination: pass `pagination={{ nextCursor, onPageChange }}`. The table
-  keeps the cursor stack for Previous/Next, disables them at either end, and
-  returns to page 1 when a chip changes or `resetKey` changes. Older offset
-  lists show "Showing n of total" in `footer`.
+  When a group does not start empty (the Apps environment chip starts at the
+  Test/Live mode), add an explicit "All" chip so every state is one click
+  away.
+- The app select (`AppFilterSelect`) filters by the app's public id and lists
+  "Name (Test)" / "Name (Live)". It loads the newest 200 apps only.
+- Cursor pagination, two forms:
+  - Lists that grow and are read top-down (apps, API keys, payments) append
+    pages with a "Load more" button: `loadMore={loadMoreList(query).loadMore}`
+    over a `useInfiniteQuery` built with `cursorPageOptions`. A failed next
+    page keeps the rows and shows a toast; only a failed first page shows
+    `ErrorState`.
+  - Lists browsed page by page (users, audit log) pass
+    `pagination={{ nextCursor, onPageChange }}`. The table keeps the cursor
+    stack for Previous/Next, disables them at either end, and returns to page
+    1 when a chip changes or `resetKey` changes.
+  Neither shows a total. Older offset lists (ledger, deliveries) load one page.
 - Status is a `StatusBadge`; ids use `IdText`; amounts use `MoneyText`,
   right-aligned with `tabular-nums` in a right-aligned column; times use
   `DateTimeText`.
@@ -130,15 +145,71 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 
 ## Detail page pattern
 
-Used from phase 2 on (payment, app, connection details):
+Used from phase 2 on (app, payment, connection details):
 
-1. Header: the resource name or id (`IdText`), its `StatusBadge`, and key facts
-   (amount, app, created) as a definition list. Actions on the right.
-2. Timeline of what happened, newest last, using `Timeline`.
-3. Raw data in collapsed `JsonViewer`s (request, gateway payload, webhook
-   body).
+1. A "Back to …" link to the list.
+2. Header: the resource name as the page `h1` (or its id in `IdText` when it
+   has no name), then its badges as text (environment, status), then key
+   facts as a definition list (slug in mono, the public id in `IdText`).
+   Write actions sit on the right and are hidden without the permission.
+3. When the resource has several views, `LinkTabs` under the header, one
+   route per tab (`/apps/:id`, `/apps/:id/keys`, …); the index route is
+   Overview. Each tab has an `h2`.
+4. Overview: a card with the facts as label/value rows (a missing value says
+   "Not set"), then raw data in a `JsonViewer` ("No metadata" when empty).
+5. Where events exist: a timeline of what happened, newest last, using
+   `Timeline`, and raw payloads in collapsed `JsonViewer`s.
+
+States: a header-shaped skeleton while loading; an unknown or malformed id
+(`404 not_found` or `400 invalid_request`) shows "App not found" with a
+"Back to apps" action, not an error; other failures show `ErrorState` with
+retry, and `403 forbidden` shows `ForbiddenState`. A tab for a later phase is
+an `EmptyState` that says what will live there and makes no API call.
 
 Dialogs (such as an audit entry) follow the same order on a smaller scale.
+
+## Apps and API keys
+
+- An app's environment is fixed at creation and always shown as text with
+  `EnvironmentBadge`. The create dialog defaults it to the current Test/Live
+  mode, suggests the slug from the name until the user edits the slug, and
+  says that neither can change later.
+- Metadata is edited as JSON text in a `Textarea` (mono). The zod rule
+  mirrors the API: a flat object of at most 50 keys (1-40 characters, no
+  control characters), values a string of at most 500 characters, a number, a
+  boolean or null, at most 8192 bytes. Lengths count code points. Empty text
+  means `{}`. The typed text is sent as written so large numbers keep every
+  digit.
+- Creating an app reveals three secrets once: API key, API secret and webhook
+  signing secret. Closing the reveal opens the new app.
+- API keys are shown as `{prefix}…{last4}` in mono (`kp_test_…a1b2`, `kp_…0001`
+  for migrated keys), never in full after the reveal. Status labels:
+  **Active**, **Expired**, **Revoked** (see the tones above). "Last used" and
+  "Expires" say "Never" when empty.
+- Rotate is offered on active keys only and is a plain confirm, because the
+  old key keeps working; its reveal tells the user to revoke the old key
+  after deploying the new one. Revoke is offered on any key that is not
+  revoked yet.
+- The 10-usable-keys limit (`400 validation_failed`) appears as a toast with
+  the server's message.
+- Expiry is picked with a `datetime-local` input read as WIB (Asia/Jakarta)
+  and must be in the future.
+
+## Type-to-confirm
+
+A `ConfirmDialog` with `confirmText` keeps its confirm button disabled until
+the exact text (case-sensitive) is typed. Use it when the action breaks a
+live integration at once:
+
+| Action | Type |
+|---|---|
+| Disable an app | the app's slug |
+| Revoke an API key | the key's label |
+| Disable a user, reset a password | the user's email |
+
+Undoable or non-breaking actions (enable an app or user, rotate a key) use a
+plain confirm. The dialog's text says what fails and with which error code
+(`tenant_inactive`, `api_key_revoked`).
 
 ## States
 
@@ -166,9 +237,9 @@ Dialogs (such as an audit entry) follow the same order on a smaller scale.
 - The UI reads what the signed-in user may do from `me.permissions`
   (`usePermission`, `<Can>`, `<RequirePermission>`), never from the role
   name. The server enforces every permission anyway.
-- Actions the role can't perform are hidden, not disabled: no Create app or
-  row actions without `tenants:write`, no Replay without
-  `deliveries:replay`. Pages stay readable.
+- Actions the role can't perform are hidden, not disabled: no Create app,
+  Edit, Disable, Enable, Create key, Rotate or Revoke without `apps:write`, no
+  Replay without `deliveries:replay`. Pages stay readable.
 - Pages and tabs the role can't open are hidden from navigation; opening
   their URL shows `ForbiddenState` in place of the content (no redirect).
 - The role is shown as a text label: Owner, Admin, Viewer. Role pickers give
@@ -224,8 +295,10 @@ Enable is a plain confirm. Your own row has no Disable or Reset password.
   account settings, change password, sign out). Sign out calls
   `POST /admin/logout`, clears every cached query and goes to `/login`; if it
   fails the user stays signed in and sees a toast.
-- Test mode shows an amber banner on every page. Until environments exist, the
-  switch only changes the console; the banner must not claim that data is
+- Test mode shows an amber banner on every page. The switch sets the Apps
+  list's starting environment filter (and resets it whenever the switch
+  changes) and the create-app default. Payments, webhooks and reconciliation
+  do not follow it yet, and the banner says so instead of claiming the data is
   filtered.
 - The palette navigates to every page (plus Users with `users:manage`),
   switches theme and mode, and says that searching by id or order arrives
@@ -252,8 +325,9 @@ All formatting goes through `frontend/src/shared/lib/format.ts`.
   formatting and a `WIB` suffix: `2 Jan 2026, 01.30.00 WIB`. Tables show the
   relative time ("5 minutes ago") with the absolute time in a tooltip and in
   `<time dateTime>`.
-- Ids: public ids look like `pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C` and are always
-  mono with copy. Numeric ids from older endpoints show as `#12`.
+- Ids: public ids (`app_…`, `pay_…`, `key_…`, `usr_…`) look like
+  `pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C` and are always mono with copy. Numeric ids
+  from older endpoints (deliveries, ledger entries) show as `#12`.
 - Missing values show `—`.
 
 ## Copy
@@ -264,7 +338,8 @@ All formatting goes through `frontend/src/shared/lib/format.ts`.
   added by swapping that object.
 - Say what happened and what to do next: "Couldn't replay the delivery." plus a
   retry, not "Error".
-- The UI says "App"; the API still says "tenant" until phase 2.
+- The UI and the API both say "app". The only leftover of "tenant" is the
+  error code `tenant_inactive` (a disabled app), which is quoted as is.
 
 ## Accessibility
 

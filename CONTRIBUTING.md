@@ -5,7 +5,7 @@ Thanks for helping out. This covers what you need to get started.
 ## Prerequisites
 
 - Go 1.26+
-- Node.js 20+ and npm
+- Node.js 22+ and npm
 - Docker (for Postgres and Redis)
 - `openssl`
 
@@ -24,7 +24,9 @@ make dev     # API on :8080, console on :5173
 | `make backend` / `make frontend` | Run one side only |
 | `make up` / `make down` | Start or stop Postgres and Redis |
 | `make test` | Backend tests |
-| `make check` | `go vet`, tests, frontend type-check |
+| `make gen` | Regenerate frontend API types from `api/openapi.yaml` |
+| `make check` | Fast checks: gofmt, `go vet`, unit tests, API lint, type-check, frontend tests |
+| `make ci` | The full pre-merge gate (needs Docker) |
 | `make build` | Frontend assets, then backend binaries |
 | `make docker` | Production image |
 
@@ -35,7 +37,10 @@ make dev     # API on :8080, console on :5173
   `internal/service`, entities and interfaces in `internal/domain` (standard
   library only), Postgres and Redis adapters in `internal/repository`.
 - `frontend/` is the React admin console. In production the backend serves its
-  build, so both ship as one image.
+  build, so both ship as one image. UI rules live in `DESIGN.md`.
+- `api/openapi.yaml` is the HTTP contract. Change it in the same commit as the
+  endpoint, then run `make gen` and commit the regenerated
+  `frontend/src/shared/api/schema.d.ts`. Never edit generated types by hand.
 - Design notes live in `docs/`. Larger changes should start with a short
   design note there or in an issue.
 
@@ -47,7 +52,9 @@ make dev     # API on :8080, console on :5173
    as `feat(backend): ...` or `fix(frontend): ...`.
 3. New logic and bug fixes come with tests: the happy path, edge cases and the
    error path. A bug fix needs a regression test that fails without the fix.
-4. Run `make check` before pushing.
+4. Run `make check` while you work. **`make ci` is the gate before merge**:
+   it must pass locally before a pull request is merged. A hosted CI, when
+   added, runs the same target.
 5. Open a pull request against `main` describing what changed and why.
 
 ## Code style
@@ -56,6 +63,9 @@ make dev     # API on :8080, console on :5173
   services return domain errors (`domain.ErrNotFound`, `domain.ErrInvalidInput`,
   ...) and handlers map them with `response.Error`.
 - TypeScript: strict mode; `make typecheck` must pass.
+- API errors use the envelope `{"error":{"code","message","details"}}` with a
+  stable `code` from `internal/domain`; add new codes to the spec's
+  `ErrorCode` too.
 
 ## Reporting security issues
 

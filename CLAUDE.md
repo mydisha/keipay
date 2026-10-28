@@ -19,10 +19,15 @@ Monorepo, deployed as one image:
 - `backend/`: Go module `github.com/mydisha/keipay/backend` (API, asynq worker,
   migrations). Commands run from `backend/`; config reads `backend/.env`, then
   the root `.env`.
-- `frontend/`: React + Vite + Tailwind admin console. In dev, Vite on :5173
-  proxies `/admin` and `/v1` to :8080. In production the backend serves the
+- `api/openapi.yaml`: the HTTP contract (OpenAPI 3.1, linted with
+  `api/redocly.yaml`). Frontend types in
+  `frontend/src/shared/api/schema.d.ts` are generated from it (`make gen`).
+- `frontend/`: React 19 + Vite + Tailwind v4 + shadcn/ui admin console, UI
+  rules in `DESIGN.md`. In dev, Vite on `UI_PORT` proxies the API to
+  `VITE_API_TARGET` (default http://localhost:8080). In production the backend serves the
   build (`FRONTEND_DIR`, or `../frontend/dist` auto-detected) via
-  `handler.SPA`; `/v1`, `/admin`, `/webhooks`, `/healthz` keep JSON 404s.
+  `handler.SPA`; `/v1`, `/admin`, `/healthz` and everything under `/webhooks/`
+  keep JSON 404s. Exactly `/webhooks` is the console's Webhooks page.
 - `deploy/Dockerfile`: one image (API + worker + console + migrate binary).
 - `compose.yaml`: postgres, redis, one-shot migrate, keipay; `asynqmon` under
   the `tools` profile.
@@ -38,7 +43,11 @@ make up / down   # postgres + redis
 make seed        # migrations + demo tenant + admin user (prints credentials once)
 make reset-admin PW=yourpass
 make test        # go test ./... in backend/
-make check       # vet + test + frontend typecheck
+make gen         # regenerate frontend API types from api/openapi.yaml
+make check       # gofmt + vet + test + API lint + typecheck + frontend tests
+make ci          # full pre-merge gate (scripts/ci.sh): adds Postgres/Redis
+                 # integration tests, gen drift check, build, Playwright smoke
+make e2e         # Playwright smoke only
 make build       # frontend dist, then ./keipay and ./keipay-migrate
 make docker      # keipay:local image
 
@@ -64,8 +73,8 @@ Service-layer (ports-and-adapters); dependencies point inward to
 - `internal/pkg`: crypto (AES-256-GCM), hmac, keygen, logger.
 - Wiring is manual DI in `cmd/server/main.go`.
 
-New endpoint: input types in domain → logic in service → DTO → handler →
-route in `router.go`. New entity: domain struct + repository interface →
+New endpoint: spec in `api/openapi.yaml` → input types in domain → logic in
+service → DTO → handler → route in `router.go` → `make gen`. New entity: domain struct + repository interface →
 postgres implementation → migration in `backend/migrations/` → wire in main.
 
 ## Things that are not obvious from one file
@@ -90,6 +99,16 @@ postgres implementation → migration in `backend/migrations/` → wire in main.
    deliveries with `attempts = 0` older than a minute. Admins can replay.
 
 ## Conventions
+
+- Errors: `{"error":{"code","message","details"}}`; codes are constants in
+  `internal/domain`, mapped only in `response.Error`, and mirrored in the
+  spec's `ErrorCode`.
+- Public IDs: `<prefix>_<ULID>` via `internal/pkg/id`; bigint ids stay
+  internal (older endpoints still expose them until their entity migrates).
+- New lists use cursor pagination (`limit`, `cursor` → `data`,
+  `next_cursor`); see `internal/domain/pagination.go`.
+- Every admin mutation records an audit entry in the same transaction via
+  `AuditService`; the actor comes from the request context.
 
 - `gofmt` and `go vet` before committing; lowercase, concise error messages;
   return errors rather than panic; context for request scope.

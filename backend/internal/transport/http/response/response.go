@@ -69,11 +69,20 @@ var statusByCode = map[domain.ErrorCode]int{
 	domain.CodeAPIKeyRevoked:           http.StatusUnauthorized,
 	domain.CodeAPIKeyExpired:           http.StatusUnauthorized,
 	domain.CodeIdempotencyKeyReused:    http.StatusConflict,
+	domain.CodeConnectionInUse:         http.StatusConflict,
+	domain.CodeNoEligibleConnection:    http.StatusUnprocessableEntity,
+	domain.CodeProviderRejected:        http.StatusUnprocessableEntity,
+	domain.CodeProviderUnavailable:     http.StatusServiceUnavailable,
 }
 
+// passThrough are the 5xx codes sent as they are; every other 5xx collapses
+// to internal_error. Their messages are generic by construction.
+var passThrough = map[domain.ErrorCode]bool{domain.CodeProviderUnavailable: true}
+
 // Error writes the envelope for err and aborts the request. Unrecognised
-// errors become 500 internal_error with a generic message; the real error is
-// attached to the gin context so the access log records it with the request id.
+// errors become 500 internal_error with a generic message, and so does every
+// 5xx code except provider_unavailable; the real error is attached to the gin
+// context so the access log records it with the request id.
 func Error(c *gin.Context, err error) {
 	status, body := resolve(err)
 	if status >= http.StatusInternalServerError {
@@ -92,7 +101,7 @@ func resolve(err error) (int, Body) {
 	switch {
 	case errors.As(err, &coded):
 		status, ok := statusByCode[coded.Code]
-		if !ok || status >= http.StatusInternalServerError {
+		if !ok || (status >= http.StatusInternalServerError && !passThrough[coded.Code]) {
 			return internal()
 		}
 		return status, body(coded.Code, coded.Message, coded.Details)

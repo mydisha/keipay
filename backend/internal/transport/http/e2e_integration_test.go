@@ -20,6 +20,9 @@ import (
 	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/pkg/crypto"
 	"github.com/mydisha/keipay/backend/internal/pkg/hmac"
+	"github.com/mydisha/keipay/backend/internal/provider"
+	"github.com/mydisha/keipay/backend/internal/provider/providertest"
+	"github.com/mydisha/keipay/backend/internal/provider/xendit"
 	"github.com/mydisha/keipay/backend/internal/repository/postgres"
 	redisrepo "github.com/mydisha/keipay/backend/internal/repository/redis"
 	"github.com/mydisha/keipay/backend/internal/service"
@@ -61,17 +64,22 @@ func (n runNonces) Acquire(ctx context.Context, key string) bool {
 	return n.inner.Acquire(ctx, n.prefix+key)
 }
 
-// e2e is the real router over Postgres and Redis with a fake Xendit, on a
-// database migrated from phase 1 with one legacy tenant.
+// e2e is the real router over Postgres and Redis on a database migrated
+// from phase 1 with one legacy tenant. The deprecated XENDIT_* settings are
+// imported as on an upgraded server, so the legacy app pays through the real
+// Xendit adapter, pointed at a fake Xendit API.
 type e2e struct {
-	router   *gin.Engine
-	appSvc   *service.AppService
-	payments *postgres.PaymentRepo
-	apps     *postgres.AppRepo
-	webhooks *postgres.WebhookRepo
-	webhook  *service.WebhookService
-	cipher   *crypto.Cipher
-	xendit   *stubXendit
+	router    *gin.Engine
+	appSvc    *service.AppService
+	connSvc   *service.ConnectionService
+	payments  *postgres.PaymentRepo
+	apps      *postgres.AppRepo
+	webhooks  *postgres.WebhookRepo
+	webhook   *service.WebhookService
+	cipher    *crypto.Cipher
+	xenditAPI *fakeXenditAPI
+	// legacy is the connection imported from the XENDIT_* settings.
+	legacy *domain.Connection
 }
 
 func newE2E(t *testing.T) *e2e {
@@ -102,7 +110,7 @@ func newE2E(t *testing.T) *e2e {
 			t.Fatalf("%s: %v", q, err)
 		}
 	}
-	if err := db.Migrate.Migrate(7); err != nil {
+	if err := db.Migrate.Up(); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	rdb, err := redisrepo.New(ctx, addr, "", 0)
@@ -113,14 +121,28 @@ func newE2E(t *testing.T) *e2e {
 
 	tx := postgres.NewTxManager(pool)
 	e := &e2e{
-		apps:     postgres.NewAppRepo(pool),
-		payments: postgres.NewPaymentRepo(pool),
-		webhooks: postgres.NewWebhookRepo(pool),
-		cipher:   cipher,
-		xendit:   &stubXendit{},
+		apps:      postgres.NewAppRepo(pool),
+		payments:  postgres.NewPaymentRepo(pool),
+		webhooks:  postgres.NewWebhookRepo(pool),
+		cipher:    cipher,
+		xenditAPI: newFakeXenditAPI(t),
 	}
-	e.appSvc = service.NewAppService(e.apps, postgres.NewAPIKeyRepo(pool), cipher, tx,
-		service.NewAuditService(postgres.NewAuditRepo(pool)))
+	registry, err := provider.NewRegistry(xendit.New(xendit.WithBaseURL(e.xenditAPI.URL)), providertest.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conns := postgres.NewConnectionRepo(pool)
+	audit := service.NewAuditService(postgres.NewAuditRepo(pool))
+	e.appSvc = service.NewAppService(e.apps, postgres.NewAPIKeyRepo(pool), conns, cipher, tx, audit)
+	e.connSvc = service.NewConnectionService(service.ConnectionDeps{
+		Connections: conns, Merchants: postgres.NewMerchantRepo(pool), Apps: e.apps, Payments: e.payments,
+		Registry: registry, Sealer: cipher, Tx: tx, Audit: audit, BaseURL: "https://pay.example.com",
+	})
+	imported, err := e.connSvc.ImportLegacyXendit(ctx, "xnd_production_e2e", "e2e-callback-token")
+	if err != nil || !imported.Created || len(imported.Defaulted) != 1 || imported.PaymentsBackfilled != 1 {
+		t.Fatalf("import: %+v %v", imported, err)
+	}
+	e.legacy = imported.Connection
 	e.webhook = service.NewWebhookService(e.payments, postgres.NewLedgerRepo(pool), e.webhooks, tx, noCache{}, &recordingEnqueuer{})
 	gin.SetMode(gin.TestMode)
 	e.router = NewRouter(Deps{
@@ -128,13 +150,42 @@ func newE2E(t *testing.T) *e2e {
 		AppResolver:     e.appSvc,
 		NonceStore:      runNonces{inner: redisrepo.NewIdempotency(rdb, 10*time.Minute), prefix: "it-" + strconv.FormatInt(time.Now().UnixNano(), 36) + ":"},
 		SecretDecryptor: cipher,
-		Payment:         handler.NewPaymentHandler(service.NewPaymentService(e.payments, e.xendit)),
+		Payment:         handler.NewPaymentHandler(service.NewPaymentService(e.payments, conns, registry, cipher, zap.NewNop())),
 	})
 	return e
 }
 
+// fakeConnection creates a fake-provider connection and makes it the default
+// of the app.
+func (e *e2e) fakeConnection(t *testing.T, name string, app *domain.App) *domain.Connection {
+	t.Helper()
+	ctx := domain.WithActor(context.Background(), domain.SystemActor("test"))
+	d, err := e.connSvc.Create(ctx, service.CreateConnectionInput{Provider: "fake", Name: name, Environment: app.Environment,
+		Credentials: map[string]any{"api_key": "fake-api-key-0001", "token": "fake-token-0001"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.appSvc.Update(ctx, app.PublicID, service.UpdateAppInput{DefaultConnectionSet: true, DefaultConnectionID: &d.Connection.PublicID}); err != nil {
+		t.Fatal(err)
+	}
+	return d.Connection
+}
+
+// invoicesCreated counts the invoices the fake Xendit API was asked for.
+func (e *e2e) invoicesCreated() int {
+	e.xenditAPI.mu.Lock()
+	defer e.xenditAPI.mu.Unlock()
+	n := 0
+	for _, c := range e.xenditAPI.calls {
+		if c == "POST /v2/invoices/" {
+			n++
+		}
+	}
+	return n
+}
+
 func (e *e2e) call(method, target, apiKey, secret, body string, headers ...string) *httptest.ResponseRecorder {
-	ts := strconv.FormatInt(time.Now().Unix()-v1Calls.Add(1)%240, 10)
+	ts := signedTimestamp(secret, body)
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	req.Header.Set("X-Api-Key", apiKey)
 	req.Header.Set("X-Timestamp", ts)
@@ -185,6 +236,7 @@ func TestIntegrationEndToEndMigratedApp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	otherConn := e.fakeConnection(t, "globex-test", other.App)
 	w = e.call(http.MethodPost, "/v1/payments", other.APIKey, other.APISecret, `{"order_id":"ord-2","amount":10}`, "Idempotency-Key", "idem-e2e")
 	if w.Code != http.StatusCreated || strings.Contains(w.Body.String(), created.ID) {
 		t.Fatalf("other app: %d %s", w.Code, w.Body.String())
@@ -194,14 +246,18 @@ func TestIntegrationEndToEndMigratedApp(t *testing.T) {
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &otherPay)
 
-	// Callbacks for a legacy reference and both new references.
-	for _, cb := range []service.XenditInvoiceCallback{
-		{ID: "inv_legacy", ExternalID: "acme:ord-1", Status: "PAID", Amount: 1000},
-		{ID: "inv_new", ExternalID: created.Reference, Status: "PAID", Amount: 2500},
-		{ID: "inv_other", ExternalID: otherPay.Reference, Status: "PAID", Amount: 10},
+	// Callbacks for a legacy reference and both new references, each at the
+	// connection its payment was made through.
+	for _, cb := range []struct {
+		conn *domain.Connection
+		ev   provider.InboundEvent
+	}{
+		{e.legacy, provider.InboundEvent{EventKey: "inv_legacy", Reference: "acme:ord-1", ProviderStatus: "PAID", Status: domain.PaymentStatusPaid, Amount: 1000}},
+		{e.legacy, provider.InboundEvent{EventKey: "inv_new", Reference: created.Reference, ProviderStatus: "PAID", Status: domain.PaymentStatusPaid, Amount: 2500}},
+		{otherConn, provider.InboundEvent{EventKey: "inv_other", Reference: otherPay.Reference, ProviderStatus: "PAID", Status: domain.PaymentStatusPaid, Amount: 10}},
 	} {
-		if err := e.webhook.Process(ctx, cb, []byte(`{}`)); err != nil {
-			t.Fatalf("%s: %v", cb.ExternalID, err)
+		if err := e.webhook.Process(ctx, cb.conn, cb.ev, []byte(`{}`)); err != nil {
+			t.Fatalf("%s: %v", cb.ev.Reference, err)
 		}
 	}
 	ds, err := e.webhooks.ListDeliveries(ctx, domain.DeliveryFilter{})

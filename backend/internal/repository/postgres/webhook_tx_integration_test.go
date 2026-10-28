@@ -2,6 +2,7 @@ package postgres_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/pkg/id"
+	"github.com/mydisha/keipay/backend/internal/provider"
+	"github.com/mydisha/keipay/backend/internal/provider/xendit"
 	"github.com/mydisha/keipay/backend/internal/repository/postgres"
 	"github.com/mydisha/keipay/backend/internal/service"
 )
@@ -30,6 +33,7 @@ type fixture struct {
 	webhooks *postgres.WebhookRepo
 	tx       *postgres.TxManager
 	payment  *domain.Payment
+	conn     *domain.Connection
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -46,6 +50,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Cleanup(pool.Close)
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	conn := newTestConnection(t, pool, domain.EnvLive)
 	app := newTestApp(t, pool, domain.EnvLive)
 	f := &fixture{
 		pool:     pool,
@@ -53,9 +58,10 @@ func newFixture(t *testing.T) *fixture {
 		ledger:   postgres.NewLedgerRepo(pool),
 		webhooks: postgres.NewWebhookRepo(pool),
 		tx:       postgres.NewTxManager(pool),
+		conn:     conn,
 	}
 	f.payment = &domain.Payment{PublicID: id.New(id.Payment), AppID: app.ID, OrderID: "ord", ExternalID: app.Slug + ":ord",
-		XenditInvoiceID: "inv_" + suffix, Amount: 5000, Currency: "IDR", Status: domain.PaymentStatusPending}
+		XenditInvoiceID: "inv_" + suffix, ConnectionID: &conn.ID, Provider: conn.Provider, Amount: 5000, Currency: "IDR", Status: domain.PaymentStatusPending}
 	if err := f.payments.Create(ctx, f.payment); err != nil {
 		t.Fatalf("payment: %v", err)
 	}
@@ -74,9 +80,27 @@ func (f *fixture) counts(t *testing.T) (events, ledger, deliveries int) {
 	return
 }
 
-func (f *fixture) callback() service.XenditInvoiceCallback {
-	return service.XenditInvoiceCallback{ID: f.payment.XenditInvoiceID, ExternalID: f.payment.ExternalID,
+func (f *fixture) callback() xenditCallback {
+	return xenditCallback{ID: f.payment.XenditInvoiceID, ExternalID: f.payment.ExternalID,
 		Status: "PAID", PaidAmount: 5000, FeesPaid: 100}
+}
+
+// xenditCallback is a Xendit invoice callback; event parses it with the
+// adapter, as the webhook handler does.
+type xenditCallback struct {
+	ID, ExternalID, Status string
+	PaidAmount, FeesPaid   int64
+	SettlementDate         string
+}
+
+func (cb xenditCallback) event() provider.InboundEvent {
+	raw, _ := json.Marshal(map[string]any{"id": cb.ID, "external_id": cb.ExternalID, "status": cb.Status,
+		"paid_amount": cb.PaidAmount, "fees_paid_amount": cb.FeesPaid, "settlement_date": cb.SettlementDate})
+	ev, err := xendit.New().ParseWebhook(raw)
+	if err != nil {
+		panic(err)
+	}
+	return *ev
 }
 
 // noCache never reports a key as seen, so only the DB guard dedups.
@@ -137,7 +161,7 @@ func TestIntegrationProcessRetryAfterFailure(t *testing.T) {
 	enq := &stubEnqueuer{}
 	svc := service.NewWebhookService(f.payments, f.ledger, &failingDelivery{WebhookRepo: f.webhooks}, f.tx, noCache{}, enq)
 
-	if err := svc.Process(context.Background(), f.callback(), []byte(`{}`)); err == nil {
+	if err := svc.Process(context.Background(), f.conn, f.callback().event(), []byte(`{}`)); err == nil {
 		t.Fatal("expected first attempt to fail")
 	}
 	if ev, led, del := f.counts(t); ev+led+del != 0 {
@@ -145,7 +169,7 @@ func TestIntegrationProcessRetryAfterFailure(t *testing.T) {
 	}
 
 	svc = service.NewWebhookService(f.payments, f.ledger, f.webhooks, f.tx, noCache{}, enq)
-	if err := svc.Process(context.Background(), f.callback(), []byte(`{}`)); err != nil {
+	if err := svc.Process(context.Background(), f.conn, f.callback().event(), []byte(`{}`)); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 	if ev, led, del := f.counts(t); ev != 1 || led != 1 || del != 1 || len(enq.ids) != 1 {
@@ -173,7 +197,7 @@ func TestIntegrationProcessConcurrentDuplicates(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs <- svc.Process(context.Background(), f.callback(), []byte(`{}`))
+			errs <- svc.Process(context.Background(), f.conn, f.callback().event(), []byte(`{}`))
 		}()
 	}
 	wg.Wait()
@@ -188,13 +212,35 @@ func TestIntegrationProcessConcurrentDuplicates(t *testing.T) {
 	}
 }
 
+// A callback for this payment verified at another connection commits nothing,
+// so the payment's own callback for the same event still applies.
+func TestIntegrationMismatchDoesNotBlockOwnConnection(t *testing.T) {
+	f := newFixture(t)
+	enq := &stubEnqueuer{}
+	svc := service.NewWebhookService(f.payments, f.ledger, f.webhooks, f.tx, noCache{}, enq)
+	other := newTestConnection(t, f.pool, domain.EnvLive)
+
+	if err := svc.Process(context.Background(), other, f.callback().event(), []byte(`{}`)); !errors.Is(err, service.ErrCallbackMismatch) {
+		t.Fatalf("foreign callback: %v", err)
+	}
+	if ev, led, del := f.counts(t); ev != 0 || led != 0 || del != 0 {
+		t.Fatalf("foreign callback wrote: events=%d ledger=%d deliveries=%d", ev, led, del)
+	}
+	if err := svc.Process(context.Background(), f.conn, f.callback().event(), []byte(`{}`)); err != nil {
+		t.Fatalf("own callback: %v", err)
+	}
+	if ev, led, del := f.counts(t); ev != 1 || led != 1 || del != 1 || len(enq.ids) != 1 {
+		t.Fatalf("own callback: events=%d ledger=%d deliveries=%d enqueued=%d", ev, led, del, len(enq.ids))
+	}
+}
+
 // When enqueue fails after commit, the delivery is left for the sweeper.
 func TestIntegrationEnqueueFailureLeavesUnsentDelivery(t *testing.T) {
 	f := newFixture(t)
 	enq := &stubEnqueuer{err: errors.New("redis down")}
 	svc := service.NewWebhookService(f.payments, f.ledger, f.webhooks, f.tx, noCache{}, enq)
 
-	if err := svc.Process(context.Background(), f.callback(), []byte(`{}`)); !errors.Is(err, service.ErrForwardNotQueued) {
+	if err := svc.Process(context.Background(), f.conn, f.callback().event(), []byte(`{}`)); !errors.Is(err, service.ErrForwardNotQueued) {
 		t.Fatalf("expected ErrForwardNotQueued, got %v", err)
 	}
 	unsent, err := f.webhooks.ListUnsentDeliveries(context.Background(), time.Now().Add(time.Minute), 1000)
@@ -229,8 +275,8 @@ func TestIntegrationSettledAfterPaidSetsLedgerSettledAt(t *testing.T) {
 	settled := f.callback()
 	settled.Status = "SETTLED"
 	settled.SettlementDate = "2026-01-02T03:04:05Z"
-	for _, cb := range []service.XenditInvoiceCallback{paid, settled} {
-		if err := svc.Process(ctx, cb, []byte(`{}`)); err != nil {
+	for _, cb := range []xenditCallback{paid, settled} {
+		if err := svc.Process(ctx, f.conn, cb.event(), []byte(`{}`)); err != nil {
 			t.Fatalf("process %s: %v", cb.Status, err)
 		}
 	}
@@ -256,11 +302,11 @@ func TestIntegrationConcurrentPaidAndSettledEndSettled(t *testing.T) {
 		settled.Status = "SETTLED"
 
 		var wg sync.WaitGroup
-		for _, cb := range []service.XenditInvoiceCallback{settled, paid} {
+		for _, cb := range []xenditCallback{settled, paid} {
 			wg.Add(1)
-			go func(cb service.XenditInvoiceCallback) {
+			go func(cb xenditCallback) {
 				defer wg.Done()
-				if err := svc.Process(context.Background(), cb, []byte(`{}`)); err != nil {
+				if err := svc.Process(context.Background(), f.conn, cb.event(), []byte(`{}`)); err != nil {
 					t.Errorf("process %s: %v", cb.Status, err)
 				}
 			}(cb)

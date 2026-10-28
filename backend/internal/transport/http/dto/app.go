@@ -38,6 +38,7 @@ type App struct {
 	WebhookURL         string             `json:"webhook_url"`
 	RedirectSuccessURL string             `json:"redirect_success_url"`
 	RedirectFailureURL string             `json:"redirect_failure_url"`
+	DefaultConnection  *ConnectionSummary `json:"default_connection"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
 }
@@ -54,6 +55,7 @@ func AppFromDomain(a *domain.App) App {
 		WebhookURL:         a.WebhookURL,
 		RedirectSuccessURL: a.RedirectSuccessURL,
 		RedirectFailureURL: a.RedirectFailureURL,
+		DefaultConnection:  ConnectionSummaryFromDomain(a.DefaultConnection),
 		CreatedAt:          a.CreatedAt.UTC(),
 		UpdatedAt:          a.UpdatedAt.UTC(),
 	}

@@ -6,13 +6,38 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/mydisha/keipay/backend/internal/config"
-	"github.com/mydisha/keipay/backend/internal/xendit"
+	"github.com/mydisha/keipay/backend/internal/service"
 )
 
-// xenditClient builds the Xendit SDK client from config.
-func xenditClient(cfg *config.Config) xendit.Client {
-	return xendit.NewSDKClient(cfg.XenditSecretKey)
+// logLegacyImport reports what importing the deprecated XENDIT_* settings
+// did. A nil result means the settings are not set.
+func logLegacyImport(log *zap.Logger, res *service.LegacyImport, err error) {
+	switch {
+	case err != nil:
+		log.Error("XENDIT_SECRET_KEY and XENDIT_CALLBACK_TOKEN were not imported; add a connection in the console instead",
+			zap.Error(err))
+	case res == nil:
+	case !res.Created:
+		log.Warn("XENDIT_SECRET_KEY and XENDIT_CALLBACK_TOKEN are deprecated and ignored: they were imported before. Remove them from the environment.",
+			zap.String("connection_id", res.Connection.PublicID))
+	default:
+		log.Info("imported XENDIT_* settings into a connection",
+			zap.String("connection_id", res.Connection.PublicID),
+			zap.String("name", res.Connection.Name),
+			zap.String("environment", string(res.Connection.Environment)),
+			zap.Int("apps_defaulted", len(res.Defaulted)),
+			zap.Int64("payments_backfilled", res.PaymentsBackfilled))
+		if len(res.OtherEnvironment) > 0 {
+			apps := make([]string, 0, len(res.OtherEnvironment))
+			for _, a := range res.OtherEnvironment {
+				apps = append(apps, a.PublicID+" ("+a.Slug+")")
+			}
+			log.Warn("apps of the other environment have no default connection; payments for them fail until one is set",
+				zap.String("connection_environment", string(res.Connection.Environment)),
+				zap.Strings("apps", apps))
+		}
+		log.Warn("XENDIT_SECRET_KEY and XENDIT_CALLBACK_TOKEN are deprecated; remove them from the environment now that they are imported")
+	}
 }
 
 // resolveFrontendDir returns the admin console build to serve, or "" if none

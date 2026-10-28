@@ -96,3 +96,38 @@ func TestLoad_NoEnvFileReportsMissingKeys(t *testing.T) {
 		t.Fatalf("err = %v, want missing POSTGRES_DSN", err)
 	}
 }
+
+// T-20: the deprecated Xendit settings are optional, but only as a pair.
+func TestLoad_XenditSettingsBothOrNeither(t *testing.T) {
+	cases := []struct {
+		name, key, token string
+		wantErr          bool
+	}{
+		{"neither", "", "", false},
+		{"both", "xnd_development_abc", "token-123", false},
+		{"key only", "xnd_development_abc", "", true},
+		{"token only", "", "token-123", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			chdirBackend(t)
+			t.Setenv("POSTGRES_DSN", "postgres://x")
+			t.Setenv("ENCRYPTION_KEY", strings.Repeat("ab", 32))
+			t.Setenv("XENDIT_SECRET_KEY", tc.key)
+			t.Setenv("XENDIT_CALLBACK_TOKEN", tc.token)
+			cfg, err := Load()
+			if tc.wantErr {
+				if err == nil || err.Error() != "XENDIT_SECRET_KEY and XENDIT_CALLBACK_TOKEN must be set together" {
+					t.Fatalf("err = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.XenditSecretKey != tc.key || cfg.XenditCallbackToken != tc.token {
+				t.Fatalf("cfg = %q / %q", cfg.XenditSecretKey, cfg.XenditCallbackToken)
+			}
+		})
+	}
+}

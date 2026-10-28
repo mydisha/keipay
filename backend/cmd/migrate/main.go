@@ -119,7 +119,8 @@ func seedApp(ctx context.Context, pool *pgxpool.Pool, cipher service.SecretCiphe
 		return nil, fmt.Errorf("check app %s: %w", slug, err)
 	}
 	audit := service.NewAuditService(postgres.NewAuditRepo(pool))
-	svc := service.NewAppService(apps, postgres.NewAPIKeyRepo(pool), cipher, postgres.NewTxManager(pool), audit)
+	svc := service.NewAppService(apps, postgres.NewAPIKeyRepo(pool), postgres.NewConnectionRepo(pool), cipher,
+		postgres.NewTxManager(pool), audit)
 	created, err := svc.Create(ctx, service.CreateAppInput{Name: name, Slug: slug, Environment: env})
 	if err != nil {
 		return nil, fmt.Errorf("seed %s: %w", slug, err)

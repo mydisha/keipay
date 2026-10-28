@@ -61,7 +61,7 @@ func newAuthFixture(t *testing.T) *authFixture {
 	core, logs := observer.New(zapcore.DebugLevel)
 	f := &authFixture{apps: memstore.NewApps(time.Now), nonces: memNonces{}, logs: logs, log: zap.New(core)}
 	f.keys = memstore.NewAPIKeys(f.apps, time.Now)
-	f.svc = service.NewAppService(f.apps, f.keys, prefixCipher{}, memstore.NewTx(f.apps, f.keys), nil)
+	f.svc = service.NewAppService(f.apps, f.keys, nil, prefixCipher{}, memstore.NewTx(f.apps, f.keys), nil)
 	return f
 }
 

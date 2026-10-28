@@ -116,7 +116,8 @@ func (h *AppHandler) Update(c *gin.Context) {
 }
 
 // updateAppInput maps the present fields of a PATCH body; a string field
-// holding another JSON type fails with rule type.
+// holding another JSON type fails with rule type. default_connection_id may
+// also be null, which clears it.
 func updateAppInput(body map[string]json.RawMessage) (service.UpdateAppInput, error) {
 	in := service.UpdateAppInput{Metadata: body["metadata"]}
 	_, in.Slug = body["slug"]
@@ -141,6 +142,12 @@ func updateAppInput(body map[string]json.RawMessage) (service.UpdateAppInput, er
 			continue
 		}
 		*f.dst = v
+	}
+	if raw, ok := body["default_connection_id"]; ok {
+		in.DefaultConnectionSet = true
+		if err := json.Unmarshal(raw, &in.DefaultConnectionID); err != nil {
+			fields = append(fields, domain.FieldError{Field: "default_connection_id", Rule: "type"})
+		}
 	}
 	if len(fields) > 0 {
 		return in, invalidBody(fields...)

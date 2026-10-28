@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -21,12 +20,15 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
+	"github.com/mydisha/keipay/backend/internal/pkg/crypto"
 	"github.com/mydisha/keipay/backend/internal/pkg/id"
+	"github.com/mydisha/keipay/backend/internal/provider"
+	"github.com/mydisha/keipay/backend/internal/provider/providertest"
+	"github.com/mydisha/keipay/backend/internal/provider/xendit"
 	"github.com/mydisha/keipay/backend/internal/service"
 	"github.com/mydisha/keipay/backend/internal/testutil/memstore"
 	"github.com/mydisha/keipay/backend/internal/transport/http/handler"
 	"github.com/mydisha/keipay/backend/internal/transport/http/middleware"
-	"github.com/mydisha/keipay/backend/internal/xendit"
 )
 
 // --- fakes: every list is empty unless a test fills it ---
@@ -74,26 +76,6 @@ func (m *memNonces) Acquire(_ context.Context, key string) bool {
 	m.seen[key] = true
 	return true
 }
-
-// stubXendit creates numbered invoices; Fail makes CreateInvoice fail.
-type stubXendit struct {
-	mu      sync.Mutex
-	created []xendit.CreateInvoiceInput
-	Fail    error
-}
-
-func (x *stubXendit) CreateInvoice(_ context.Context, in xendit.CreateInvoiceInput) (*xendit.CreateInvoiceOutput, error) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	if x.Fail != nil {
-		return nil, x.Fail
-	}
-	x.created = append(x.created, in)
-	n := strconv.Itoa(len(x.created))
-	return &xendit.CreateInvoiceOutput{InvoiceID: "inv_" + n, InvoiceURL: "https://checkout.example/inv_" + n, Status: domain.PaymentStatusPending}, nil
-}
-
-func (x *stubXendit) ExpireInvoice(context.Context, string) error { return nil }
 
 type replayer struct{ err error }
 
@@ -148,8 +130,17 @@ type apiFixture struct {
 	apps     *memstore.Apps
 	keys     *memstore.APIKeys
 	payments *memstore.Payments
-	xendit   *stubXendit
+	conns    *memstore.Connections
 	appSvc   *service.AppService
+	connSvc  *service.ConnectionService
+	// fake is the provider every app's default connection uses.
+	fake *providertest.Fake
+	// testConn and liveConn are the fake connections createApp makes the
+	// default of new test and live apps.
+	testConn, liveConn *domain.Connection
+	// xenditAPI stands in for the Xendit API the xendit adapter calls.
+	xenditAPI *fakeXenditAPI
+	webhooks  *webhookStores
 }
 
 // apiOption adjusts the fixture before the router is built.
@@ -168,10 +159,12 @@ func newAPI(t *testing.T, frontendDir string, opts ...apiOption) *apiFixture {
 		replay:   &replayer{},
 		logs:     logs,
 		apps:     memstore.NewApps(time.Now),
-		xendit:   &stubXendit{},
+		fake:     providertest.New(),
 	}
 	f.keys = memstore.NewAPIKeys(f.apps, time.Now)
 	f.payments = memstore.NewPayments(f.apps, time.Now)
+	f.conns = memstore.NewConnections(f.apps, time.Now)
+	f.xenditAPI = newFakeXenditAPI(t)
 	cfg := service.AuthConfig{
 		IdleTimeout: 30 * time.Minute, AbsoluteTimeout: 12 * time.Hour,
 		MaxFailuresPerIP: 20, MaxFailuresPerEmail: 5, FailureWindow: 15 * time.Minute,
@@ -193,9 +186,26 @@ func newAPI(t *testing.T, frontendDir string, opts ...apiOption) *apiFixture {
 	f.deps.Sessions = auth
 	f.deps.Auth = handler.NewAuthHandler(auth, f.deps.Cookies, service.NewToken)
 	f.deps.Users = handler.NewUserHandler(service.NewUserService(f.users, directTx{}, auditSvc, hasher))
-	f.appSvc = service.NewAppService(f.apps, f.keys, plainCipher{}, memstore.NewTx(f.apps, f.keys), auditSvc)
-	paymentSvc := service.NewPaymentService(f.payments, f.xendit)
+	registry, err := provider.NewRegistry(f.fake, xendit.New(xendit.WithBaseURL(f.xenditAPI.URL)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealer, err := crypto.New(testMasterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := memstore.NewTx(f.apps, f.keys, f.conns, f.payments)
+	f.appSvc = service.NewAppService(f.apps, f.keys, f.conns, plainCipher{}, tx, auditSvc)
+	f.connSvc = service.NewConnectionService(service.ConnectionDeps{
+		Connections: f.conns, Merchants: f.conns.Merchants(), Apps: f.apps, Payments: f.payments, Registry: registry,
+		Sealer: sealer, Tx: tx, Audit: auditSvc, Log: log, BaseURL: "https://pay.example.com",
+	})
+	paymentSvc := service.NewPaymentService(f.payments, f.conns, registry, sealer, log)
+	f.webhooks = newWebhookStores()
+	webhookSvc := service.NewWebhookService(f.payments, f.webhooks.ledger, f.webhooks.repo, tx, f.webhooks.idemp, f.webhooks.enqueuer)
 	f.deps.Apps = handler.NewAppHandler(f.appSvc)
+	f.deps.Connections = handler.NewConnectionHandler(f.connSvc)
+	f.deps.Webhook = handler.NewWebhookHandler(webhookSvc, f.connSvc, log)
 	f.deps.Payment = handler.NewPaymentHandler(paymentSvc)
 	f.deps.AppResolver = f.appSvc
 	f.deps.NonceStore = &memNonces{seen: map[string]bool{}}
@@ -209,7 +219,40 @@ func newAPI(t *testing.T, frontendDir string, opts ...apiOption) *apiFixture {
 	)
 	f.router = NewRouter(f.deps)
 	f.owner = f.addUser(t, "owner@example.com", domain.RoleOwner)
+	ctx := domain.WithActor(context.Background(), domain.SystemActor("test"))
+	for _, env := range []domain.Environment{domain.EnvTest, domain.EnvLive} {
+		d, err := f.connSvc.Create(ctx, service.CreateConnectionInput{Provider: "fake", Name: "fake-" + string(env), Environment: env,
+			Credentials: map[string]any{"api_key": "fake-api-key-" + string(env) + "-0001", "token": "fake-token-" + string(env)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if env == domain.EnvTest {
+			f.testConn = d.Connection
+		} else {
+			f.liveConn = d.Connection
+		}
+	}
+	f.audit.logs = nil
 	return f
+}
+
+// useDefaultConnection makes the fixture's connection of the app's
+// environment its default, without an audit entry.
+func (f *apiFixture) useDefaultConnection(t *testing.T, appID string) {
+	t.Helper()
+	ctx := context.Background()
+	a, err := f.apps.GetByPublicID(ctx, appID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := f.testConn
+	if a.Environment == domain.EnvLive {
+		conn = f.liveConn
+	}
+	a.DefaultConnectionID = &conn.ID
+	if err := f.apps.Update(ctx, a); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // rebuild builds the router again after a test changed f.deps.
@@ -503,28 +546,4 @@ func TestUnknownAPIRoutesReturnNotFoundEnvelope(t *testing.T) {
 	}
 	f = newAPI(t, "")
 	expectError(t, f.send(nil, http.MethodGet, "/settings", ""), http.StatusNotFound, domain.CodeNotFound)
-}
-
-// Statuses of the Xendit callback are unchanged: a bad body is 400, and any
-// processing failure stays 500 so Xendit retries.
-func TestXenditCallbackErrors(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := NewRouter(Deps{
-		Log:           zap.NewNop(),
-		CallbackToken: "cb-token",
-		Webhook:       handler.NewWebhookHandler(service.NewWebhookService(nil, nil, nil, nil, nil, nil), zap.NewNop()),
-	})
-	post := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, "/webhooks/xendit", strings.NewReader(body))
-		req.Header.Set("x-callback-token", "cb-token")
-		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
-		return w
-	}
-	expectError(t, post(`{not json`), 400, domain.CodeInvalidRequest)
-	w := post(`{"id":"","external_id":""}`)
-	expectError(t, w, 500, domain.CodeInternal)
-	if w.Header().Get("Set-Cookie") != "" {
-		t.Fatalf("webhook response sets cookies: %v", w.Header().Values("Set-Cookie"))
-	}
 }

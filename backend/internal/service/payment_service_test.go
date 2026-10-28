@@ -7,64 +7,48 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
+
+	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/pkg/id"
+	"github.com/mydisha/keipay/backend/internal/provider/providertest"
 	"github.com/mydisha/keipay/backend/internal/testutil/memstore"
-	"github.com/mydisha/keipay/backend/internal/xendit"
 )
-
-type fakeXendit struct {
-	created []xendit.CreateInvoiceInput
-	expired []string
-	err     error
-	// expireErr, when set, is returned by ExpireInvoice.
-	expireErr error
-}
-
-func (f *fakeXendit) CreateInvoice(_ context.Context, in xendit.CreateInvoiceInput) (*xendit.CreateInvoiceOutput, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	f.created = append(f.created, in)
-	n := strconv.Itoa(len(f.created))
-	return &xendit.CreateInvoiceOutput{
-		InvoiceID:  "inv_" + n,
-		InvoiceURL: "https://checkout.xendit.co/web/inv_" + n,
-		Status:     domain.PaymentStatusPending,
-	}, nil
-}
-
-func (f *fakeXendit) ExpireInvoice(_ context.Context, id string) error {
-	if f.expireErr != nil {
-		return f.expireErr
-	}
-	f.expired = append(f.expired, id)
-	return nil
-}
 
 type paymentFixture struct {
 	svc      *PaymentService
 	apps     *memstore.Apps
+	conns    *memstore.Connections
 	payments *memstore.Payments
-	xnd      *fakeXendit
+	fake     *providertest.Fake
 	acme     *domain.App
 	globex   *domain.App
+	// conn is the live connection both apps use by default.
+	conn *domain.Connection
+	logs *observer.ObservedLogs
 }
 
 func newPaymentFixture(t *testing.T) *paymentFixture {
 	t.Helper()
-	f := &paymentFixture{apps: memstore.NewApps(time.Now), xnd: &fakeXendit{}}
-	f.payments = memstore.NewPayments(f.apps, time.Now)
-	f.svc = NewPaymentService(f.payments, f.xnd)
+	cf := newConnFixture(t)
+	core, logs := observer.New(zap.DebugLevel)
+	f := &paymentFixture{apps: cf.apps, conns: cf.conns, payments: cf.payments, fake: cf.fake, logs: logs}
+	f.svc = NewPaymentService(f.payments, f.conns, cf.registry, cf.cipher, zap.New(core))
+	f.conn = cf.addConnection(t, "fake-live", domain.EnvLive)
 	add := func(slug string) *domain.App {
 		a := &domain.App{PublicID: id.New(id.App), Slug: slug, Name: strings.ToUpper(slug), Environment: domain.EnvLive,
 			Status: domain.AppActive, RedirectSuccessURL: "https://" + slug + ".example/ok"}
 		if err := f.apps.Create(context.Background(), a); err != nil {
 			t.Fatal(err)
 		}
-		return a
+		a.DefaultConnectionID = &f.conn.ID
+		if err := f.apps.Update(context.Background(), a); err != nil {
+			t.Fatal(err)
+		}
+		got, _ := f.apps.GetByID(context.Background(), a.ID)
+		return got
 	}
 	f.acme, f.globex = add("acme"), add("globex")
 	return f
@@ -92,8 +76,8 @@ func TestCreateDuplicateOrderReturnsExisting(t *testing.T) {
 	if second.ID != first.ID || second.InvoiceURL != first.InvoiceURL {
 		t.Fatalf("retry returned a different payment: first=%+v second=%+v", first, second)
 	}
-	if len(f.xnd.created) != 1 {
-		t.Fatalf("expected 1 xendit invoice, got %d", len(f.xnd.created))
+	if len(f.fake.Creates) != 1 {
+		t.Fatalf("expected 1 xendit invoice, got %d", len(f.fake.Creates))
 	}
 }
 
@@ -110,8 +94,8 @@ func TestCreateDuplicateOrderDifferentAmountConflicts(t *testing.T) {
 			t.Fatalf("expected conflict for %+v, got %v", in, err)
 		}
 	}
-	if len(f.xnd.created) != 1 {
-		t.Fatalf("conflicting retries created invoices: %d", len(f.xnd.created))
+	if len(f.fake.Creates) != 1 {
+		t.Fatalf("conflicting retries created invoices: %d", len(f.fake.Creates))
 	}
 }
 
@@ -128,7 +112,7 @@ func TestCreateStoresReferenceMetadataAndKey(t *testing.T) {
 	if !id.Valid(p.PublicID, id.Payment) || p.ExternalID != "kp_"+p.PublicID || p.Reference() != p.ExternalID {
 		t.Fatalf("ids = %s / %s", p.PublicID, p.ExternalID)
 	}
-	if got := f.xnd.created[0]; got.ExternalID != p.ExternalID || got.SuccessRedirectURL != "https://acme.example/ok" || got.Currency != "IDR" {
+	if got := f.fake.Creates[0].Input; got.Reference != p.ExternalID || got.SuccessRedirectURL != "https://acme.example/ok" || got.Currency != "IDR" {
 		t.Fatalf("invoice input = %+v", got)
 	}
 	stored := f.payments.All()[0]
@@ -194,8 +178,8 @@ func TestCreateIdempotencyKey(t *testing.T) {
 	if err != nil || replayed || other.ID == first.ID || other.AppID != f.globex.ID {
 		t.Fatalf("other app: %+v %v %v", other, replayed, err)
 	}
-	if len(f.xnd.created) != 2 || len(f.payments.All()) != 2 {
-		t.Fatalf("invoices=%d payments=%d", len(f.xnd.created), len(f.payments.All()))
+	if len(f.fake.Creates) != 2 || len(f.payments.All()) != 2 {
+		t.Fatalf("invoices=%d payments=%d", len(f.fake.Creates), len(f.payments.All()))
 	}
 }
 
@@ -235,8 +219,8 @@ func TestCreateInsertRace(t *testing.T) {
 			} else if err != nil || !replayed || got.XenditInvoiceID != "inv_winner" {
 				t.Fatalf("got %+v replayed=%v err=%v", got, replayed, err)
 			}
-			if len(f.xnd.expired) != 1 || f.xnd.expired[0] != "inv_1" {
-				t.Fatalf("expected loser invoice inv_1 expired, got %v", f.xnd.expired)
+			if len(f.fake.Cancels) != 1 || f.fake.Cancels[0].ProviderPaymentID != "inv_1" {
+				t.Fatalf("expected loser invoice inv_1 expired, got %v", f.fake.Cancels)
 			}
 		})
 	}
@@ -249,8 +233,8 @@ func TestCreateInsertFailureExpiresInvoice(t *testing.T) {
 	if !errors.Is(err, f.payments.CreateErr) {
 		t.Fatalf("expected insert error, got %v", err)
 	}
-	if len(f.xnd.expired) != 1 || f.xnd.expired[0] != "inv_1" {
-		t.Fatalf("expected orphan invoice expired, got %v", f.xnd.expired)
+	if len(f.fake.Cancels) != 1 || f.fake.Cancels[0].ProviderPaymentID != "inv_1" {
+		t.Fatalf("expected orphan invoice expired, got %v", f.fake.Cancels)
 	}
 }
 
@@ -259,16 +243,16 @@ func TestCreateInsertFailureExpiresInvoice(t *testing.T) {
 func TestCreateInsertFailureReportsExpireFailure(t *testing.T) {
 	f := newPaymentFixture(t)
 	f.payments.CreateErr = errors.New("db down")
-	f.xnd.expireErr = errors.New("xendit 503")
+	f.fake.CancelErr = errors.New("xendit 503")
 	_, _, err := f.create(t, f.acme, order1, "")
-	if !errors.Is(err, f.payments.CreateErr) || !errors.Is(err, f.xnd.expireErr) {
+	if !errors.Is(err, f.payments.CreateErr) || !errors.Is(err, f.fake.CancelErr) {
 		t.Fatalf("expected both insert and expire errors, got %v", err)
 	}
 }
 
 func TestCreateXenditErrorStoresNothing(t *testing.T) {
 	f := newPaymentFixture(t)
-	f.xnd.err = errors.New("xendit 500")
+	f.fake.CreateErr = errors.New("xendit 500")
 	if _, _, err := f.create(t, f.acme, order1, ""); err == nil {
 		t.Fatal("expected error")
 	}
@@ -305,8 +289,8 @@ func TestCreateValidation(t *testing.T) {
 		_, _, err := f.create(t, f.acme, tc.in, tc.key)
 		assertFields(t, err, tc.want...)
 	}
-	if len(f.xnd.created) != 0 {
-		t.Fatalf("invalid requests created invoices: %d", len(f.xnd.created))
+	if len(f.fake.Creates) != 0 {
+		t.Fatalf("invalid requests created invoices: %d", len(f.fake.Creates))
 	}
 }
 

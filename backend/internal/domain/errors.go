@@ -50,6 +50,10 @@ const (
 	CodeAPIKeyRevoked           ErrorCode = "api_key_revoked"
 	CodeAPIKeyExpired           ErrorCode = "api_key_expired"
 	CodeIdempotencyKeyReused    ErrorCode = "idempotency_key_reused"
+	CodeConnectionInUse         ErrorCode = "connection_in_use"
+	CodeNoEligibleConnection    ErrorCode = "no_eligible_connection"
+	CodeProviderRejected        ErrorCode = "provider_rejected"
+	CodeProviderUnavailable     ErrorCode = "provider_unavailable"
 )
 
 // ErrorCodes returns every defined error code.
@@ -64,6 +68,7 @@ func ErrorCodes() []ErrorCode {
 		CodePasswordChangeRequired, CodeInvalidCSRFToken, CodeInvalidSetupToken,
 		CodeSetupCompleted, CodeLastOwner, CodeCannotModifySelf, CodeRateLimited,
 		CodeAPIKeyRevoked, CodeAPIKeyExpired, CodeIdempotencyKeyReused,
+		CodeConnectionInUse, CodeNoEligibleConnection, CodeProviderRejected, CodeProviderUnavailable,
 	}
 }
 
@@ -137,6 +142,53 @@ func RateLimited(retryAfterSeconds int) *Error {
 	}
 }
 
+// Reasons reported by no_eligible_connection in details.reasons.
+const (
+	ReasonNoDefaultConnection = "no_default_connection"
+	ReasonConnectionDisabled  = "connection_disabled"
+)
+
+// NoEligibleConnection is a payment no connection can take, with the reasons.
+func NoEligibleConnection(reasons ...string) *Error {
+	return &Error{
+		Code:    CodeNoEligibleConnection,
+		Message: "no connection can take this payment",
+		Details: map[string]any{"reasons": reasons},
+	}
+}
+
+// ProviderRejected is a request the gateway refused. cause stays available to
+// errors.Is and logs; the message never carries the gateway's text.
+func ProviderRejected(provider string, cause error) *Error {
+	return &Error{
+		Code:    CodeProviderRejected,
+		Message: "the payment provider rejected the request",
+		Details: map[string]any{"provider": provider},
+		Err:     cause,
+	}
+}
+
+// ProviderUnavailable is a gateway that could not be reached, timed out or
+// failed on its side.
+func ProviderUnavailable(cause error) *Error {
+	return &Error{Code: CodeProviderUnavailable, Message: "the payment provider is unavailable; try again later", Err: cause}
+}
+
+// ConnectionInUse refuses disabling a connection that apps use as their
+// default. apps holds at most MaxInUseApps of them; count is the total.
+func ConnectionInUse(apps []AppSummary, count int) *Error {
+	listed := make([]map[string]any, 0, len(apps))
+	for _, a := range apps {
+		listed = append(listed, map[string]any{"id": a.PublicID, "slug": a.Slug, "name": a.Name, "environment": a.Environment})
+	}
+	return &Error{
+		Code:    CodeConnectionInUse,
+		Message: "the connection is the default connection of one or more apps",
+		Details: map[string]any{"apps": listed, "app_count": count},
+		Err:     ErrConflict,
+	}
+}
+
 var (
 	// ErrInvalidCredentials is a wrong email, password or current password.
 	ErrInvalidCredentials = &Error{Code: CodeInvalidCredentials, Message: "invalid credentials", Err: ErrUnauthorized}
@@ -172,4 +224,7 @@ var (
 	ErrIdempotencyKeyReused = &Error{Code: CodeIdempotencyKeyReused, Message: "idempotency key already used for a different request", Err: ErrConflict}
 	// ErrCannotModifySelf refuses disabling or resetting your own account.
 	ErrCannotModifySelf = &Error{Code: CodeCannotModifySelf, Message: "you cannot do this to your own account"}
+	// ErrInvalidCallbackToken is a gateway callback that fails its
+	// connection's verification.
+	ErrInvalidCallbackToken = &Error{Code: CodeInvalidCallbackToken, Message: "invalid callback token", Err: ErrUnauthorized}
 )

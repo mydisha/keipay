@@ -20,7 +20,6 @@ type Deps struct {
 	AppResolver     middleware.AppResolver
 	NonceStore      middleware.NonceStore
 	SecretDecryptor middleware.SecretDecryptor
-	CallbackToken   string
 
 	// Sessions resolves admin session cookies.
 	Sessions middleware.Authenticator
@@ -31,12 +30,13 @@ type Deps struct {
 	// IP is the TCP peer.
 	TrustedProxies []string
 
-	Payment *handler.PaymentHandler
-	Webhook *handler.WebhookHandler
-	Admin   *handler.AdminHandler
-	Apps    *handler.AppHandler
-	Auth    *handler.AuthHandler
-	Users   *handler.UserHandler
+	Payment     *handler.PaymentHandler
+	Webhook     *handler.WebhookHandler
+	Admin       *handler.AdminHandler
+	Apps        *handler.AppHandler
+	Connections *handler.ConnectionHandler
+	Auth        *handler.AuthHandler
+	Users       *handler.UserHandler
 
 	// FrontendDir is the admin console build (frontend/dist). Empty disables it.
 	FrontendDir string
@@ -107,6 +107,17 @@ func adminRoutes(d Deps) []adminRoute {
 		permitted(http.MethodPost, "/apps/:id/keys/:key_id/rotate", domain.PermAppsWrite, d.Apps.RotateKey),
 		permitted(http.MethodPost, "/apps/:id/keys/:key_id/revoke", domain.PermAppsWrite, d.Apps.RevokeKey),
 
+		permitted(http.MethodGet, "/providers", domain.PermConnectionsRead, d.Connections.Providers),
+		permitted(http.MethodGet, "/connections", domain.PermConnectionsRead, d.Connections.List),
+		permitted(http.MethodPost, "/connections", domain.PermConnectionsWrite, d.Connections.Create),
+		permitted(http.MethodGet, "/connections/:id", domain.PermConnectionsRead, d.Connections.Get),
+		permitted(http.MethodPatch, "/connections/:id", domain.PermConnectionsWrite, d.Connections.Update),
+		permitted(http.MethodPatch, "/connections/:id/credentials", domain.PermConnectionsWrite, d.Connections.UpdateCredentials),
+		permitted(http.MethodPut, "/connections/:id/channels", domain.PermConnectionsWrite, d.Connections.ReplaceChannels),
+		permitted(http.MethodPost, "/connections/:id/test", domain.PermConnectionsWrite, d.Connections.Test),
+		permitted(http.MethodPost, "/connections/:id/disable", domain.PermConnectionsWrite, d.Connections.Disable),
+		permitted(http.MethodPost, "/connections/:id/enable", domain.PermConnectionsWrite, d.Connections.Enable),
+
 		permitted(http.MethodGet, "/payments", domain.PermPaymentsRead, d.Admin.ListPayments),
 		permitted(http.MethodGet, "/ledger", domain.PermPaymentsRead, d.Admin.ListLedger),
 		permitted(http.MethodGet, "/webhook-deliveries", domain.PermDeliveriesRead, d.Admin.ListDeliveries),
@@ -138,12 +149,13 @@ func NewRouter(d Deps) *gin.Engine {
 		v1.GET("/payments/:id", d.Payment.Get)
 	}
 
-	// Inbound Xendit callbacks: verified by x-callback-token.
+	// Inbound gateway callbacks, one URL per connection, each verified with
+	// that connection's credentials. /webhooks/xendit is the alias of the
+	// connection imported from the deprecated XENDIT_* settings.
 	wh := r.Group("/webhooks")
-	wh.Use(middleware.XenditCallbackToken(d.CallbackToken, d.Log))
-
 	{
 		wh.POST("/xendit", d.Webhook.Xendit)
+		wh.POST("/:provider/:connection_id", d.Webhook.Connection)
 	}
 
 	// Admin/UI API: cookie session, CSRF on unsafe methods, permission per route.

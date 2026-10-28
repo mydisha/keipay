@@ -4,9 +4,11 @@ name: keipay
 # and one keipay container serving the API, worker and admin console on :8080.
 # For local development, `make up` starts only postgres + redis.
 #
-# Required in .env (or the shell): ENCRYPTION_KEY (`openssl rand -hex 32`),
-# XENDIT_SECRET_KEY, XENDIT_CALLBACK_TOKEN. Optional: SETUP_TOKEN,
+# Required in .env (or the shell): ENCRYPTION_KEY (`openssl rand -hex 32`).
+# Set HTTP_BASE_URL to the public URL gateways call back. Optional: SETUP_TOKEN,
 # TRUSTED_PROXIES, COOKIE_SECURE and the session/sign-in limits (.env.example).
+# XENDIT_SECRET_KEY and XENDIT_CALLBACK_TOKEN are deprecated: imported once into
+# a connection on first start, then ignored.
 # They are not enforced here so `make up` works before .env is filled in;
 # migrate and keipay exit with a "missing required config" error instead.
 #

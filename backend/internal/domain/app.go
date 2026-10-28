@@ -45,8 +45,13 @@ type App struct {
 	RedirectFailureURL string
 	// WebhookSecretEnc is the encrypted secret that signs outbound webhooks.
 	WebhookSecretEnc string `json:"-"`
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	MerchantID       int64
+	// DefaultConnectionID is the connection /v1/payments uses; nil when none.
+	// DefaultConnection is its summary, filled by every read.
+	DefaultConnectionID *int64
+	DefaultConnection   *ConnectionSummary
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
 }
 
 // Summary returns the short form of the app that list rows carry.
@@ -73,7 +78,8 @@ type AppFilter struct {
 // (environment, slug) returns ErrConflict.
 type AppRepository interface {
 	Create(ctx context.Context, a *App) error
-	// Update writes the mutable columns of a and refreshes UpdatedAt.
+	// Update writes the mutable columns of a, its default connection
+	// included, and refreshes UpdatedAt.
 	Update(ctx context.Context, a *App) error
 	GetByID(ctx context.Context, id int64) (*App, error)
 	GetByPublicID(ctx context.Context, publicID string) (*App, error)
@@ -82,4 +88,7 @@ type AppRepository interface {
 	GetBySlug(ctx context.Context, env Environment, slug string) (*App, error)
 	// List returns apps newest first (created_at, then public id).
 	List(ctx context.Context, f AppFilter, p Page) (PageResult[App], error)
+	// ListWithoutDefaultConnection returns every app without a default
+	// connection, oldest first, row-locked until the transaction ends.
+	ListWithoutDefaultConnection(ctx context.Context) ([]App, error)
 }

@@ -42,15 +42,17 @@ var (
 type AppService struct {
 	apps   domain.AppRepository
 	keys   domain.APIKeyRepository
+	conns  domain.ConnectionRepository
 	cipher SecretCipher
 	tx     domain.TxManager
 	audit  Auditor
 	now    func() time.Time
 }
 
-// NewAppService constructs an AppService.
-func NewAppService(apps domain.AppRepository, keys domain.APIKeyRepository, cipher SecretCipher, tx domain.TxManager, audit Auditor) *AppService {
-	return &AppService{apps: apps, keys: keys, cipher: cipher, tx: tx, audit: audit, now: time.Now}
+// NewAppService constructs an AppService. conns resolves default connections.
+func NewAppService(apps domain.AppRepository, keys domain.APIKeyRepository, conns domain.ConnectionRepository,
+	cipher SecretCipher, tx domain.TxManager, audit Auditor) *AppService {
+	return &AppService{apps: apps, keys: keys, conns: conns, cipher: cipher, tx: tx, audit: audit, now: time.Now}
 }
 
 // CreateAppInput is a new app. Metadata is raw JSON; omitted or null is {}.
@@ -66,14 +68,18 @@ type CreateAppInput struct {
 
 // UpdateAppInput holds the fields present in a PATCH body; nil means absent.
 // Slug and Environment only record that the field was sent, which is refused.
+// DefaultConnectionSet records that default_connection_id was sent;
+// DefaultConnectionID is then the con_ id, or nil to clear it.
 type UpdateAppInput struct {
-	Name               *string
-	WebhookURL         *string
-	RedirectSuccessURL *string
-	RedirectFailureURL *string
-	Metadata           json.RawMessage
-	Slug               bool
-	Environment        bool
+	Name                 *string
+	WebhookURL           *string
+	RedirectSuccessURL   *string
+	RedirectFailureURL   *string
+	Metadata             json.RawMessage
+	Slug                 bool
+	Environment          bool
+	DefaultConnectionSet bool
+	DefaultConnectionID  *string
 }
 
 // AppCreated is a new app with its first key and the one-time secrets.
@@ -273,7 +279,7 @@ func (s *AppService) Update(ctx context.Context, publicID string, in UpdateAppIn
 		fe.check("environment", RuleImmutable)
 	}
 	if !in.Slug && !in.Environment && in.Name == nil && in.WebhookURL == nil &&
-		in.RedirectSuccessURL == nil && in.RedirectFailureURL == nil && in.Metadata == nil {
+		in.RedirectSuccessURL == nil && in.RedirectFailureURL == nil && in.Metadata == nil && !in.DefaultConnectionSet {
 		return nil, domain.InvalidFields(domain.FieldError{Field: "body", Rule: RuleRequired})
 	}
 	changes := map[string]any{}
@@ -296,6 +302,13 @@ func (s *AppService) Update(ctx context.Context, publicID string, in UpdateAppIn
 		fe = append(fe, errs...)
 		changes["metadata"] = meta
 	}
+	var connPublicID string
+	if in.DefaultConnectionSet && in.DefaultConnectionID != nil {
+		var err error
+		if connPublicID, err = id.ParseWithPrefix(*in.DefaultConnectionID, id.Connection); err != nil {
+			fe.check("default_connection_id", RulePublicID)
+		}
+	}
 	if err := fe.sorted(appFieldOrder).err(); err != nil {
 		return nil, err
 	}
@@ -308,6 +321,11 @@ func (s *AppService) Update(ctx context.Context, publicID string, in UpdateAppIn
 			return err
 		}
 		before, after := applyAppChanges(app, changes)
+		if in.DefaultConnectionSet {
+			if err := s.applyDefaultConnection(ctx, app, connPublicID, before, after); err != nil {
+				return err
+			}
+		}
 		if len(after) == 0 {
 			return nil
 		}
@@ -323,7 +341,52 @@ func (s *AppService) Update(ctx context.Context, publicID string, in UpdateAppIn
 }
 
 // appFieldOrder is the order field errors are reported in.
-var appFieldOrder = []string{"name", "slug", "environment", "webhook_url", "redirect_success_url", "redirect_failure_url", "metadata"}
+var appFieldOrder = []string{"name", "slug", "environment", "webhook_url", "redirect_success_url", "redirect_failure_url",
+	"metadata", "default_connection_id"}
+
+// applyDefaultConnection sets or, for an empty connPublicID, clears the app's
+// default connection and records the change in before/after. The connection
+// is share-locked, so it cannot be disabled before the transaction commits;
+// the composite foreign key backs the environment and merchant rules.
+func (s *AppService) applyDefaultConnection(ctx context.Context, app *domain.App, connPublicID string, before, after map[string]any) error {
+	var next *domain.Connection
+	if connPublicID != "" {
+		c, err := s.conns.GetByPublicIDForShare(ctx, connPublicID)
+		if errors.Is(err, domain.ErrNotFound) {
+			return domain.InvalidFields(domain.FieldError{Field: "default_connection_id", Rule: RuleExists})
+		}
+		if err != nil {
+			return err
+		}
+		switch {
+		case c.Environment != app.Environment:
+			return domain.InvalidFields(domain.FieldError{Field: "default_connection_id", Rule: RuleEnvironment})
+		case c.Status != domain.ConnectionActive:
+			return domain.InvalidFields(domain.FieldError{Field: "default_connection_id", Rule: RuleStatus})
+		}
+		next = c
+	}
+	if (next == nil && app.DefaultConnectionID == nil) || (next != nil && app.DefaultConnectionID != nil && *app.DefaultConnectionID == next.ID) {
+		return nil
+	}
+	before["default_connection_id"] = connectionPublicID(app.DefaultConnection)
+	if next == nil {
+		app.DefaultConnectionID, app.DefaultConnection = nil, nil
+		after["default_connection_id"] = nil
+		return nil
+	}
+	summary := next.Summary()
+	app.DefaultConnectionID, app.DefaultConnection = &next.ID, &summary
+	after["default_connection_id"] = next.PublicID
+	return nil
+}
+
+func connectionPublicID(s *domain.ConnectionSummary) any {
+	if s == nil {
+		return nil
+	}
+	return s.PublicID
+}
 
 // applyAppChanges sets every changed field on a and returns the old and new
 // values of only those fields.

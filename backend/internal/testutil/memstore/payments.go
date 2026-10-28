@@ -166,3 +166,20 @@ func (s *Payments) All() []domain.Payment {
 	defer s.mu.Unlock()
 	return slices.Collect(maps.Values(s.byID))
 }
+
+// BackfillConnection assigns every payment without a connection to
+// connectionID.
+func (s *Payments) BackfillConnection(_ context.Context, connectionID int64, provider string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var n int64
+	for id, p := range s.byID {
+		if p.ConnectionID == nil {
+			cid := connectionID
+			p.ConnectionID, p.Provider = &cid, provider
+			s.byID[id] = p
+			n++
+		}
+	}
+	return n, nil
+}

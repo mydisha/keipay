@@ -23,6 +23,8 @@ type Apps struct {
 	Err error
 	// Updates counts Update calls.
 	Updates int
+	// conns fills DefaultConnection on reads; set by NewConnections.
+	conns *Connections
 }
 
 // NewApps returns an empty store whose timestamps come from now.
@@ -55,6 +57,9 @@ func (s *Apps) Create(_ context.Context, a *domain.App) error {
 	}
 	s.nextID++
 	a.ID = s.nextID
+	if a.MerchantID == 0 {
+		a.MerchantID = DefaultMerchantID
+	}
 	if a.CreatedAt.IsZero() {
 		a.CreatedAt = s.clock().UTC()
 	}
@@ -77,10 +82,18 @@ func (s *Apps) Update(_ context.Context, a *domain.App) error {
 	if !ok {
 		return domain.ErrNotFound
 	}
+	if a.DefaultConnectionID != nil && s.conns != nil {
+		// The composite foreign key of the apps table.
+		c, err := s.conns.GetByID(context.Background(), *a.DefaultConnectionID)
+		if err != nil || c.Environment != cur.Environment || c.MerchantID != cur.MerchantID {
+			return fmt.Errorf("default connection violates apps_default_connection_fkey")
+		}
+	}
 	s.Updates++
 	a.UpdatedAt = s.clock().UTC()
 	cur.Name, cur.Status, cur.Metadata = a.Name, a.Status, maps.Clone(a.Metadata)
 	cur.WebhookURL, cur.RedirectSuccessURL, cur.RedirectFailureURL = a.WebhookURL, a.RedirectSuccessURL, a.RedirectFailureURL
+	cur.DefaultConnectionID = a.DefaultConnectionID
 	cur.UpdatedAt = a.UpdatedAt
 	s.byID[a.ID] = cur
 	return nil
@@ -88,22 +101,45 @@ func (s *Apps) Update(_ context.Context, a *domain.App) error {
 
 func cloneApp(a domain.App) domain.App {
 	a.Metadata = maps.Clone(a.Metadata)
+	if a.DefaultConnectionID != nil {
+		v := *a.DefaultConnectionID
+		a.DefaultConnectionID = &v
+	}
+	return a
+}
+
+// withSummary fills DefaultConnection as the app queries' join does.
+func (s *Apps) withSummary(a domain.App) domain.App {
+	a.DefaultConnection = nil
+	if a.DefaultConnectionID != nil && s.conns != nil {
+		if c, err := s.conns.GetByID(context.Background(), *a.DefaultConnectionID); err == nil {
+			sum := c.Summary()
+			a.DefaultConnection = &sum
+		}
+	}
 	return a
 }
 
 func (s *Apps) find(match func(domain.App) bool) (*domain.App, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.Err != nil {
-		return nil, s.Err
-	}
+	var found *domain.App
 	for _, v := range s.byID {
 		if match(v) {
 			c := cloneApp(v)
-			return &c, nil
+			found = &c
+			break
 		}
 	}
-	return nil, domain.ErrNotFound
+	err := s.Err
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	if found == nil {
+		return nil, domain.ErrNotFound
+	}
+	a := s.withSummary(*found)
+	return &a, nil
 }
 
 // GetByID loads an app by internal id.
@@ -140,9 +176,27 @@ func (s *Apps) List(_ context.Context, f domain.AppFilter, p domain.Page) (domai
 		if (f.Environment != nil && a.Environment != *f.Environment) || (f.Status != nil && a.Status != *f.Status) {
 			continue
 		}
-		items = append(items, cloneApp(a))
+		items = append(items, s.withSummary(cloneApp(a)))
 	}
 	return page(items, p, func(a domain.App) domain.Cursor { return domain.Cursor{Time: a.CreatedAt, ID: a.PublicID} }), nil
+}
+
+// ListWithoutDefaultConnection returns every app without a default
+// connection, oldest first.
+func (s *Apps) ListWithoutDefaultConnection(context.Context) ([]domain.App, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Err != nil {
+		return nil, s.Err
+	}
+	var out []domain.App
+	for _, a := range s.byID {
+		if a.DefaultConnectionID == nil {
+			out = append(out, cloneApp(a))
+		}
+	}
+	slices.SortFunc(out, func(a, b domain.App) int { return int(a.ID - b.ID) })
+	return out, nil
 }
 
 // page sorts items newest first by cursor and cuts the page after p.After.

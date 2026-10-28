@@ -8,20 +8,34 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/pkg/id"
-	"github.com/mydisha/keipay/backend/internal/xendit"
+	"github.com/mydisha/keipay/backend/internal/provider"
 )
 
-// PaymentService creates payments via Xendit and records them per app.
+// cancelTimeout bounds closing an orphaned checkout.
+const cancelTimeout = 10 * time.Second
+
+// PaymentService creates checkouts on each app's default connection and
+// records them per app.
 type PaymentService struct {
 	payments domain.PaymentRepository
-	xnd      xendit.Client
+	conns    domain.ConnectionRepository
+	registry *provider.Registry
+	sealer   CredentialSealer
+	log      *zap.Logger
 }
 
-// NewPaymentService constructs a PaymentService.
-func NewPaymentService(payments domain.PaymentRepository, xnd xendit.Client) *PaymentService {
-	return &PaymentService{payments: payments, xnd: xnd}
+// NewPaymentService constructs a PaymentService. log receives gateway errors,
+// whose text never reaches the app.
+func NewPaymentService(payments domain.PaymentRepository, conns domain.ConnectionRepository, registry *provider.Registry,
+	sealer CredentialSealer, log *zap.Logger) *PaymentService {
+	if log == nil {
+		log = zap.NewNop()
+	}
+	return &PaymentService{payments: payments, conns: conns, registry: registry, sealer: sealer, log: log}
 }
 
 // CreatePaymentInput is an app's request to create a payment.
@@ -49,10 +63,12 @@ type PaymentRef struct {
 	ID       int64
 }
 
-// Create makes a Xendit invoice for the app and persists the payment. It is
-// idempotent per Idempotency-Key (checked first, against a fingerprint of the
-// request) and per order_id; replayed reports that an existing payment was
-// returned. The gateway reference is "kp_" + the payment's public id.
+// Create makes a checkout on the app's default connection and persists the
+// payment. It is idempotent per Idempotency-Key (checked first, against a
+// fingerprint of the request) and per order_id, and replays are answered
+// before the connection is looked at; replayed reports that an existing
+// payment was returned. The gateway reference is "kp_" + the payment's
+// public id.
 func (s *PaymentService) Create(ctx context.Context, app *domain.App, in CreatePaymentInput, idempotencyKey string) (p *domain.Payment, replayed bool, err error) {
 	var fe fieldErrors
 	meta, metaErrs := parseMetadata(in.Metadata)
@@ -71,73 +87,147 @@ func (s *PaymentService) Create(ctx context.Context, app *domain.App, in CreateP
 	}
 
 	// A retry gets the original payment back, so it never opens a second
-	// payable invoice.
+	// payable checkout.
 	existing, err := s.findExisting(ctx, app, idempotencyKey, fingerprint, norm)
 	if existing != nil || err != nil {
 		return existing, existing != nil, err
 	}
 
+	gw, err := s.gateway(ctx, app)
+	if err != nil {
+		return nil, false, err
+	}
 	publicID := id.New(id.Payment)
 	externalID := "kp_" + publicID
-	out, err := s.xnd.CreateInvoice(ctx, xendit.CreateInvoiceInput{
-		ExternalID:         externalID,
+	out, err := gw.prov.CreateCheckout(ctx, gw.account, provider.CheckoutInput{
+		Reference:          externalID,
 		Amount:             norm.Amount,
 		Currency:           norm.Currency,
 		Description:        norm.Description,
 		PayerEmail:         norm.PayerEmail,
-		SuccessRedirectURL: app.RedirectSuccessURL,
-		FailureRedirectURL: app.RedirectFailureURL,
-		InvoiceDuration:    norm.InvoiceDuration,
+		Channels:           gw.channels,
 		Items:              norm.Items,
 		Customer:           norm.Customer,
+		SuccessRedirectURL: app.RedirectSuccessURL,
+		FailureRedirectURL: app.RedirectFailureURL,
+		ExpiresIn:          time.Duration(norm.InvoiceDuration) * time.Second,
 	})
 	if err != nil {
-		return nil, false, err
+		return nil, false, s.checkoutError(app, gw.conn, err)
 	}
 
-	var expiresAt *time.Time
-	if out.ExpiresAt != nil {
-		if parsed, perr := time.Parse(time.RFC3339, *out.ExpiresAt); perr == nil {
-			expiresAt = &parsed
-		}
-	}
 	p = &domain.Payment{
 		PublicID:               publicID,
 		AppID:                  app.ID,
 		App:                    app.Summary(),
 		OrderID:                norm.OrderID,
 		ExternalID:             externalID,
-		XenditInvoiceID:        out.InvoiceID,
+		ConnectionID:           &gw.conn.ID,
+		Provider:               gw.conn.Provider,
+		XenditInvoiceID:        out.ProviderPaymentID,
 		Amount:                 norm.Amount,
 		Currency:               norm.Currency,
 		Status:                 out.Status,
 		Description:            norm.Description,
-		InvoiceURL:             out.InvoiceURL,
+		InvoiceURL:             out.CheckoutURL,
 		PayerEmail:             norm.PayerEmail,
 		Items:                  norm.Items,
 		Metadata:               meta,
 		IdempotencyKey:         idempotencyKey,
 		IdempotencyFingerprint: fingerprint,
-		ExpiresAt:              expiresAt,
+		ExpiresAt:              out.ExpiresAt,
 		ExpectedSettlementAt:   in.ExpectedSettlementAt,
 		Raw:                    out.Raw,
 	}
 	if err := s.payments.Create(ctx, p); err != nil {
-		// The invoice now exists on Xendit without a payment row here; close it so
-		// it cannot be paid unrecorded.
-		expireErr := s.expireInvoice(ctx, out.InvoiceID)
+		// The checkout now exists at the gateway without a payment row here;
+		// close it so it cannot be paid unrecorded.
+		cancelErr := s.cancelCheckout(ctx, gw, out.ProviderPaymentID)
 		if errors.Is(err, domain.ErrConflict) {
 			// A concurrent request with the same key or order won the insert. Its
 			// payment is routable by its own reference, so answer with it even if
-			// expiring ours failed.
+			// cancelling ours failed.
 			winner, ferr := s.findExisting(ctx, app, idempotencyKey, fingerprint, norm)
 			if winner != nil || ferr != nil {
 				return winner, winner != nil, ferr
 			}
 		}
-		return nil, false, errors.Join(err, expireErr)
+		return nil, false, errors.Join(err, cancelErr)
 	}
 	return p, false, nil
+}
+
+// gateway is the connection a checkout is created on, with what the call needs.
+type gateway struct {
+	conn     *domain.Connection
+	prov     provider.Provider
+	account  provider.Account
+	channels []domain.Channel
+}
+
+// gateway resolves the app's default connection. Without a usable one the
+// payment is not eligible; a connection that cannot be opened is internal.
+func (s *PaymentService) gateway(ctx context.Context, app *domain.App) (*gateway, error) {
+	if app.DefaultConnectionID == nil {
+		return nil, domain.NoEligibleConnection(domain.ReasonNoDefaultConnection)
+	}
+	c, err := s.conns.GetByID(ctx, *app.DefaultConnectionID)
+	if err != nil {
+		return nil, fmt.Errorf("load default connection: %w", err)
+	}
+	if c.Status != domain.ConnectionActive {
+		return nil, domain.NoEligibleConnection(domain.ReasonConnectionDisabled)
+	}
+	prov, err := s.registry.Get(provider.Name(c.Provider))
+	if err != nil {
+		return nil, domain.Internal(fmt.Errorf("connection %s: %w", c.PublicID, err))
+	}
+	acc, err := openAccount(s.sealer, c)
+	if err != nil {
+		return nil, domain.Internal(err)
+	}
+	rows, err := s.conns.Channels(ctx, c.ID)
+	if err != nil {
+		return nil, fmt.Errorf("load channels: %w", err)
+	}
+	return &gateway{conn: c, prov: prov, account: acc, channels: restrictedChannels(prov.Capabilities(), rows)}, nil
+}
+
+// restrictedChannels is the channel list a checkout is limited to: the
+// enabled channels when they are a strict subset of the provider's, else
+// none, because sending the full list can make a gateway refuse methods the
+// account has not activated.
+func restrictedChannels(caps provider.Capabilities, rows []domain.ConnectionChannel) []domain.Channel {
+	if !caps.CanRestrictChannels {
+		return nil
+	}
+	var enabled []domain.Channel
+	for _, st := range effectiveChannels(caps.Channels, rows) {
+		if st.Enabled {
+			enabled = append(enabled, st.Channel)
+		}
+	}
+	if len(enabled) == len(caps.Channels) {
+		return nil
+	}
+	return enabled
+}
+
+// checkoutError maps a CreateCheckout failure to what the app sees; the
+// gateway's own text only goes to the log.
+func (s *PaymentService) checkoutError(app *domain.App, c *domain.Connection, err error) error {
+	fields := []zap.Field{zap.String("app_id", app.PublicID), zap.String("connection_id", c.PublicID),
+		zap.String("provider", c.Provider), zap.Error(err)}
+	switch {
+	case errors.Is(err, provider.ErrRejected):
+		s.log.Warn("provider rejected checkout", fields...)
+		return domain.ProviderRejected(c.Provider, err)
+	case errors.Is(err, provider.ErrRetryable), errors.Is(err, provider.ErrUnknownOutcome):
+		s.log.Warn("provider unavailable for checkout", fields...)
+		return domain.ProviderUnavailable(err)
+	default:
+		return fmt.Errorf("create checkout: %w", err)
+	}
 }
 
 // normalizePayment trims and defaults the input and checks the business rules.
@@ -215,13 +305,13 @@ func (s *PaymentService) findExisting(ctx context.Context, app *domain.App, key,
 	return p, nil
 }
 
-// expireInvoice closes an orphaned invoice. It outlives the request context so a
-// disconnected client does not leave the invoice payable.
-func (s *PaymentService) expireInvoice(ctx context.Context, invoiceID string) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+// cancelCheckout closes an orphaned checkout. It outlives the request context
+// so a disconnected client does not leave the checkout payable.
+func (s *PaymentService) cancelCheckout(ctx context.Context, gw *gateway, providerPaymentID string) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cancelTimeout)
 	defer cancel()
-	if err := s.xnd.ExpireInvoice(ctx, invoiceID); err != nil {
-		return fmt.Errorf("expire orphan invoice: %w", err)
+	if err := gw.prov.CancelCheckout(ctx, gw.account, providerPaymentID); err != nil {
+		return fmt.Errorf("cancel orphan checkout: %w", err)
 	}
 	return nil
 }

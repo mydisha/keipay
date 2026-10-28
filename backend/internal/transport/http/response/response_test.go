@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -146,5 +147,49 @@ func TestRateLimitedSetsRetryAfter(t *testing.T) {
 	want := `{"error":{"code":"rate_limited","message":"too many failed attempts","details":{"retry_after_seconds":61}}}`
 	if w.Body.String() != want {
 		t.Fatalf("body = %s", w.Body.String())
+	}
+}
+
+// T-21: the connection codes keep their statuses, details and codes; a
+// provider outage is a 503 with its own code, never internal_error.
+func TestConnectionErrorCodes(t *testing.T) {
+	cause := errors.New("xendit said: invalid api key xnd_development_secret")
+	cases := []struct {
+		err     error
+		status  int
+		code    domain.ErrorCode
+		details string
+	}{
+		{domain.ConnectionInUse([]domain.AppSummary{{PublicID: "app_1", Slug: "acme", Name: "Acme", Environment: domain.EnvTest}}, 3),
+			409, domain.CodeConnectionInUse, `{"app_count":3,"apps":[{"environment":"test","id":"app_1","name":"Acme","slug":"acme"}]}`},
+		{fmt.Errorf("create: %w", domain.NoEligibleConnection(domain.ReasonNoDefaultConnection)),
+			422, domain.CodeNoEligibleConnection, `{"reasons":["no_default_connection"]}`},
+		{domain.ProviderRejected("xendit", cause), 422, domain.CodeProviderRejected, `{"provider":"xendit"}`},
+		{fmt.Errorf("create: %w", domain.ProviderUnavailable(cause)), 503, domain.CodeProviderUnavailable, `{}`},
+	}
+	for _, tc := range cases {
+		w, c := render(tc.err)
+		if w.Code != tc.status {
+			t.Fatalf("%s: status = %d, want %d", tc.code, w.Code, tc.status)
+		}
+		var env struct {
+			Error struct {
+				Code    domain.ErrorCode `json:"code"`
+				Message string           `json:"message"`
+				Details json.RawMessage  `json:"details"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+			t.Fatal(err)
+		}
+		if env.Error.Code != tc.code || string(env.Error.Details) != tc.details {
+			t.Fatalf("%s: body = %s", tc.code, w.Body.String())
+		}
+		if env.Error.Message == "" || strings.Contains(w.Body.String(), "xnd_") || strings.Contains(w.Body.String(), "xendit said") {
+			t.Fatalf("%s: gateway text leaked: %s", tc.code, w.Body.String())
+		}
+		if logged := len(c.Errors) > 0; logged != (tc.status >= 500) {
+			t.Fatalf("%s: error attached for logging = %v", tc.code, logged)
+		}
 	}
 }

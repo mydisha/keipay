@@ -52,7 +52,7 @@ env:
 		    -e "s/^REDIS_PORT=.*/REDIS_PORT=$(REDIS_PORT)/" \
 		    .env.example > .env; \
 		echo "Created .env (API :$(API_PORT), console :$(UI_PORT), postgres :$(POSTGRES_PORT), redis :$(REDIS_PORT))"; \
-		echo "Set XENDIT_SECRET_KEY and XENDIT_CALLBACK_TOKEN in .env"; \
+		echo "Add a gateway connection in the console (Connections) after first sign-in"; \
 	fi
 
 ## install: install frontend deps and download Go modules.

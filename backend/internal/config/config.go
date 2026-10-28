@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -39,15 +40,27 @@ type Config struct {
 	// ShutdownTimeout is the maximum duration to wait for graceful shutdown.
 	// Defaults to 30 seconds if not set or invalid.
 	ShutdownTimeout time.Duration `mapstructure:"SHUTDOWN_TIMEOUT"`
+
+	// FrontendDir is the admin console build to serve. Empty means auto-detect.
+	FrontendDir string `mapstructure:"FRONTEND_DIR"`
 }
+
+// envFiles are tried in order; the repository root .env is one level above
+// backend/, where the server and migrate commands run.
+var envFiles = []string{".env", "../.env"}
 
 // Load reads configuration from environment variables and an optional .env file.
 func Load() (*Config, error) {
 	v := viper.New()
 
-	v.SetConfigFile(".env")
-	v.SetConfigType("env")
-	_ = v.ReadInConfig() // .env is optional; env vars still bind below.
+	for _, f := range envFiles {
+		if _, err := os.Stat(f); err == nil {
+			v.SetConfigFile(f)
+			v.SetConfigType("env")
+			_ = v.ReadInConfig() // env vars still bind below and take precedence.
+			break
+		}
+	}
 
 	v.AutomaticEnv()
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
@@ -66,6 +79,7 @@ func Load() (*Config, error) {
 		"ENCRYPTION_KEY",
 		"RUN_WORKER", "WEBHOOK_MAX_RETRY",
 		"SHUTDOWN_TIMEOUT",
+		"FRONTEND_DIR",
 	} {
 		_ = v.BindEnv(key)
 	}

@@ -12,7 +12,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/shared/ui/input";
 import { useLogin } from "../api/auth";
 import { AuthLayout } from "../components/auth-layout";
-import { PasswordInput } from "../components/password-input";
+import { PasswordInput } from "@/shared/ui/password-input";
 import { loginSchema, type LoginValues } from "../schemas/auth";
 
 function loginErrorMessage(error: unknown): string {

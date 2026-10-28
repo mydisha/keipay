@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/repository/postgres"
@@ -219,49 +218,6 @@ func TestIntegrationDuplicateSlugInsideTxIsConflict(t *testing.T) {
 	if rows := f.rows(t, tenant.ID); len(rows) != 1 {
 		t.Fatalf("got %d entries, want 1", len(rows))
 	}
-}
-
-func TestIntegrationAdminPasswordChangeJoinsTx(t *testing.T) {
-	pool := testPool(t)
-	ctx := context.Background()
-	username := fmt.Sprintf("it-admin-%d", time.Now().UnixNano())
-	hash, _ := bcrypt.GenerateFromPassword([]byte("current-pass"), bcrypt.MinCost)
-	admins := postgres.NewAdminRepo(pool)
-	user := &domain.AdminUser{Username: username, PasswordHash: string(hash), MustChangePassword: true}
-	if err := admins.Create(ctx, user); err != nil {
-		t.Fatalf("create admin: %v", err)
-	}
-	t.Cleanup(func() {
-		_, _ = pool.Exec(ctx, `DELETE FROM audit_logs WHERE target_type='admin_user' AND target_id=$1`, username)
-		_, _ = pool.Exec(ctx, `DELETE FROM admin_users WHERE id=$1`, user.ID)
-	})
-
-	audit := service.NewAuditService(postgres.NewAuditRepo(pool))
-	failing := service.NewAuthService(admins, "it-secret", postgres.NewTxManager(pool), failAfter{audit})
-	actor := domain.WithActor(ctx, domain.Actor{Type: domain.ActorAdmin, ID: username})
-	if err := failing.ChangePassword(actor, username, "current-pass", "new-password-1"); !errors.Is(err, errAfterAudit) {
-		t.Fatalf("err = %v, want errAfterAudit", err)
-	}
-	stored, _ := admins.GetByUsername(ctx, username)
-	if stored.PasswordHash != string(hash) || !stored.MustChangePassword {
-		t.Fatal("password changed despite rollback")
-	}
-
-	ok := service.NewAuthService(admins, "it-secret", postgres.NewTxManager(pool), audit)
-	if err := ok.ChangePassword(actor, username, "current-pass", "new-password-1"); err != nil {
-		t.Fatalf("change password: %v", err)
-	}
-	var n int
-	var before, after []byte
-	if err := pool.QueryRow(ctx, `SELECT count(*), min(before::text)::jsonb, min(after::text)::jsonb FROM audit_logs
-		WHERE target_type='admin_user' AND target_id=$1 AND action='admin_user.change_password'`, username).Scan(&n, &before, &after); err != nil {
-		t.Fatalf("query: %v", err)
-	}
-	if n != 1 {
-		t.Fatalf("got %d entries, want 1", n)
-	}
-	jsonEqual(t, "before", before, map[string]any{"must_change_password": true})
-	jsonEqual(t, "after", after, map[string]any{"must_change_password": false})
 }
 
 func contains(b []byte, s string) bool {

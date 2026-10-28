@@ -86,22 +86,6 @@ type LedgerServicer interface {
 	Summary(ctx context.Context, f LedgerFilter) ([]LedgerSummary, error)
 }
 
-// AuthServiceLoginResult contains the result of a successful login.
-type AuthServiceLoginResult struct {
-	Token     string
-	ExpiresAt time.Time
-}
-
-// AuthServicer defines authentication business operations.
-type AuthServicer interface {
-	// Login validates credentials and returns a JWT token.
-	Login(ctx context.Context, username, password string) (*AuthServiceLoginResult, error)
-	// ChangePassword updates the admin user's password.
-	ChangePassword(ctx context.Context, username, currentPassword, newPassword string) error
-	// Verify validates a JWT token and returns the username.
-	Verify(tokenStr string) (string, error)
-}
-
 // WebhookCallback is the subset of Xendit's invoice webhook we consume.
 type WebhookCallback struct {
 	ID             string

@@ -13,7 +13,8 @@ info:
     - `/v1/*`: the tenant (app) API, signed with HMAC-SHA256.
     - `/webhooks/*`: inbound gateway callbacks. Every callback lives below
       `/webhooks/`; `GET /webhooks` itself is the console's Webhooks page.
-    - `/admin/*`: the admin console API, authenticated with a bearer token.
+    - `/admin/*`: the admin console API, authenticated with a session
+      cookie and protected against CSRF (see Admin authentication).
     - `/healthz`: liveness.
 
     Every response carries an `X-Request-ID` header. Send your own
@@ -38,6 +39,61 @@ info:
     (`null` on the last page). The older admin lists (`/admin/payments`,
     `/admin/ledger`, `/admin/webhook-deliveries`) still use `limit` and
     `offset` and move to cursors when their features are reworked.
+
+    ## Admin authentication
+
+    On first run, while no user exists, `POST /admin/setup` creates the
+    first owner. After that, users sign in with `POST /admin/login`. Both
+    set two cookies:
+
+    - `keipay_session`: an opaque session id. `HttpOnly`, `SameSite=Lax`,
+      `Path=/`, no `Expires`, and `Secure` unless the server's
+      `COOKIE_SECURE` resolves to false (it does by default only when
+      `APP_ENV=development`). The session lives in Redis and ends after
+      `SESSION_IDLE_TIMEOUT` (default 30m) without requests or
+      `SESSION_ABSOLUTE_TIMEOUT` (default 12h) after sign-in, whichever
+      comes first. Logging out, disabling the user, an owner resetting the
+      user's password, and the user changing their password end the
+      user's other sessions immediately.
+    - `keipay_csrf`: the CSRF token, readable by scripts (not `HttpOnly`),
+      same `SameSite`, `Path` and `Secure` rules. Every `/admin/*` response
+      sets it when the request did not carry one; signing in, setup,
+      changing the password and logging out replace it.
+
+    Every `POST`, `PUT`, `PATCH` and `DELETE` under `/admin/` must send the
+    current `keipay_csrf` value in the `X-CSRF-Token` header. With a valid
+    session the header must also equal the token bound to that session.
+    A missing or wrong token returns `403 invalid_csrf_token`. Fetch
+    `GET /admin/setup` (public) first if the cookie is not set yet.
+
+    A signed-in user whose `must_change_password` is true may only call
+    `GET /admin/me`, `POST /admin/me/password` and `POST /admin/logout`;
+    every other admin operation returns `403 password_change_required`.
+
+    Failed sign-ins are rate limited per client IP (default 20) and per
+    email (default 5) in a 15-minute window. Over the limit, login returns
+    `429 rate_limited` with `Retry-After` before checking the password.
+    The client IP is the TCP peer unless it is listed in `TRUSTED_PROXIES`.
+
+    ## Roles and permissions
+
+    Each user has one role. The server checks the permission named by an
+    operation's `x-keipay-permission` and returns `403 forbidden` when the
+    caller's role lacks it. Admin operations without the extension are open
+    to every signed-in user, or public when their `security` is empty.
+
+    | permission | owner | admin | viewer |
+    |---|---|---|---|
+    | `tenants:read` | yes | yes | yes |
+    | `tenants:write` | yes | yes | no |
+    | `payments:read` | yes | yes | yes |
+    | `deliveries:read` | yes | yes | yes |
+    | `deliveries:replay` | yes | yes | no |
+    | `audit:read` | yes | yes | no |
+    | `users:manage` | yes | no | no |
+
+    `GET /admin/me` returns the caller's permissions, so clients never
+    hard-code this table. New permissions may be added.
   license:
     name: MIT
     identifier: MIT
@@ -52,7 +108,9 @@ tags:
   - name: gateway-webhooks
     description: Inbound callbacks from payment gateways.
   - name: admin-auth
-    description: Admin console sign-in.
+    description: First-run setup, sign-in, sessions and the signed-in user's account.
+  - name: admin-users
+    description: Console users and roles (owner only).
   - name: admin-tenants
     description: Tenant (app) management.
   - name: admin-payments
@@ -182,12 +240,90 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /admin/setup:
+    get:
+      tags: [admin-auth]
+      operationId: getSetupStatus
+      summary: First-run setup status
+      description: |
+        Public. `setup_required` is true while no user exists. Like every
+        `/admin/*` response it sets the `keipay_csrf` cookie when the request
+        has none, so the console calls it before its first `POST`.
+      security: []
+      responses:
+        '200':
+          description: Setup status.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetupStatusResponse'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [admin-auth]
+      operationId: completeSetup
+      summary: Create the first owner
+      description: |
+        Works only while no user exists; afterwards it returns
+        `409 setup_completed`. Concurrent calls are serialized, so exactly
+        one succeeds. Creates an active `owner` with the given password
+        (`must_change_password` false), signs them in, and records
+        `user.setup` (actor `system:setup`).
+
+        When the server has `SETUP_TOKEN` set, `setup_token` must equal it;
+        otherwise the call returns `403 invalid_setup_token` and counts as a
+        failed attempt for the client IP. Checks run in this order: body
+        (`400`), IP rate limit (`429`), already set up (`409`), setup token
+        (`403`).
+      security:
+        - csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetupRequest'
+      responses:
+        '201':
+          description: The owner exists and is signed in.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SessionCookies'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /admin/login:
     post:
       tags: [admin-auth]
       operationId: adminLogin
       summary: Sign in
-      security: []
+      description: |
+        Email is matched case-insensitively. A wrong email, a wrong password
+        and a disabled user all return the same `401 invalid_credentials`,
+        in similar time. A user with `must_change_password` signs in
+        normally and must then call `POST /admin/me/password`.
+
+        Over the failed-attempt limit for the client IP or the email, returns
+        `429 rate_limited` without checking the password. A failure counts
+        against both limits; a success clears the email's counter.
+
+        Records `user.login` on success and `user.login_failed` (actor
+        `anonymous`, with the email and a reason, never the password) on
+        a wrong password, an unknown email or a disabled user.
+      security:
+        - csrfToken: []
       requestBody:
         required: true
         content:
@@ -196,24 +332,83 @@ paths:
               $ref: '#/components/schemas/LoginRequest'
       responses:
         '200':
-          description: Signed in.
+          description: Signed in; a new session replaces any previous one in this browser.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SessionCookies'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LoginResponse'
+                $ref: '#/components/schemas/MeResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/logout:
+    post:
+      tags: [admin-auth]
+      operationId: adminLogout
+      summary: Sign out
+      description: |
+        Deletes the session (when there is a valid one), expires
+        `keipay_session` and sets a fresh `keipay_csrf`. Idempotent: without
+        a valid session it still returns `204`. Records `user.logout` only
+        when a session was ended. Allowed while `must_change_password` is
+        true.
+      security:
+        - csrfToken: []
+      responses:
+        '204':
+          description: Signed out.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SessionCookies'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/me:
+    get:
+      tags: [admin-auth]
+      operationId: getMe
+      summary: The signed-in user
+      description: Returns the user and their permissions. Allowed while `must_change_password` is true.
+      responses:
+        '200':
+          description: The signed-in user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MeResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /admin/change-password:
+  /admin/me/password:
     post:
       tags: [admin-auth]
-      operationId: adminChangePassword
-      summary: Change the signed-in admin's password
-      description: Clears `must_change_password`. Recorded in the audit log as `admin_user.change_password`.
+      operationId: changeMyPassword
+      summary: Change the signed-in user's password
+      description: |
+        Verifies `current_password`, sets the new one and clears
+        `must_change_password`. Ends every other session of the user and
+        replaces this one: the response sets a new `keipay_session` and
+        `keipay_csrf`. A wrong current password returns
+        `401 invalid_credentials` and keeps the session; a new password equal
+        to the current one returns `400 validation_failed`. Records
+        `user.change_password`. Allowed while `must_change_password` is true.
+      security:
+        - adminSession: []
+          csrfToken: []
       requestBody:
         required: true
         content:
@@ -222,15 +417,260 @@ paths:
               $ref: '#/components/schemas/ChangePasswordRequest'
       responses:
         '200':
-          description: Password changed.
+          description: Password changed; the session was replaced.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SessionCookies'
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MessageResponse'
+                $ref: '#/components/schemas/MeResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/users:
+    get:
+      tags: [admin-users]
+      operationId: listUsers
+      summary: List users
+      description: Cursor-paginated, newest first (`created_at` descending, then `id` descending). Includes disabled users.
+      x-keipay-permission: users:manage
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of users.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [admin-users]
+      operationId: createUser
+      summary: Create a user
+      description: |
+        Creates an active user with a generated temporary password, returned
+        in plaintext exactly once, and `must_change_password` true. A
+        duplicate email (case-insensitive) returns `409 conflict`. Records
+        `user.create`.
+      x-keipay-permission: users:manage
+      security:
+        - adminSession: []
+          csrfToken: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: The user and their one-time temporary password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserWithTemporaryPasswordResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/users/{id}:
+    get:
+      tags: [admin-users]
+      operationId: getUser
+      summary: Get a user
+      x-keipay-permission: users:manage
+      parameters:
+        - $ref: '#/components/parameters/UserIdPath'
+      responses:
+        '200':
+          description: The user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [admin-users]
+      operationId: updateUser
+      summary: Update a user's email, name or role
+      description: |
+        Changes only the fields sent; at least one is required. Owners may
+        edit themselves, including their role, as long as another active
+        owner remains: a change that would leave no active owner returns
+        `409 last_owner`. A role change applies to the user's next request
+        without ending their sessions. A duplicate email returns
+        `409 conflict`. Records `user.update` with the changed fields
+        before and after; a request that changes nothing records nothing.
+      x-keipay-permission: users:manage
+      security:
+        - adminSession: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/UserIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: The updated user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/users/{id}/disable:
+    post:
+      tags: [admin-users]
+      operationId: disableUser
+      summary: Disable a user
+      description: |
+        Sets `disabled_at` and ends every session of the user at once; they
+        can no longer sign in. Disabling yourself returns
+        `409 cannot_modify_self`; disabling the last active owner returns
+        `409 last_owner`. Idempotent: an already disabled user is returned
+        unchanged and nothing is recorded. Records `user.disable`. Users are
+        never hard-deleted, so the audit trail keeps resolving.
+      x-keipay-permission: users:manage
+      security:
+        - adminSession: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/UserIdPath'
+      responses:
+        '200':
+          description: The disabled user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/users/{id}/enable:
+    post:
+      tags: [admin-users]
+      operationId: enableUser
+      summary: Enable a disabled user
+      description: |
+        Clears `disabled_at`; the user signs in again with their existing
+        password. Idempotent: an active user is returned unchanged and
+        nothing is recorded. Records `user.enable`.
+      x-keipay-permission: users:manage
+      security:
+        - adminSession: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/UserIdPath'
+      responses:
+        '200':
+          description: The enabled user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/users/{id}/reset-password:
+    post:
+      tags: [admin-users]
+      operationId: resetUserPassword
+      summary: Reset a user's password
+      description: |
+        Replaces the password with a generated temporary password, returned
+        in plaintext exactly once, sets `must_change_password` and ends
+        every session of the user. Works on disabled users too (they stay
+        disabled). Resetting your own password returns
+        `409 cannot_modify_self`; use `POST /admin/me/password`. Records
+        `user.reset_password`.
+      x-keipay-permission: users:manage
+      security:
+        - adminSession: []
+          csrfToken: []
+      parameters:
+        - $ref: '#/components/parameters/UserIdPath'
+      responses:
+        '200':
+          description: The user and their one-time temporary password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserWithTemporaryPasswordResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -239,6 +679,7 @@ paths:
       tags: [admin-tenants]
       operationId: listTenants
       summary: List tenants
+      x-keipay-permission: tenants:read
       responses:
         '200':
           description: All tenants, oldest first.
@@ -248,12 +689,18 @@ paths:
                 $ref: '#/components/schemas/TenantListResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
     post:
       tags: [admin-tenants]
       operationId: createTenant
       summary: Create a tenant
+      x-keipay-permission: tenants:write
+      security:
+        - adminSession: []
+          csrfToken: []
       description: |
         Returns the API secret in plaintext exactly once. Recorded in the
         audit log as `tenant.create`.
@@ -274,6 +721,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
         '500':
@@ -284,6 +733,10 @@ paths:
       tags: [admin-tenants]
       operationId: updateTenant
       summary: Update a tenant
+      x-keipay-permission: tenants:write
+      security:
+        - adminSession: []
+          csrfToken: []
       description: |
         Replaces every mutable field; an omitted `active` means `false`.
         The slug cannot be changed. Recorded in the audit log as
@@ -307,6 +760,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -317,6 +772,10 @@ paths:
       tags: [admin-tenants]
       operationId: rotateTenantCredentials
       summary: Rotate a tenant's API key and secret
+      x-keipay-permission: tenants:write
+      security:
+        - adminSession: []
+          csrfToken: []
       description: |
         Issues a new key and secret and invalidates the old pair immediately.
         The new secret is returned in plaintext exactly once. Recorded in the
@@ -334,6 +793,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -344,6 +805,7 @@ paths:
       tags: [admin-payments]
       operationId: listAdminPayments
       summary: List payments
+      x-keipay-permission: payments:read
       description: |
         Offset-paginated, newest first. Unparseable `tenant_id`, `from` and
         `to` values are ignored, and an out-of-range `limit` falls back to the
@@ -374,6 +836,8 @@ paths:
                 $ref: '#/components/schemas/PaymentListResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -382,6 +846,7 @@ paths:
       tags: [admin-payments]
       operationId: listLedger
       summary: List ledger entries with a per-tenant summary
+      x-keipay-permission: payments:read
       description: |
         Offset-paginated, newest first. Unparseable filters are ignored, and
         an out-of-range `limit` falls back to the default.
@@ -406,6 +871,8 @@ paths:
                 $ref: '#/components/schemas/LedgerListResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -414,6 +881,7 @@ paths:
       tags: [admin-webhooks]
       operationId: listWebhookDeliveries
       summary: List outbound webhook deliveries
+      x-keipay-permission: deliveries:read
       description: |
         Offset-paginated, newest first. An unparseable `tenant_id` is
         ignored, and an out-of-range `limit` falls back to the default.
@@ -441,6 +909,8 @@ paths:
                 $ref: '#/components/schemas/DeliveryListResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -449,6 +919,10 @@ paths:
       tags: [admin-webhooks]
       operationId: replayWebhookDelivery
       summary: Replay a webhook delivery
+      x-keipay-permission: deliveries:replay
+      security:
+        - adminSession: []
+          csrfToken: []
       description: |
         Re-enqueues the delivery. Delivery is at-least-once, so tenants must
         already dedupe. Recorded in the audit log as `webhook_delivery.replay`.
@@ -472,6 +946,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
         '500':
@@ -482,6 +958,7 @@ paths:
       tags: [admin-audit]
       operationId: listAuditLogs
       summary: List audit log entries
+      x-keipay-permission: audit:read
       description: Cursor-paginated, newest first (`occurred_at` descending, then `id` descending).
       parameters:
         - $ref: '#/components/parameters/Limit'
@@ -497,6 +974,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -535,11 +1014,23 @@ webhooks:
 
 components:
   securitySchemes:
-    adminBearer:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
-      description: Token from `POST /admin/login`.
+    adminSession:
+      type: apiKey
+      in: cookie
+      name: keipay_session
+      description: |
+        Session cookie set by `POST /admin/login` or `POST /admin/setup`.
+        Missing: `401 session_required`. Unknown, idle, past its absolute
+        lifetime, revoked, or its user disabled: `401 session_expired`.
+    csrfToken:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: |
+        The current `keipay_csrf` cookie value. Required on every `POST`,
+        `PUT`, `PATCH` and `DELETE` under `/admin/`, including sign-in,
+        setup and logout; with a session it must equal the session's token.
+        Missing or wrong: `403 invalid_csrf_token`.
     tenantApiKey:
       type: apiKey
       in: header
@@ -564,6 +1055,17 @@ components:
       description: The webhook verification token from the Xendit dashboard.
 
   parameters:
+    UserIdPath:
+      name: id
+      in: path
+      required: true
+      description: |
+        User id (`usr_…`; lower case is accepted). Any other format returns
+        `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+      schema:
+        type: string
+        pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$'
+        examples: [usr_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
     PaymentIdPath:
       name: id
       in: path
@@ -631,6 +1133,21 @@ components:
       schema:
         type: string
 
+  headers:
+    SessionCookies:
+      description: |
+        `keipay_session` (session id, `HttpOnly`) and `keipay_csrf` (CSRF
+        token, readable by scripts), both `SameSite=Lax; Path=/` and `Secure`
+        unless `COOKIE_SECURE` resolves to false. On logout `keipay_session`
+        is expired (`Max-Age=0`).
+      schema:
+        type: string
+    RetryAfter:
+      description: Seconds until the rate limit window ends.
+      schema:
+        type: integer
+        minimum: 1
+
   responses:
     BadRequest:
       description: |
@@ -644,13 +1161,20 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     Unauthorized:
-      description: Authentication failed. The `code` says why.
+      description: |
+        Authentication failed. The `code` says why: `session_required` or
+        `session_expired` on admin routes, `invalid_credentials` on sign-in
+        and password change, the tenant signature codes on `/v1`, and
+        `invalid_callback_token` on gateway callbacks.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     Forbidden:
-      description: '`tenant_inactive`: the tenant exists but is disabled.'
+      description: |
+        `forbidden` (the role lacks the operation's `x-keipay-permission`),
+        `password_change_required`, `invalid_csrf_token`,
+        `invalid_setup_token`, or on `/v1` `tenant_inactive`.
       content:
         application/json:
           schema:
@@ -662,7 +1186,19 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     Conflict:
-      description: '`conflict`: duplicate slug, or an `order_id` reused with a different amount or currency.'
+      description: |
+        `conflict` (duplicate slug or email, or an `order_id` reused with a
+        different amount or currency), `setup_completed`, `last_owner`, or
+        `cannot_modify_self`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TooManyRequests:
+      description: '`rate_limited`: too many failed attempts. Retry after `Retry-After` seconds (also in `details.retry_after_seconds`).'
+      headers:
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
       content:
         application/json:
           schema:
@@ -687,9 +1223,11 @@ components:
         | `validation_failed` | 400 | The request is well-formed but breaks a business rule. |
         | `invalid_cursor` | 400 | The `cursor` is malformed or was not issued by this endpoint. |
         | `unauthorized` | 401 | Authentication failed for a reason not listed below. |
-        | `invalid_credentials` | 401 | Wrong username or password, or wrong current password. |
-        | `missing_token` | 401 | Admin request without a bearer token. |
-        | `invalid_token` | 401 | Admin bearer token is invalid or expired. |
+        | `invalid_credentials` | 401 | Wrong email or password (also returned for a disabled user), or wrong current password. |
+        | `missing_token` | 401 | Not returned since admin bearer tokens were replaced by session cookies; kept so the code keeps its meaning. |
+        | `invalid_token` | 401 | Not returned since admin bearer tokens were replaced by session cookies; kept so the code keeps its meaning. |
+        | `session_required` | 401 | Admin request without a `keipay_session` cookie. |
+        | `session_expired` | 401 | The session is unknown, idle too long, past its absolute lifetime, or was ended (logout, user disabled, password changed or reset). Sign in again. |
         | `missing_signature_headers` | 401 | Tenant request without `X-Api-Key`, `X-Timestamp` or `X-Signature`. |
         | `invalid_timestamp` | 401 | `X-Timestamp` is not unix seconds. |
         | `timestamp_out_of_range` | 401 | `X-Timestamp` is more than 5 minutes from server time. |
@@ -698,8 +1236,16 @@ components:
         | `replayed_request` | 401 | This signature was already used. |
         | `invalid_callback_token` | 401 | Gateway callback token is missing or wrong. |
         | `tenant_inactive` | 403 | The tenant is disabled. |
+        | `forbidden` | 403 | The signed-in user's role lacks the operation's permission (`x-keipay-permission`). |
+        | `password_change_required` | 403 | The user must change their password first (`POST /admin/me/password`). |
+        | `invalid_csrf_token` | 403 | `X-CSRF-Token` is missing, does not match the `keipay_csrf` cookie, or does not match the session. |
+        | `invalid_setup_token` | 403 | The server requires `SETUP_TOKEN` and `setup_token` is missing or wrong. |
         | `not_found` | 404 | The resource or route does not exist. |
-        | `conflict` | 409 | Duplicate, or idempotent retry with different data. |
+        | `conflict` | 409 | Duplicate (slug, email), or idempotent retry with different data. |
+        | `setup_completed` | 409 | First-run setup already happened; sign in instead. |
+        | `last_owner` | 409 | The change would leave no active owner. |
+        | `cannot_modify_self` | 409 | Owners cannot disable themselves or reset their own password through the users API. |
+        | `rate_limited` | 429 | Too many failed attempts. `details.retry_after_seconds` and the `Retry-After` header say when to retry. |
         | `internal_error` | 500 | Unexpected server error. |
       enum:
         - invalid_request
@@ -720,6 +1266,16 @@ components:
         - not_found
         - conflict
         - internal_error
+        - session_required
+        - session_expired
+        - forbidden
+        - password_change_required
+        - invalid_csrf_token
+        - invalid_setup_token
+        - setup_completed
+        - last_owner
+        - cannot_modify_self
+        - rate_limited
 
     ErrorResponse:
       type: object
@@ -746,6 +1302,10 @@ components:
                   description: Set for `invalid_request` caused by field validation.
                   items:
                     $ref: '#/components/schemas/FieldError'
+                retry_after_seconds:
+                  type: integer
+                  minimum: 1
+                  description: Set for `rate_limited`; same value as the `Retry-After` header.
       example:
         error:
           code: invalid_request
@@ -931,27 +1491,147 @@ components:
           type: boolean
           const: true
 
+    UserRole:
+      type: string
+      description: |
+        `owner` manages everything, including users. `admin` manages
+        everything except users. `viewer` is read-only and cannot read the
+        audit log.
+      enum: [owner, admin, viewer]
+
+    UserStatus:
+      type: string
+      description: '`disabled` exactly when `disabled_at` is set.'
+      enum: [active, disabled]
+
+    Permission:
+      type: string
+      description: See "Roles and permissions" above. New permissions may be added.
+      enum:
+        - 'tenants:read'
+        - 'tenants:write'
+        - 'payments:read'
+        - 'deliveries:read'
+        - 'deliveries:replay'
+        - 'audit:read'
+        - 'users:manage'
+
+    Email:
+      type: string
+      format: email
+      minLength: 3
+      maxLength: 254
+      description: |
+        One address without a display name, for example `ops@example.com`.
+        Unicode is allowed. KeiPay trims it, applies Unicode NFC and lower
+        case, and stores that form, so emails are unique and matched
+        case-insensitively. Invalid: `400 invalid_request` with rule `email`.
+      examples: [ops@example.com]
+
+    UserName:
+      type: string
+      minLength: 1
+      maxLength: 100
+      description: Display name, trimmed; blank after trimming is rejected (`required`).
+      examples: [Ops Lead]
+
+    NewPassword:
+      type: string
+      format: password
+      minLength: 12
+      maxLength: 72
+      description: |
+        At least 12 characters (Unicode code points) and at most 72 bytes as
+        UTF-8, the bcrypt limit. Hashed exactly as sent, without trimming or
+        normalization. Violations: `400 invalid_request` with rule `min` or
+        `max`.
+
+    User:
+      type: object
+      required: [id, email, name, role, status, must_change_password, disabled_at, last_login_at, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          pattern: '^usr_[0-9A-HJKMNP-TV-Z]{26}$'
+          examples: [usr_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+        email:
+          type: string
+          description: Stored (trimmed, NFC, lower-case) form.
+        name:
+          type: string
+        role:
+          $ref: '#/components/schemas/UserRole'
+        status:
+          $ref: '#/components/schemas/UserStatus'
+        must_change_password:
+          type: boolean
+          description: True after an owner creates the user or resets their password, until the user changes it.
+        disabled_at:
+          type: [string, 'null']
+          format: date-time
+        last_login_at:
+          type: [string, 'null']
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    MeResponse:
+      type: object
+      required: [user, permissions]
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        permissions:
+          type: array
+          description: Everything the user's role allows, sorted. Hide what is not listed; the server enforces it anyway.
+          items:
+            $ref: '#/components/schemas/Permission'
+
+    SetupStatusResponse:
+      type: object
+      required: [setup_required, setup_token_required]
+      properties:
+        setup_required:
+          type: boolean
+          description: True while no user exists.
+        setup_token_required:
+          type: boolean
+          description: True when the server has `SETUP_TOKEN` set; then `POST /admin/setup` needs `setup_token`.
+
+    SetupRequest:
+      type: object
+      required: [email, name, password]
+      properties:
+        email:
+          $ref: '#/components/schemas/Email'
+        name:
+          $ref: '#/components/schemas/UserName'
+        password:
+          $ref: '#/components/schemas/NewPassword'
+        setup_token:
+          type: string
+          maxLength: 256
+          format: password
+          description: Required when `setup_token_required` is true; ignored otherwise.
+
     LoginRequest:
       type: object
-      required: [username, password]
+      required: [email, password]
       properties:
-        username:
+        email:
           type: string
           minLength: 1
+          maxLength: 254
+          description: Not format-checked here; a malformed email simply does not match (`401 invalid_credentials`).
         password:
           type: string
           minLength: 1
+          maxLength: 1024
           format: password
-
-    LoginResponse:
-      type: object
-      required: [token, must_change_password]
-      properties:
-        token:
-          type: string
-          description: Bearer token, valid for 12 hours.
-        must_change_password:
-          type: boolean
 
     ChangePasswordRequest:
       type: object
@@ -960,18 +1640,70 @@ components:
         current_password:
           type: string
           minLength: 1
+          maxLength: 1024
           format: password
         new_password:
-          type: string
-          minLength: 8
-          format: password
+          $ref: '#/components/schemas/NewPassword'
 
-    MessageResponse:
+    CreateUserRequest:
       type: object
-      required: [message]
+      required: [email, name, role]
       properties:
-        message:
+        email:
+          $ref: '#/components/schemas/Email'
+        name:
+          $ref: '#/components/schemas/UserName'
+        role:
+          $ref: '#/components/schemas/UserRole'
+
+    UpdateUserRequest:
+      type: object
+      minProperties: 1
+      description: |
+        Send only the fields to change; unknown fields are ignored. A body
+        with none of these fields returns `400 invalid_request` with
+        `details.fields` `[{"field": "body", "rule": "required"}]`.
+      properties:
+        email:
+          $ref: '#/components/schemas/Email'
+        name:
+          $ref: '#/components/schemas/UserName'
+        role:
+          $ref: '#/components/schemas/UserRole'
+
+    UserResponse:
+      type: object
+      required: [user]
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+
+    UserWithTemporaryPasswordResponse:
+      type: object
+      required: [user, temporary_password]
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+        temporary_password:
           type: string
+          minLength: 20
+          maxLength: 20
+          description: |
+            20 random characters from an alphabet without look-alikes
+            (no `0 O 1 l I`). Shown once and never stored in plaintext; the
+            user must change it at first sign-in.
+
+    UserListResponse:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/User'
+        next_cursor:
+          type: [string, 'null']
+          description: Pass as `cursor` to get the next page; `null` on the last page.
 
     Tenant:
       type: object
@@ -1289,11 +2021,16 @@ components:
       properties:
         type:
           type: string
-          description: '`admin` (a signed-in console user) or `system` (seed, CLI, background job).'
-          examples: [admin, system]
+          description: |
+            `admin` (a signed-in console user of any role), `system` (seed,
+            CLI, setup, background job) or `anonymous` (a failed sign-in).
+          examples: [admin, system, anonymous]
         id:
           type: string
-          description: Admin username today (a `usr_` id once users exist), or the system component name such as `seed`.
+          description: |
+            The user's `usr_…` id for `admin`; the component name (`seed`,
+            `cli`, `setup`) for `system`; `anonymous` for `anonymous`.
+            Entries written before users existed carry the admin username.
 
     AuditTarget:
       type: object
@@ -1301,10 +2038,11 @@ components:
       properties:
         type:
           type: string
-          examples: [tenant, admin_user, webhook_delivery]
+          description: Entries written before users existed use `admin_user` for the console admin.
+          examples: [tenant, user, webhook_delivery]
         id:
           type: string
-          description: The target's identifier as a string.
+          description: The target's identifier as a string (`usr_…` for users). Empty for a failed sign-in with an unknown email.
 
     AuditLog:
       type: object
@@ -1324,8 +2062,11 @@ components:
           description: |
             `{target_type}.{verb}`. Current values: `tenant.create`,
             `tenant.update`, `tenant.rotate_credentials`,
-            `admin_user.change_password`, `webhook_delivery.replay`.
-            New actions may be added.
+            `webhook_delivery.replay`, `user.setup`, `user.create`,
+            `user.update`, `user.disable`, `user.enable`,
+            `user.reset_password`, `user.change_password`, `user.login`,
+            `user.login_failed`, `user.logout`. Older entries may carry
+            `admin_user.change_password`. New actions may be added.
           examples: [tenant.update]
         target:
           $ref: '#/components/schemas/AuditTarget'
@@ -1358,4 +2099,4 @@ components:
           description: Pass as `cursor` to get the next page; `null` on the last page.
 
 security:
-  - adminBearer: []
+  - adminSession: []

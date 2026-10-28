@@ -21,6 +21,7 @@ import (
 	"github.com/mydisha/keipay/backend/internal/service"
 	transport "github.com/mydisha/keipay/backend/internal/transport/http"
 	"github.com/mydisha/keipay/backend/internal/transport/http/handler"
+	"github.com/mydisha/keipay/backend/internal/transport/http/middleware"
 	"github.com/mydisha/keipay/backend/internal/worker"
 )
 
@@ -54,6 +55,10 @@ func main() {
 	}
 	defer func() { _ = log.Sync() }()
 
+	if cfg.JWTSecretSet {
+		log.Warn("JWT_SECRET is no longer used; admin sessions are server-side. Remove it from the environment.")
+	}
+
 	// Log build and startup information.
 	log.Info("starting keipay",
 		zap.String("version", Version),
@@ -62,6 +67,9 @@ func main() {
 		zap.String("env", cfg.AppEnv),
 		zap.String("port", cfg.HTTPPort),
 		zap.Bool("worker_enabled", cfg.RunWorker),
+		zap.Bool("cookie_secure", cfg.CookieSecure()),
+		zap.Strings("trusted_proxies", cfg.TrustedProxies),
+		zap.Bool("setup_token_set", cfg.SetupToken != ""),
 		zap.Duration("shutdown_timeout", cfg.GetShutdownTimeout()),
 	)
 
@@ -94,7 +102,7 @@ func main() {
 
 	// Initialize repositories.
 	log.Debug("initializing repositories")
-	adminRepo := postgres.NewAdminRepo(pool)
+	userRepo := postgres.NewUserRepo(pool)
 	tenantRepo := postgres.NewTenantRepo(pool)
 	paymentRepo := postgres.NewPaymentRepo(pool)
 	ledgerRepo := postgres.NewLedgerRepo(pool)
@@ -107,6 +115,8 @@ func main() {
 	tenantCache := redisrepo.NewTenantCache(rdb, tenantRepo)
 	idemp := redisrepo.NewIdempotency(rdb, 24*time.Hour)
 	nonces := redisrepo.NewIdempotency(rdb, 10*time.Minute)
+	sessions := redisrepo.NewSessionStore(rdb)
+	loginFailures := redisrepo.NewFailureCounter(rdb)
 
 	// Initialize asynq enqueuer.
 	log.Debug("initializing asynq enqueuer")
@@ -128,7 +138,27 @@ func main() {
 	ledgerSvc := service.NewLedgerService(ledgerRepo)
 	webhookSvc := service.NewWebhookService(paymentRepo, ledgerRepo, webhookRepo, txMgr, idemp, enqueuer)
 	deliverySvc := service.NewDeliveryService(webhookRepo, enqueuer, auditSvc)
-	authSvc := service.NewAuthService(adminRepo, cfg.JWTSecret, txMgr, auditSvc)
+	hasher := service.NewBcryptHasher(service.DefaultBcryptCost)
+	userSvc := service.NewUserService(userRepo, txMgr, auditSvc, hasher)
+	authSvc, err := service.NewAuthService(service.AuthDeps{
+		Users:    userRepo,
+		Sessions: sessions,
+		Failures: loginFailures,
+		Tx:       txMgr,
+		Audit:    auditSvc,
+		Hasher:   hasher,
+		Log:      log,
+	}, service.AuthConfig{
+		IdleTimeout:         cfg.SessionIdleTimeout,
+		AbsoluteTimeout:     cfg.SessionAbsoluteTimeout,
+		MaxFailuresPerIP:    cfg.LoginMaxFailuresPerIP,
+		MaxFailuresPerEmail: cfg.LoginMaxFailuresPerEmail,
+		FailureWindow:       cfg.LoginFailureWindow,
+		SetupToken:          cfg.SetupToken,
+	})
+	if err != nil {
+		log.Fatal("failed to initialize auth service", zap.Error(err))
+	}
 	log.Debug("services initialized")
 
 	frontendDir := resolveFrontendDir(cfg.FrontendDir)
@@ -143,16 +173,22 @@ func main() {
 
 	// Initialize handlers and router.
 	log.Debug("initializing HTTP router")
+	cookies := middleware.CookieConfig{Secure: cfg.CookieSecure()}
 	deps := transport.Deps{
 		Log:             log,
 		TenantResolver:  tenantCache,
 		NonceStore:      nonces,
 		SecretDecryptor: cipher,
-		JWTVerifier:     authSvc,
 		CallbackToken:   cfg.XenditCallbackToken,
+		Sessions:        authSvc,
+		Cookies:         cookies,
+		NewToken:        service.NewToken,
+		TrustedProxies:  cfg.TrustedProxies,
 		Payment:         handler.NewPaymentHandler(paymentSvc),
 		Webhook:         handler.NewWebhookHandler(webhookSvc, log),
-		Admin:           handler.NewAdminHandler(authSvc, tenantSvc, paymentSvc, ledgerSvc, deliverySvc, auditSvc),
+		Admin:           handler.NewAdminHandler(tenantSvc, paymentSvc, ledgerSvc, deliverySvc, auditSvc),
+		Auth:            handler.NewAuthHandler(authSvc, cookies, service.NewToken),
+		Users:           handler.NewUserHandler(userSvc),
 		FrontendDir:     frontendDir,
 	}
 	router := transport.NewRouter(deps)

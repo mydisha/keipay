@@ -74,10 +74,11 @@ func TestBindJSONNestedTypeError(t *testing.T) {
 	}
 }
 
-func TestBindJSONMinRule(t *testing.T) {
-	var req dto.ChangePasswordRequest
-	err := bindJSON(testContext(http.MethodPost, "/admin/change-password", `{"current_password":"a","new_password":"short"}`), &req)
-	want := []domain.FieldError{{Field: "new_password", Rule: "min"}}
+func TestBindJSONMaxRule(t *testing.T) {
+	var req dto.LoginRequest
+	body := `{"email":"a@example.com","password":"` + strings.Repeat("x", 1025) + `"}`
+	err := bindJSON(testContext(http.MethodPost, "/admin/login", body), &req)
+	want := []domain.FieldError{{Field: "password", Rule: "max"}}
 	if got := fieldsOf(t, err); !reflect.DeepEqual(got, want) {
 		t.Fatalf("fields = %+v, want %+v", got, want)
 	}

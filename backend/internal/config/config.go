@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -29,7 +30,26 @@ type Config struct {
 	XenditSecretKey     string `mapstructure:"XENDIT_SECRET_KEY"`
 	XenditCallbackToken string `mapstructure:"XENDIT_CALLBACK_TOKEN"`
 
-	JWTSecret string `mapstructure:"JWT_SECRET"`
+	// JWTSecretSet reports that the retired JWT_SECRET is still configured, so
+	// the server can warn about it. Its value is never kept.
+	JWTSecretSet bool `mapstructure:"-"`
+
+	// CookieSecureMode is auto, true or false; see CookieSecure.
+	CookieSecureMode       string        `mapstructure:"COOKIE_SECURE"`
+	SessionIdleTimeout     time.Duration `mapstructure:"SESSION_IDLE_TIMEOUT"`
+	SessionAbsoluteTimeout time.Duration `mapstructure:"SESSION_ABSOLUTE_TIMEOUT"`
+
+	LoginMaxFailuresPerIP    int           `mapstructure:"LOGIN_MAX_FAILURES_PER_IP"`
+	LoginMaxFailuresPerEmail int           `mapstructure:"LOGIN_MAX_FAILURES_PER_EMAIL"`
+	LoginFailureWindow       time.Duration `mapstructure:"LOGIN_FAILURE_WINDOW"`
+
+	// TrustedProxiesRaw is the comma-separated TRUSTED_PROXIES value;
+	// TrustedProxies is its validated, trimmed form.
+	TrustedProxiesRaw string   `mapstructure:"TRUSTED_PROXIES"`
+	TrustedProxies    []string `mapstructure:"-"`
+
+	// SetupToken, when set, must accompany first-run setup. Never logged.
+	SetupToken string `mapstructure:"SETUP_TOKEN"`
 
 	// EncryptionKey is 64 hex chars (32 bytes) for AES-256-GCM at-rest secrets.
 	EncryptionKey string `mapstructure:"ENCRYPTION_KEY"`
@@ -76,6 +96,9 @@ func Load() (*Config, error) {
 		"REDIS_ADDR", "REDIS_PASSWORD", "REDIS_DB",
 		"XENDIT_SECRET_KEY", "XENDIT_CALLBACK_TOKEN",
 		"JWT_SECRET",
+		"COOKIE_SECURE", "SESSION_IDLE_TIMEOUT", "SESSION_ABSOLUTE_TIMEOUT",
+		"LOGIN_MAX_FAILURES_PER_IP", "LOGIN_MAX_FAILURES_PER_EMAIL", "LOGIN_FAILURE_WINDOW",
+		"TRUSTED_PROXIES", "SETUP_TOKEN",
 		"ENCRYPTION_KEY",
 		"RUN_WORKER", "WEBHOOK_MAX_RETRY",
 		"SHUTDOWN_TIMEOUT",
@@ -88,6 +111,7 @@ func Load() (*Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
+	cfg.JWTSecretSet = v.GetString("JWT_SECRET") != ""
 
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -106,6 +130,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("RUN_WORKER", true)
 	v.SetDefault("WEBHOOK_MAX_RETRY", 5)
 	v.SetDefault("SHUTDOWN_TIMEOUT", "30s")
+	v.SetDefault("COOKIE_SECURE", "auto")
+	v.SetDefault("SESSION_IDLE_TIMEOUT", "30m")
+	v.SetDefault("SESSION_ABSOLUTE_TIMEOUT", "12h")
+	v.SetDefault("LOGIN_MAX_FAILURES_PER_IP", 20)
+	v.SetDefault("LOGIN_MAX_FAILURES_PER_EMAIL", 5)
+	v.SetDefault("LOGIN_FAILURE_WINDOW", "15m")
 }
 
 func (c *Config) validate() error {
@@ -119,17 +149,74 @@ func (c *Config) validate() error {
 	if c.XenditCallbackToken == "" {
 		missing = append(missing, "XENDIT_CALLBACK_TOKEN")
 	}
-	if c.JWTSecret == "" {
-		missing = append(missing, "JWT_SECRET")
-	}
 	if len(c.EncryptionKey) != 64 {
 		return fmt.Errorf("ENCRYPTION_KEY must be 64 hex chars (32 bytes)")
 	}
 	if len(missing) > 0 {
-
 		return fmt.Errorf("missing required config: %s", strings.Join(missing, ", "))
 	}
+	return c.validateAuth()
+}
+
+func (c *Config) validateAuth() error {
+	switch strings.ToLower(strings.TrimSpace(c.CookieSecureMode)) {
+	case "auto", "true", "false":
+	default:
+		return fmt.Errorf("COOKIE_SECURE must be auto, true or false")
+	}
+	if c.SessionIdleTimeout <= 0 {
+		return fmt.Errorf("SESSION_IDLE_TIMEOUT must be greater than zero")
+	}
+	if c.SessionAbsoluteTimeout < c.SessionIdleTimeout {
+		return fmt.Errorf("SESSION_ABSOLUTE_TIMEOUT must not be shorter than SESSION_IDLE_TIMEOUT")
+	}
+	if c.LoginMaxFailuresPerIP < 1 {
+		return fmt.Errorf("LOGIN_MAX_FAILURES_PER_IP must be at least 1")
+	}
+	if c.LoginMaxFailuresPerEmail < 1 {
+		return fmt.Errorf("LOGIN_MAX_FAILURES_PER_EMAIL must be at least 1")
+	}
+	if c.LoginFailureWindow <= 0 {
+		return fmt.Errorf("LOGIN_FAILURE_WINDOW must be greater than zero")
+	}
+	proxies, err := parseTrustedProxies(c.TrustedProxiesRaw)
+	if err != nil {
+		return err
+	}
+	c.TrustedProxies = proxies
 	return nil
+}
+
+// parseTrustedProxies splits a comma-separated list of IPs and CIDRs. An empty
+// list means no proxy is trusted.
+func parseTrustedProxies(raw string) ([]string, error) {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		p := strings.TrimSpace(part)
+		if p == "" {
+			continue
+		}
+		if net.ParseIP(p) == nil {
+			if _, _, err := net.ParseCIDR(p); err != nil {
+				return nil, fmt.Errorf("TRUSTED_PROXIES: %q is not an IP address or CIDR", p)
+			}
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// CookieSecure reports whether admin cookies carry the Secure attribute: always
+// for true, never for false, and outside development for auto.
+func (c *Config) CookieSecure() bool {
+	switch strings.ToLower(strings.TrimSpace(c.CookieSecureMode)) {
+	case "true":
+		return true
+	case "false":
+		return false
+	default:
+		return !strings.EqualFold(c.AppEnv, "development")
+	}
 }
 
 // IsProduction reports whether the app runs in a production environment.

@@ -15,6 +15,7 @@ package response
 import (
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 
@@ -55,6 +56,16 @@ var statusByCode = map[domain.ErrorCode]int{
 	domain.CodeNotFound:                http.StatusNotFound,
 	domain.CodeConflict:                http.StatusConflict,
 	domain.CodeInternal:                http.StatusInternalServerError,
+	domain.CodeSessionRequired:         http.StatusUnauthorized,
+	domain.CodeSessionExpired:          http.StatusUnauthorized,
+	domain.CodeForbidden:               http.StatusForbidden,
+	domain.CodePasswordChangeRequired:  http.StatusForbidden,
+	domain.CodeInvalidCSRFToken:        http.StatusForbidden,
+	domain.CodeInvalidSetupToken:       http.StatusForbidden,
+	domain.CodeSetupCompleted:          http.StatusConflict,
+	domain.CodeLastOwner:               http.StatusConflict,
+	domain.CodeCannotModifySelf:        http.StatusConflict,
+	domain.CodeRateLimited:             http.StatusTooManyRequests,
 }
 
 // Error writes the envelope for err and aborts the request. Unrecognised
@@ -64,6 +75,11 @@ func Error(c *gin.Context, err error) {
 	status, body := resolve(err)
 	if status >= http.StatusInternalServerError {
 		_ = c.Error(err)
+	}
+	if body.Code == domain.CodeRateLimited {
+		if secs, ok := body.Details["retry_after_seconds"].(int); ok {
+			c.Header("Retry-After", strconv.Itoa(secs))
+		}
 	}
 	c.AbortWithStatusJSON(status, Envelope{Error: body})
 }

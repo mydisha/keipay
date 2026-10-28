@@ -1,0 +1,100 @@
+package domain
+
+import (
+	"slices"
+	"testing"
+	"time"
+)
+
+// T-2: the table from the "Roles and permissions" section of the contract.
+func TestRolePermissionsTable(t *testing.T) {
+	want := map[Role][]Permission{
+		RoleOwner:  {"audit:read", "deliveries:read", "deliveries:replay", "payments:read", "tenants:read", "tenants:write", "users:manage"},
+		RoleAdmin:  {"audit:read", "deliveries:read", "deliveries:replay", "payments:read", "tenants:read", "tenants:write"},
+		RoleViewer: {"deliveries:read", "payments:read", "tenants:read"},
+	}
+	if len(RolePermissions) != len(want) {
+		t.Fatalf("roles = %v", RolePermissions)
+	}
+	for role, perms := range want {
+		if got := RolePermissions[role]; !slices.Equal(got, perms) {
+			t.Errorf("%s = %v, want %v", role, got, perms)
+		}
+		if !slices.IsSorted(role.Permissions()) {
+			t.Errorf("%s permissions not sorted", role)
+		}
+	}
+	if !slices.Equal(AllPermissions(), want[RoleOwner]) {
+		t.Fatalf("AllPermissions = %v", AllPermissions())
+	}
+}
+
+func TestRoleCan(t *testing.T) {
+	cases := []struct {
+		role Role
+		perm Permission
+		want bool
+	}{
+		{RoleOwner, PermUsersManage, true},
+		{RoleAdmin, PermUsersManage, false},
+		{RoleAdmin, PermTenantsWrite, true},
+		{RoleAdmin, PermAuditRead, true},
+		{RoleViewer, PermTenantsRead, true},
+		{RoleViewer, PermTenantsWrite, false},
+		{RoleViewer, PermDeliveriesReplay, false},
+		{RoleViewer, PermAuditRead, false},
+		{Role("root"), PermTenantsRead, false},
+		{"", PermTenantsRead, false},
+	}
+	for _, tc := range cases {
+		if got := tc.role.Can(tc.perm); got != tc.want {
+			t.Errorf("%q.Can(%s) = %v, want %v", tc.role, tc.perm, got, tc.want)
+		}
+	}
+}
+
+func TestRoleValidAndPermissionsCopy(t *testing.T) {
+	for _, r := range []Role{RoleOwner, RoleAdmin, RoleViewer} {
+		if !r.Valid() {
+			t.Errorf("%s invalid", r)
+		}
+	}
+	for _, r := range []Role{"", "Owner", "root"} {
+		if r.Valid() {
+			t.Errorf("%q valid", r)
+		}
+	}
+	perms := RoleViewer.Permissions()
+	perms[0] = "hacked"
+	if RolePermissions[RoleViewer][0] == "hacked" {
+		t.Fatal("Permissions returned the shared slice")
+	}
+	if p := Role("root").Permissions(); p == nil || len(p) != 0 {
+		t.Fatalf("unknown role permissions = %#v, want empty non-nil", p)
+	}
+}
+
+func TestUserStatus(t *testing.T) {
+	u := &User{Role: RoleOwner}
+	if u.Status() != UserActive || !u.IsActiveOwner() {
+		t.Fatal("active owner")
+	}
+	now := time.Now()
+	u.DisabledAt = &now
+	if u.Status() != UserDisabled || u.IsActiveOwner() {
+		t.Fatal("disabled owner counted as active")
+	}
+}
+
+func TestRateLimitedError(t *testing.T) {
+	if e := RateLimited(0); e.Code != CodeRateLimited || e.Details["retry_after_seconds"] != 1 {
+		t.Fatalf("RateLimited(0) = %+v", e)
+	}
+	if e := RateLimited(90); e.Details["retry_after_seconds"] != 90 {
+		t.Fatalf("RateLimited(90) = %+v", e)
+	}
+	e := InvalidFields()
+	if fields, ok := e.Details["fields"].([]FieldError); !ok || fields == nil {
+		t.Fatalf("InvalidFields() details = %#v", e.Details)
+	}
+}

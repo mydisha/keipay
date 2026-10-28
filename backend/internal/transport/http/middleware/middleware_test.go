@@ -49,66 +49,6 @@ func newEngine(mw ...gin.HandlerFunc) *gin.Engine {
 	return r
 }
 
-// --- AdminAuth ---
-
-type stubVerifier struct{}
-
-func (stubVerifier) Verify(token string) (string, error) {
-	if token == "good" {
-		return "admin", nil
-	}
-	return "", domain.ErrUnauthorized
-}
-
-func TestAdminAuthRejections(t *testing.T) {
-	r := newEngine(AdminAuth(stubVerifier{}, zap.NewNop()))
-	cases := []struct {
-		header string
-		code   domain.ErrorCode
-	}{
-		{"", domain.CodeMissingToken},
-		{"good", domain.CodeMissingToken},
-		{"Basic abc", domain.CodeMissingToken},
-		{"Bearer ", domain.CodeMissingToken},
-		{"Bearer bad", domain.CodeInvalidToken},
-	}
-	for _, tc := range cases {
-		req := httptest.NewRequest(http.MethodGet, "/x", nil)
-		if tc.header != "" {
-			req.Header.Set("Authorization", tc.header)
-		}
-		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
-		assertEnvelope(t, w, http.StatusUnauthorized, tc.code)
-	}
-}
-
-func TestAdminAuthSetsActor(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	r := gin.New()
-	r.Use(RequestID())
-	var actor domain.Actor
-	var username string
-	r.GET("/x", AdminAuth(stubVerifier{}, zap.NewNop()), func(c *gin.Context) {
-		actor, _ = domain.ActorFromContext(c.Request.Context())
-		username, _ = AdminFromContext(c)
-	})
-	req := httptest.NewRequest(http.MethodGet, "/x", nil)
-	req.Header.Set("Authorization", "Bearer good")
-	req.Header.Set("User-Agent", "console/1.0")
-	req.Header.Set("X-Request-ID", "req-42")
-	req.RemoteAddr = "198.51.100.9:5555"
-	r.ServeHTTP(httptest.NewRecorder(), req)
-
-	want := domain.Actor{Type: domain.ActorAdmin, ID: "admin", IP: "198.51.100.9", UserAgent: "console/1.0", RequestID: "req-42"}
-	if actor != want {
-		t.Fatalf("actor = %+v, want %+v", actor, want)
-	}
-	if username != "admin" {
-		t.Fatalf("username = %q", username)
-	}
-}
-
 // --- TenantAuth ---
 
 type stubResolver struct {

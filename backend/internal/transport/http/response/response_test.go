@@ -106,3 +106,41 @@ func TestEveryCodeHasAStatus(t *testing.T) {
 		t.Fatalf("status table has %d codes, domain has %d", len(statusByCode), len(domain.ErrorCodes()))
 	}
 }
+
+func TestAuthErrorStatuses(t *testing.T) {
+	cases := []struct {
+		err    error
+		status int
+	}{
+		{domain.ErrSessionRequired, 401},
+		{fmt.Errorf("load: %w", domain.ErrSessionExpired), 401},
+		{domain.ErrForbidden, 403},
+		{domain.ErrPasswordChangeRequired, 403},
+		{domain.ErrInvalidCSRFToken, 403},
+		{domain.ErrInvalidSetupToken, 403},
+		{fmt.Errorf("setup: %w", domain.ErrSetupCompleted), 409},
+		{fmt.Errorf("update user: %w", domain.ErrLastOwner), 409},
+		{domain.ErrCannotModifySelf, 409},
+		{domain.RateLimited(42), 429},
+	}
+	for _, tc := range cases {
+		w, _ := render(tc.err)
+		if w.Code != tc.status {
+			t.Errorf("%v: status = %d, want %d", tc.err, w.Code, tc.status)
+		}
+		if got := w.Header().Get("Retry-After"); (got != "") != (tc.status == 429) {
+			t.Errorf("%v: Retry-After = %q", tc.err, got)
+		}
+	}
+}
+
+func TestRateLimitedSetsRetryAfter(t *testing.T) {
+	w, _ := render(fmt.Errorf("login: %w", domain.RateLimited(61)))
+	if w.Code != http.StatusTooManyRequests || w.Header().Get("Retry-After") != "61" {
+		t.Fatalf("status = %d, Retry-After = %q", w.Code, w.Header().Get("Retry-After"))
+	}
+	want := `{"error":{"code":"rate_limited","message":"too many failed attempts","details":{"retry_after_seconds":61}}}`
+	if w.Body.String() != want {
+		t.Fatalf("body = %s", w.Body.String())
+	}
+}

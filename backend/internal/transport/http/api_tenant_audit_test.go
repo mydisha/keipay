@@ -9,9 +9,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
-
 	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/service"
 	"github.com/mydisha/keipay/backend/internal/transport/http/handler"
@@ -107,48 +104,41 @@ func newTenantAPI(t *testing.T) *tenantAPI {
 	logs := &failingAudit{}
 	auditSvc := service.NewAuditService(logs)
 	tx := snapshotTx{tenants: tenants, audit: logs}
-	admin := handler.NewAdminHandler(
-		base.auth,
+	base.deps.Admin = handler.NewAdminHandler(
 		service.NewTenantService(tenants, nil, plainCipher{}, tx, auditSvc),
 		service.NewPaymentService(emptyPayments{}, nil),
 		service.NewLedgerService(emptyLedger{}),
 		service.NewDeliveryService(deliveries{}, base.replay, auditSvc),
 		auditSvc,
 	)
-	gin.SetMode(gin.TestMode)
-	base.router = NewRouter(Deps{Log: zap.NewNop(), JWTVerifier: base.auth, Admin: admin})
+	base.rebuild()
 	return &tenantAPI{apiFixture: base, tenants: tenants, logs: logs}
 }
 
-func (f *tenantAPI) send(method, target, token, body string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(method, target, strings.NewReader(body))
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("User-Agent", "qa-agent/1.0")
-	req.Header.Set("X-Request-ID", "req-qa-1")
-	req.RemoteAddr = "203.0.113.9:4444"
-	w := httptest.NewRecorder()
-	f.router.ServeHTTP(w, req)
-	return w
+// mutate sends a request as b with a fixed origin, so the actor can be checked.
+func (f *tenantAPI) mutate(b *browser, method, target, body string) *httptest.ResponseRecorder {
+	b.remote = "203.0.113.9:4444"
+	return f.send(b, method, target, body, "User-Agent", "qa-agent/1.0", "X-Request-ID", "req-qa-1")
 }
 
 // AC-14 at the HTTP layer: each tenant mutation records exactly one entry
-// with the admin actor taken from the request (username, IP, UA, request id).
+// with the signed-in user as actor (usr_ id, IP, UA, request id).
 func TestTenantMutationsRecordActorFromRequest(t *testing.T) {
 	f := newTenantAPI(t)
-	tok := f.token(t)
+	owner := f.signIn(t, f.owner)
 
-	w := f.send(http.MethodPost, "/admin/tenants", tok, `{"name":"Acme","slug":"acme"}`)
+	w := f.mutate(owner, http.MethodPost, "/admin/tenants", `{"name":"Acme","slug":"acme"}`)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("create: %d %s", w.Code, w.Body.String())
 	}
-	w = f.send(http.MethodPut, "/admin/tenants/1", tok, `{"name":"Acme 2","active":false}`)
+	w = f.mutate(owner, http.MethodPut, "/admin/tenants/1", `{"name":"Acme 2","active":false}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("update: %d %s", w.Code, w.Body.String())
 	}
 	if strings.Contains(w.Body.String(), "enc:") || strings.Contains(w.Body.String(), "api_secret") {
 		t.Fatalf("update response leaks a secret: %s", w.Body.String())
 	}
-	w = f.send(http.MethodPost, "/admin/tenants/1/rotate", tok, "")
+	w = f.mutate(owner, http.MethodPost, "/admin/tenants/1/rotate", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("rotate: %d %s", w.Code, w.Body.String())
 	}
@@ -161,7 +151,7 @@ func TestTenantMutationsRecordActorFromRequest(t *testing.T) {
 		if l.Action != wantActions[i] {
 			t.Errorf("entry %d action = %q, want %q", i, l.Action, wantActions[i])
 		}
-		want := domain.Actor{Type: domain.ActorAdmin, ID: "admin", IP: "203.0.113.9", UserAgent: "qa-agent/1.0", RequestID: "req-qa-1"}
+		want := domain.Actor{Type: domain.ActorAdmin, ID: f.owner.PublicID, IP: "203.0.113.9", UserAgent: "qa-agent/1.0", RequestID: "req-qa-1"}
 		if l.Actor != want {
 			t.Errorf("entry %d actor = %+v, want %+v", i, l.Actor, want)
 		}
@@ -181,8 +171,8 @@ func TestTenantMutationsRecordActorFromRequest(t *testing.T) {
 // answers 500 internal_error without the internal error text.
 func TestTenantMutationAuditFailureIs500AndRollsBack(t *testing.T) {
 	f := newTenantAPI(t)
-	tok := f.token(t)
-	if w := f.send(http.MethodPost, "/admin/tenants", tok, `{"name":"Acme","slug":"acme"}`); w.Code != http.StatusCreated {
+	owner := f.signIn(t, f.owner)
+	if w := f.mutate(owner, http.MethodPost, "/admin/tenants", `{"name":"Acme","slug":"acme"}`); w.Code != http.StatusCreated {
 		t.Fatalf("seed create: %d %s", w.Code, w.Body.String())
 	}
 	before := f.tenants.byID[1]
@@ -194,7 +184,7 @@ func TestTenantMutationAuditFailureIs500AndRollsBack(t *testing.T) {
 		{http.MethodPost, "/admin/tenants/1/rotate", ""},
 	}
 	for _, tc := range cases {
-		w := f.send(tc.method, tc.target, tok, tc.body)
+		w := f.mutate(owner, tc.method, tc.target, tc.body)
 		env := expectError(t, w, http.StatusInternalServerError, domain.CodeInternal)
 		if env.Error.Message != "internal server error" || strings.Contains(w.Body.String(), "10.1.2.3") {
 			t.Fatalf("%s %s leaked internal text: %s", tc.method, tc.target, w.Body.String())
@@ -214,12 +204,12 @@ func TestTenantMutationAuditFailureIs500AndRollsBack(t *testing.T) {
 // Duplicate slug stays 409 conflict when the insert runs in the audit tx.
 func TestTenantCreateDuplicateSlugIsConflictOverHTTP(t *testing.T) {
 	f := newTenantAPI(t)
-	tok := f.token(t)
-	f.send(http.MethodPost, "/admin/tenants", tok, `{"name":"Acme","slug":"acme"}`)
-	expectError(t, f.send(http.MethodPost, "/admin/tenants", tok, `{"name":"Acme","slug":"acme"}`), http.StatusConflict, domain.CodeConflict)
-	expectError(t, f.send(http.MethodPost, "/admin/tenants", tok, `{"name":"Acme","slug":"Bad Slug!"}`), http.StatusBadRequest, domain.CodeValidationFailed)
-	expectError(t, f.send(http.MethodPut, "/admin/tenants/99", tok, `{"name":"x"}`), http.StatusNotFound, domain.CodeNotFound)
-	expectError(t, f.send(http.MethodPost, "/admin/tenants/99/rotate", tok, ""), http.StatusNotFound, domain.CodeNotFound)
+	owner := f.signIn(t, f.owner)
+	f.mutate(owner, http.MethodPost, "/admin/tenants", `{"name":"Acme","slug":"acme"}`)
+	expectError(t, f.mutate(owner, http.MethodPost, "/admin/tenants", `{"name":"Acme","slug":"acme"}`), http.StatusConflict, domain.CodeConflict)
+	expectError(t, f.mutate(owner, http.MethodPost, "/admin/tenants", `{"name":"Acme","slug":"Bad Slug!"}`), http.StatusBadRequest, domain.CodeValidationFailed)
+	expectError(t, f.mutate(owner, http.MethodPut, "/admin/tenants/99", `{"name":"x"}`), http.StatusNotFound, domain.CodeNotFound)
+	expectError(t, f.mutate(owner, http.MethodPost, "/admin/tenants/99/rotate", ""), http.StatusNotFound, domain.CodeNotFound)
 	if len(f.logs.logs) != 1 {
 		t.Fatalf("entries = %d, want 1", len(f.logs.logs))
 	}

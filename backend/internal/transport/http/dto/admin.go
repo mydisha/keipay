@@ -8,22 +8,6 @@ import (
 )
 
 // ============================================================================
-// Auth DTOs
-// ============================================================================
-
-// LoginRequest is the request body for POST /admin/login.
-type LoginRequest struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
-}
-
-// ChangePasswordRequest is the request body for POST /admin/change-password.
-type ChangePasswordRequest struct {
-	CurrentPassword string `json:"current_password" binding:"required"`
-	NewPassword     string `json:"new_password" binding:"required,min=8"`
-}
-
-// ============================================================================
 // Tenant DTOs
 // ============================================================================
 

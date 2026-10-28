@@ -15,8 +15,14 @@ const (
 	EventAuthLookupFailed     = "auth.lookup_failed"
 	EventCallbackInvalidToken = "callback.invalid_token"
 	EventCallbackMismatch     = "callback.mismatch"
-	EventAdminMissingToken    = "admin.missing_token"
-	EventAdminInvalidToken    = "admin.invalid_token"
+	EventAdminSessionMissing  = "admin.session_missing"
+	EventAdminSessionInvalid  = "admin.session_invalid"
+	EventAdminCSRFFailed      = "admin.csrf_failed"
+	EventAdminForbidden       = "admin.forbidden"
+	EventLoginFailed          = "auth.login_failed"
+	EventLoginRateLimited     = "auth.login_rate_limited"
+	EventSetupRateLimited     = "auth.setup_rate_limited"
+	EventSetupTokenInvalid    = "auth.setup_token_invalid"
 )
 
 // Severity levels for security events.

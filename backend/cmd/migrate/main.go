@@ -1,21 +1,19 @@
-// Command migrate runs SQL migrations and optionally seeds a demo tenant and the admin user.
+// Command migrate runs SQL migrations, optionally seeds a demo tenant, and
+// recovers console access with -reset-admin.
 package main
 
 import (
 	"context"
-	cryptorand "crypto/rand"
-	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
-	"time"
 
 	"github.com/golang-migrate/migrate/v4"
 	_ "github.com/golang-migrate/migrate/v4/database/postgres"
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"golang.org/x/crypto/bcrypt"
 
 	"github.com/mydisha/keipay/backend/internal/config"
 	"github.com/mydisha/keipay/backend/internal/domain"
@@ -27,9 +25,10 @@ import (
 func main() {
 	var (
 		down       = flag.Bool("down", false, "roll back all migrations")
-		seed       = flag.Bool("seed", false, "seed a demo tenant and the admin user after migrating")
-		resetAdmin = flag.Bool("reset-admin", false, "reset admin password")
-		password   = flag.String("password", "", "password for reset-admin (auto-generate if empty)")
+		seed       = flag.Bool("seed", false, "seed a demo tenant after migrating")
+		resetAdmin = flag.Bool("reset-admin", false, "reset a console user's password, or create the first owner")
+		email      = flag.String("email", "", "user for -reset-admin (default: the oldest owner)")
+		password   = flag.String("password", "", "new password for -reset-admin (generated if empty)")
 	)
 	flag.Parse()
 
@@ -44,59 +43,69 @@ func main() {
 	}
 
 	if *down {
-		if err := m.Down(); err != nil && err != migrate.ErrNoChange {
+		if err := m.Down(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 			fatal(err)
 		}
 		fmt.Println("migrations rolled back")
 		return
 	}
 
-	if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
 		fatal(err)
 	}
 	fmt.Println("migrations applied")
 
+	if !*seed && !*resetAdmin {
+		return
+	}
+	ctx := context.Background()
+	pool, err := postgres.NewPool(ctx, cfg.PostgresDSN)
+	if err != nil {
+		fatal(err)
+	}
+	defer pool.Close()
+
 	if *seed {
-		if err := seedDemoTenant(cfg); err != nil {
+		cipher, err := crypto.New(cfg.EncryptionKey)
+		if err != nil {
 			fatal(err)
 		}
-		if err := seedAdmin(cfg); err != nil {
+		if err := runSeed(ctx, pool, cipher, os.Stdout); err != nil {
 			fatal(err)
 		}
 	}
-
 	if *resetAdmin {
-		if err := resetAdminPassword(cfg, *password); err != nil {
+		hasher := service.NewBcryptHasher(service.DefaultBcryptCost)
+		if err := runResetAdmin(ctx, pool, hasher, *email, *password, os.Stdout); err != nil {
 			fatal(err)
 		}
 	}
 }
 
-func seedDemoTenant(cfg *config.Config) error {
-	ctx := domain.WithActor(context.Background(), domain.SystemActor("seed"))
-	pool, err := postgres.NewPool(ctx, cfg.PostgresDSN)
-	if err != nil {
-		return err
-	}
-	defer pool.Close()
-
-	cipher, err := crypto.New(cfg.EncryptionKey)
-	if err != nil {
-		return err
-	}
-
+// runSeed creates the demo tenant. It never creates a user: the first owner
+// is made in the console's first-run setup or with -reset-admin.
+func runSeed(ctx context.Context, pool *pgxpool.Pool, cipher service.SecretCipher, out io.Writer) error {
+	ctx = domain.WithActor(ctx, domain.SystemActor("seed"))
 	const slug = "demo"
 	t, creds, err := seedTenant(ctx, pool, cipher, "Demo App", slug)
 	if err != nil {
 		return err
 	}
 	if t == nil {
-		fmt.Printf("tenant %s already exists, skipping\n", slug)
-		return nil
+		fmt.Fprintf(out, "tenant %s already exists, skipping\n", slug)
+	} else {
+		fmt.Fprintf(out, "created tenant %s (id=%d)\n  api_key=%s\n  api_secret=%s\n",
+			t.Slug, t.ID, creds.APIKey, creds.APISecret)
+		fmt.Fprintln(out, "NOTE: store the api_secret value now; it is not recoverable in plaintext later.")
 	}
-	fmt.Printf("created tenant %s (id=%d)\n  api_key=%s\n  api_secret=%s\n",
-		t.Slug, t.ID, creds.APIKey, creds.APISecret)
-	fmt.Println("NOTE: store the api_secret value now; it is not recoverable in plaintext later.")
+
+	n, err := postgres.NewUserRepo(pool).Count(ctx)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		fmt.Fprintln(out, "no console user yet: open the console to create the first owner, or run -reset-admin -email <email>")
+	}
 	return nil
 }
 
@@ -118,105 +127,45 @@ func seedTenant(ctx context.Context, pool *pgxpool.Pool, cipher service.SecretCi
 	return t, creds, nil
 }
 
-func seedAdmin(cfg *config.Config) error {
-	ctx := domain.WithActor(context.Background(), domain.SystemActor("seed"))
-	pool, err := postgres.NewPool(ctx, cfg.PostgresDSN)
+// runResetAdmin recovers console access from the server shell, audited as
+// system:cli. See service.UserService.Recover for the rules.
+func runResetAdmin(ctx context.Context, pool *pgxpool.Pool, hasher service.PasswordHasher, email, password string, out io.Writer) error {
+	ctx = domain.WithActor(ctx, domain.SystemActor("cli"))
+	audit := service.NewAuditService(postgres.NewAuditRepo(pool))
+	users := service.NewUserService(postgres.NewUserRepo(pool), postgres.NewTxManager(pool), audit, hasher)
+	res, err := users.Recover(ctx, email, password)
 	if err != nil {
 		return err
 	}
-	defer pool.Close()
-
-	repo := postgres.NewAdminRepo(pool)
-
-	// Check if admin already exists
-	existing, err := repo.GetByUsername(ctx, "admin")
-	if err != nil {
-		return fmt.Errorf("check admin user: %w", err)
+	if res.Created {
+		fmt.Fprintln(out, "created owner")
+	} else {
+		fmt.Fprintln(out, "password reset; the user is enabled and signed out everywhere")
 	}
-	if existing != nil {
-		fmt.Println("admin user already exists, skipping")
-		return nil
+	fmt.Fprintf(out, "  email=%s\n", res.User.Email)
+	if res.Password != "" {
+		fmt.Fprintf(out, "  password=%s\n", res.Password)
+		fmt.Fprintln(out, "NOTE: store the password now; it is not recoverable in plaintext later. It must be changed at first sign-in.")
 	}
-
-	// Generate random password (16 chars)
-	passwordBytes := make([]byte, 12)
-	if _, err := cryptorand.Read(passwordBytes); err != nil {
-		return fmt.Errorf("generate password: %w", err)
-	}
-	password := hex.EncodeToString(passwordBytes)
-
-	// Hash password with bcrypt
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return fmt.Errorf("hash password: %w", err)
-	}
-
-	// Create admin user
-	admin := &domain.AdminUser{
-		Username:           "admin",
-		PasswordHash:       string(hash),
-		MustChangePassword: true,
-		CreatedAt:          time.Now(),
-		UpdatedAt:          time.Now(),
-	}
-	if err := repo.Create(ctx, admin); err != nil {
-		return fmt.Errorf("create admin: %w", err)
-	}
-
-	fmt.Println("created admin user")
-	fmt.Printf("  username=admin\n")
-	fmt.Printf("  password=%s\n", password)
-	fmt.Println("NOTE: store the password now; it is not recoverable in plaintext later.")
-	return nil
-}
-
-func resetAdminPassword(cfg *config.Config, password string) error {
-	ctx := domain.WithActor(context.Background(), domain.SystemActor("cli"))
-	pool, err := postgres.NewPool(ctx, cfg.PostgresDSN)
-	if err != nil {
-		return err
-	}
-	defer pool.Close()
-
-	repo := postgres.NewAdminRepo(pool)
-
-	// Check if admin exists
-	existing, err := repo.GetByUsername(ctx, "admin")
-	if err != nil {
-		return fmt.Errorf("check admin user: %w", err)
-	}
-	if existing == nil {
-		return fmt.Errorf("admin user does not exist, run 'make seed' first")
-	}
-
-	// Generate password if not provided
-	if password == "" {
-		passwordBytes := make([]byte, 12)
-		if _, err := cryptorand.Read(passwordBytes); err != nil {
-			return fmt.Errorf("generate password: %w", err)
-		}
-		password = hex.EncodeToString(passwordBytes)
-	}
-
-	// Hash password with bcrypt
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return fmt.Errorf("hash password: %w", err)
-	}
-
-	// Update password
-	if err := repo.UpdatePassword(ctx, existing.ID, string(hash)); err != nil {
-		return fmt.Errorf("update password: %w", err)
-	}
-
-	fmt.Println("admin password reset successfully")
-	fmt.Printf("  username=admin\n")
-	fmt.Printf("  password=%s\n", password)
-	fmt.Println("NOTE: store the password now; it is not recoverable in plaintext later.")
 	return nil
 }
 
 func fatal(err error) {
-	fmt.Fprintln(os.Stderr, "error:", err)
+	fmt.Fprintln(os.Stderr, "error:", describe(err))
 	os.Exit(1)
+}
+
+// describe turns field validation errors into a readable line.
+func describe(err error) string {
+	var coded *domain.Error
+	if errors.As(err, &coded) {
+		if fields, ok := coded.Details["fields"].([]domain.FieldError); ok && len(fields) > 0 {
+			msg := "invalid input:"
+			for _, f := range fields {
+				msg += fmt.Sprintf(" %s (%s)", f.Field, f.Rule)
+			}
+			return msg
+		}
+	}
+	return err.Error()
 }

@@ -12,6 +12,9 @@ import (
 	"github.com/go-playground/validator/v10"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
+	"github.com/mydisha/keipay/backend/internal/pkg/id"
+	"github.com/mydisha/keipay/backend/internal/service"
+	"github.com/mydisha/keipay/backend/internal/transport/http/middleware"
 )
 
 // validate checks the `binding` tags on request DTOs and reports fields by
@@ -97,6 +100,25 @@ func pathID(c *gin.Context) (int64, error) {
 		return 0, invalidRequest("invalid path parameter", domain.FieldError{Field: "id", Rule: "int"})
 	}
 	return id, nil
+}
+
+// pathUserID parses the :id path parameter as a usr_ id (lower case
+// accepted) and returns its canonical form.
+func pathUserID(c *gin.Context) (string, error) {
+	uid, err := id.ParseWithPrefix(c.Param("id"), id.User)
+	if err != nil {
+		return "", invalidRequest("invalid path parameter", domain.FieldError{Field: "id", Rule: "public_id"})
+	}
+	return uid, nil
+}
+
+// clientMeta describes the caller for sessions, rate limits and audit.
+func clientMeta(c *gin.Context) service.ClientMeta {
+	return service.ClientMeta{
+		IP:        c.ClientIP(),
+		UserAgent: c.Request.UserAgent(),
+		RequestID: middleware.RequestIDFromContext(c),
+	}
 }
 
 // pageRequest parses the limit and cursor query parameters of a

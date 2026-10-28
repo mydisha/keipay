@@ -18,14 +18,23 @@ const (
 	ActionTenantCreate          = "tenant.create"
 	ActionTenantUpdate          = "tenant.update"
 	ActionTenantRotate          = "tenant.rotate_credentials"
-	ActionAdminChangePassword   = "admin_user.change_password"
 	ActionWebhookDeliveryReplay = "webhook_delivery.replay"
+	ActionUserSetup             = "user.setup"
+	ActionUserCreate            = "user.create"
+	ActionUserUpdate            = "user.update"
+	ActionUserDisable           = "user.disable"
+	ActionUserEnable            = "user.enable"
+	ActionUserResetPassword     = "user.reset_password"
+	ActionUserChangePassword    = "user.change_password"
+	ActionUserLogin             = "user.login"
+	ActionUserLoginFailed       = "user.login_failed"
+	ActionUserLogout            = "user.logout"
 )
 
 // Audit target types.
 const (
 	TargetTenant          = "tenant"
-	TargetAdminUser       = "admin_user"
+	TargetUser            = "user"
 	TargetWebhookDelivery = "webhook_delivery"
 )
 
@@ -59,7 +68,7 @@ func (s *AuditService) Record(ctx context.Context, action string, target domain.
 	if !ok {
 		return ErrNoActor
 	}
-	if (actor.Type != domain.ActorAdmin && actor.Type != domain.ActorSystem) || actor.ID == "" {
+	if !validActorType(actor.Type) || actor.ID == "" {
 		return fmt.Errorf("audit: invalid actor %q:%q", actor.Type, actor.ID)
 	}
 	b, err := snapshot(before)
@@ -79,6 +88,15 @@ func (s *AuditService) Record(ctx context.Context, action string, target domain.
 		Before:     b,
 		After:      a,
 	})
+}
+
+func validActorType(t string) bool {
+	switch t {
+	case domain.ActorAdmin, domain.ActorSystem, domain.ActorAnonymous:
+		return true
+	default:
+		return false
+	}
 }
 
 // List returns one page of entries, newest first.

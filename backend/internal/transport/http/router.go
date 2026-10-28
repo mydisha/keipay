@@ -2,9 +2,13 @@
 package http
 
 import (
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/mydisha/keipay/backend/internal/domain"
+	"github.com/mydisha/keipay/backend/internal/service"
 	"github.com/mydisha/keipay/backend/internal/transport/http/handler"
 	"github.com/mydisha/keipay/backend/internal/transport/http/middleware"
 )
@@ -16,20 +20,104 @@ type Deps struct {
 	TenantResolver  middleware.TenantResolver
 	NonceStore      middleware.NonceStore
 	SecretDecryptor middleware.SecretDecryptor
-	JWTVerifier     middleware.JWTVerifier
 	CallbackToken   string
+
+	// Sessions resolves admin session cookies.
+	Sessions middleware.Authenticator
+	Cookies  middleware.CookieConfig
+	// NewToken issues CSRF cookies; nil uses service.NewToken.
+	NewToken middleware.TokenGenerator
+	// TrustedProxies may set X-Forwarded-For; empty trusts none, so the client
+	// IP is the TCP peer.
+	TrustedProxies []string
 
 	Payment *handler.PaymentHandler
 	Webhook *handler.WebhookHandler
 	Admin   *handler.AdminHandler
+	Auth    *handler.AuthHandler
+	Users   *handler.UserHandler
 
 	// FrontendDir is the admin console build (frontend/dist). Empty disables it.
 	FrontendDir string
 }
 
+// Access levels of admin routes that need no permission.
+const (
+	AccessPublic        = "public"
+	AccessAuthenticated = "authenticated"
+)
+
+// adminRoute is one /admin endpoint and who may call it. access is
+// AccessPublic, AccessAuthenticated or a domain.Permission.
+type adminRoute struct {
+	method  string
+	path    string
+	access  string
+	handler gin.HandlerFunc
+	// duringPasswordChange lets a user with must_change_password through.
+	duringPasswordChange bool
+}
+
+func public(method, path string, h gin.HandlerFunc) adminRoute {
+	return adminRoute{method: method, path: path, access: AccessPublic, handler: h}
+}
+
+func authenticated(method, path string, h gin.HandlerFunc) adminRoute {
+	return adminRoute{method: method, path: path, access: AccessAuthenticated, handler: h}
+}
+
+func permitted(method, path string, p domain.Permission, h gin.HandlerFunc) adminRoute {
+	return adminRoute{method: method, path: path, access: string(p), handler: h}
+}
+
+func (r adminRoute) allowedDuringPasswordChange() adminRoute {
+	r.duringPasswordChange = true
+	return r
+}
+
+// adminRoutes is the single list of /admin endpoints (paths relative to
+// /admin). Each access level must equal x-keipay-permission in
+// api/openapi.yaml; a test compares them.
+func adminRoutes(d Deps) []adminRoute {
+	return []adminRoute{
+		public(http.MethodGet, "/setup", d.Auth.SetupStatus),
+		public(http.MethodPost, "/setup", d.Auth.Setup),
+		public(http.MethodPost, "/login", d.Auth.Login),
+		public(http.MethodPost, "/logout", d.Auth.Logout),
+		authenticated(http.MethodGet, "/me", d.Auth.Me).allowedDuringPasswordChange(),
+		authenticated(http.MethodPost, "/me/password", d.Auth.ChangePassword).allowedDuringPasswordChange(),
+
+		permitted(http.MethodGet, "/users", domain.PermUsersManage, d.Users.List),
+		permitted(http.MethodPost, "/users", domain.PermUsersManage, d.Users.Create),
+		permitted(http.MethodGet, "/users/:id", domain.PermUsersManage, d.Users.Get),
+		permitted(http.MethodPatch, "/users/:id", domain.PermUsersManage, d.Users.Update),
+		permitted(http.MethodPost, "/users/:id/disable", domain.PermUsersManage, d.Users.Disable),
+		permitted(http.MethodPost, "/users/:id/enable", domain.PermUsersManage, d.Users.Enable),
+		permitted(http.MethodPost, "/users/:id/reset-password", domain.PermUsersManage, d.Users.ResetPassword),
+
+		permitted(http.MethodGet, "/tenants", domain.PermTenantsRead, d.Admin.ListTenants),
+		permitted(http.MethodPost, "/tenants", domain.PermTenantsWrite, d.Admin.CreateTenant),
+		permitted(http.MethodPut, "/tenants/:id", domain.PermTenantsWrite, d.Admin.UpdateTenant),
+		permitted(http.MethodPost, "/tenants/:id/rotate", domain.PermTenantsWrite, d.Admin.RotateTenantCredentials),
+
+		permitted(http.MethodGet, "/payments", domain.PermPaymentsRead, d.Admin.ListPayments),
+		permitted(http.MethodGet, "/ledger", domain.PermPaymentsRead, d.Admin.ListLedger),
+		permitted(http.MethodGet, "/webhook-deliveries", domain.PermDeliveriesRead, d.Admin.ListDeliveries),
+		permitted(http.MethodPost, "/webhook-deliveries/:id/replay", domain.PermDeliveriesReplay, d.Admin.ReplayDelivery),
+
+		permitted(http.MethodGet, "/audit-logs", domain.PermAuditRead, d.Admin.ListAuditLogs),
+	}
+}
+
 // NewRouter builds the Gin engine with all routes mounted.
 func NewRouter(d Deps) *gin.Engine {
 	r := gin.New()
+	if err := r.SetTrustedProxies(d.TrustedProxies); err != nil {
+		// Config validates the list, so this only guards against misuse:
+		// trusting nobody is the safe fallback.
+		d.Log.Error("invalid trusted proxies; trusting none", zap.Error(err))
+		_ = r.SetTrustedProxies(nil)
+	}
 	r.Use(middleware.RequestID(), middleware.AccessLog(d.Log), middleware.Recover(d.Log))
 
 	r.GET("/healthz", handler.Health)
@@ -51,29 +139,19 @@ func NewRouter(d Deps) *gin.Engine {
 		wh.POST("/xendit", d.Webhook.Xendit)
 	}
 
-	// Admin/UI API.
+	// Admin/UI API: cookie session, CSRF on unsafe methods, permission per route.
+	newToken := d.NewToken
+	if newToken == nil {
+		newToken = service.NewToken
+	}
 	admin := r.Group("/admin")
-	{
-		admin.POST("/login", d.Admin.Login)
-
-		auth := admin.Group("")
-		auth.Use(middleware.AdminAuth(d.JWTVerifier, d.Log))
-
-		{
-			auth.POST("/change-password", d.Admin.ChangePassword)
-
-			auth.POST("/tenants", d.Admin.CreateTenant)
-			auth.GET("/tenants", d.Admin.ListTenants)
-			auth.PUT("/tenants/:id", d.Admin.UpdateTenant)
-			auth.POST("/tenants/:id/rotate", d.Admin.RotateTenantCredentials)
-
-			auth.GET("/payments", d.Admin.ListPayments)
-			auth.GET("/ledger", d.Admin.ListLedger)
-			auth.GET("/webhook-deliveries", d.Admin.ListDeliveries)
-			auth.POST("/webhook-deliveries/:id/replay", d.Admin.ReplayDelivery)
-
-			auth.GET("/audit-logs", d.Admin.ListAuditLogs)
-		}
+	admin.Use(
+		middleware.AdminContext(d.Cookies, newToken),
+		middleware.LoadSession(d.Sessions, d.Cookies),
+		middleware.CSRF(d.Log),
+	)
+	for _, rt := range adminRoutes(d) {
+		admin.Handle(rt.method, rt.path, append(guards(rt, d.Log), rt.handler)...)
 	}
 
 	// Admin console: everything that is not an API route. Unknown API routes,
@@ -88,4 +166,19 @@ func NewRouter(d Deps) *gin.Engine {
 	}
 
 	return r
+}
+
+// guards returns the middleware that enforces a route's access level.
+func guards(rt adminRoute, log *zap.Logger) []gin.HandlerFunc {
+	if rt.access == AccessPublic {
+		return nil
+	}
+	chain := []gin.HandlerFunc{middleware.RequireSession(log)}
+	if !rt.duringPasswordChange {
+		chain = append(chain, middleware.RequirePasswordChanged())
+	}
+	if rt.access != AccessAuthenticated {
+		chain = append(chain, middleware.RequirePermission(domain.Permission(rt.access), log))
+	}
+	return chain
 }

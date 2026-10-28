@@ -145,3 +145,22 @@ func TestAuditListValidatesPage(t *testing.T) {
 		t.Fatalf("limit 201 err = %v, want ErrInvalidInput", err)
 	}
 }
+
+func TestAuditRecordAcceptsEveryActorType(t *testing.T) {
+	for _, a := range []domain.Actor{
+		domain.UserActor("usr_01JBKQ7Z8M4X2Y6V3N9T5R1W0C", "203.0.113.7", "ua", "rid"),
+		domain.SystemActor("setup"),
+		domain.AnonymousActor("203.0.113.7", "ua", "rid"),
+	} {
+		svc, repo := newAuditSvc()
+		if err := svc.Record(domain.WithActor(context.Background(), a), ActionUserLoginFailed, domain.AuditTarget{Type: "user"}, nil, nil); err != nil {
+			t.Fatalf("actor %+v rejected: %v", a, err)
+		}
+		if repo.logs[0].Actor != a {
+			t.Fatalf("actor = %+v, want %+v", repo.logs[0].Actor, a)
+		}
+	}
+	if a := domain.AnonymousActor("1.2.3.4", "", ""); a.Type != "anonymous" || a.ID != "anonymous" {
+		t.Fatalf("anonymous actor = %+v", a)
+	}
+}

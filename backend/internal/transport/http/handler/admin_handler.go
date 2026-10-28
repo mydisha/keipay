@@ -9,16 +9,13 @@ import (
 	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/service"
 	"github.com/mydisha/keipay/backend/internal/transport/http/dto"
-	"github.com/mydisha/keipay/backend/internal/transport/http/middleware"
 	"github.com/mydisha/keipay/backend/internal/transport/http/response"
 )
 
-// AdminHandler exposes admin/UI endpoints (login, tenant CRUD, reports).
-//
-// Admin endpoints require authentication via JWT token in the Authorization header.
-// The JWT is validated by middleware before reaching these handlers.
+// AdminHandler exposes the tenant, reporting, delivery and audit endpoints of
+// the admin API. Sessions, CSRF and permissions are enforced by the router's
+// middleware before these handlers run.
 type AdminHandler struct {
-	auth       *service.AuthService
 	tenants    *service.TenantService
 	payments   *service.PaymentService
 	ledger     *service.LedgerService
@@ -28,52 +25,13 @@ type AdminHandler struct {
 
 // NewAdminHandler constructs an AdminHandler.
 func NewAdminHandler(
-	auth *service.AuthService,
 	tenants *service.TenantService,
 	payments *service.PaymentService,
 	ledger *service.LedgerService,
 	deliveries *service.DeliveryService,
 	audit *service.AuditService,
 ) *AdminHandler {
-	return &AdminHandler{auth: auth, tenants: tenants, payments: payments, ledger: ledger, deliveries: deliveries, audit: audit}
-}
-
-// Login handles POST /admin/login.
-// Authenticates admin users and returns a JWT token.
-func (h *AdminHandler) Login(c *gin.Context) {
-	var req dto.LoginRequest
-	if err := bindJSON(c, &req); err != nil {
-		response.Error(c, err)
-		return
-	}
-	result, err := h.auth.Login(c.Request.Context(), req.Username, req.Password)
-	if err != nil {
-		response.Error(c, err)
-		return
-	}
-	response.Success(c, result)
-}
-
-// ChangePassword handles POST /admin/change-password.
-// Requires the admin to be authenticated and provide their current password.
-func (h *AdminHandler) ChangePassword(c *gin.Context) {
-	username, ok := middleware.AdminFromContext(c)
-	if !ok {
-		response.Error(c, domain.ErrUnauthorized)
-		return
-	}
-
-	var req dto.ChangePasswordRequest
-	if err := bindJSON(c, &req); err != nil {
-		response.Error(c, err)
-		return
-	}
-
-	if err := h.auth.ChangePassword(c.Request.Context(), username, req.CurrentPassword, req.NewPassword); err != nil {
-		response.Error(c, err)
-		return
-	}
-	response.Success(c, dto.MessageResponse{Message: "password changed successfully"})
+	return &AdminHandler{tenants: tenants, payments: payments, ledger: ledger, deliveries: deliveries, audit: audit}
 }
 
 // CreateTenant handles POST /admin/tenants.

@@ -42,8 +42,7 @@ setup: env install up seed
 ## env: create .env from .env.example with generated secrets and the chosen ports (never overwrites).
 env:
 	@if [ -f .env ]; then echo ".env exists, leaving it untouched"; else \
-		sed -e "s/^JWT_SECRET=.*/JWT_SECRET=$$(openssl rand -hex 32)/" \
-		    -e "s/^ENCRYPTION_KEY=.*/ENCRYPTION_KEY=$$(openssl rand -hex 32)/" \
+		sed -e "s/^ENCRYPTION_KEY=.*/ENCRYPTION_KEY=$$(openssl rand -hex 32)/" \
 		    -e "s/^HTTP_PORT=.*/HTTP_PORT=$(API_PORT)/" \
 		    -e "s#^HTTP_BASE_URL=.*#HTTP_BASE_URL=http://localhost:$(API_PORT)#" \
 		    -e "s/^UI_PORT=.*/UI_PORT=$(UI_PORT)/" \
@@ -97,13 +96,13 @@ down:
 migrate:
 	cd $(BACKEND_DIR) && go run ./cmd/migrate
 
-## seed: apply migrations, create the demo tenant and admin user (credentials printed once).
+## seed: apply migrations and create the demo tenant (credentials printed once). The first owner is created in the console.
 seed:
 	cd $(BACKEND_DIR) && go run ./cmd/migrate -seed
 
-## reset-admin: set the admin password, e.g. make reset-admin PW=yourpass (random if empty).
+## reset-admin: recover console access, e.g. make reset-admin EMAIL=you@example.com PW=yourpass (random password if empty).
 reset-admin:
-	cd $(BACKEND_DIR) && go run ./cmd/migrate -reset-admin -password '$(PW)'
+	cd $(BACKEND_DIR) && go run ./cmd/migrate -reset-admin -email '$(EMAIL)' -password '$(PW)'
 
 ## build: build the frontend assets, then the backend binaries.
 build: build-frontend build-backend

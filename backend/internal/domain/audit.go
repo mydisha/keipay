@@ -8,12 +8,14 @@ import (
 
 // Actor types recorded in the audit log.
 const (
-	ActorAdmin  = "admin"
-	ActorSystem = "system"
+	ActorAdmin     = "admin"
+	ActorSystem    = "system"
+	ActorAnonymous = "anonymous"
 )
 
-// Actor is who performed a mutation. Admin actors carry the request origin;
-// system actors (seed, CLI, jobs) leave IP, UserAgent and RequestID empty.
+// Actor is who performed a mutation. Admin and anonymous actors carry the
+// request origin; system actors (seed, CLI, setup, jobs) leave IP, UserAgent
+// and RequestID empty.
 type Actor struct {
 	Type      string
 	ID        string
@@ -26,6 +28,17 @@ type Actor struct {
 // (e.g. "seed", "cli").
 func SystemActor(component string) Actor {
 	return Actor{Type: ActorSystem, ID: component}
+}
+
+// AnonymousActor is the actor of an unauthenticated request, such as a failed
+// sign-in.
+func AnonymousActor(ip, userAgent, requestID string) Actor {
+	return Actor{Type: ActorAnonymous, ID: ActorAnonymous, IP: ip, UserAgent: userAgent, RequestID: requestID}
+}
+
+// UserActor is the actor of a request made by a signed-in console user.
+func UserActor(userPublicID, ip, userAgent, requestID string) Actor {
+	return Actor{Type: ActorAdmin, ID: userPublicID, IP: ip, UserAgent: userAgent, RequestID: requestID}
 }
 
 type actorKey struct{}

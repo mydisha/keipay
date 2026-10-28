@@ -12,7 +12,6 @@ func envBody(dsn string) string {
 		"POSTGRES_DSN=" + dsn,
 		"XENDIT_SECRET_KEY=xnd_test",
 		"XENDIT_CALLBACK_TOKEN=cb_test",
-		"JWT_SECRET=jwt_test",
 		"ENCRYPTION_KEY=" + strings.Repeat("ab", 32),
 	}, "\n") + "\n"
 }
@@ -21,7 +20,12 @@ func envBody(dsn string) string {
 // and blanks env vars a developer shell may export (empty counts as unset).
 func chdirBackend(t *testing.T) string {
 	t.Helper()
-	for _, key := range []string{"POSTGRES_DSN", "XENDIT_SECRET_KEY", "XENDIT_CALLBACK_TOKEN", "JWT_SECRET", "ENCRYPTION_KEY", "FRONTEND_DIR"} {
+	for _, key := range []string{
+		"POSTGRES_DSN", "XENDIT_SECRET_KEY", "XENDIT_CALLBACK_TOKEN", "JWT_SECRET", "ENCRYPTION_KEY", "FRONTEND_DIR",
+		"APP_ENV", "COOKIE_SECURE", "SESSION_IDLE_TIMEOUT", "SESSION_ABSOLUTE_TIMEOUT",
+		"LOGIN_MAX_FAILURES_PER_IP", "LOGIN_MAX_FAILURES_PER_EMAIL", "LOGIN_FAILURE_WINDOW",
+		"TRUSTED_PROXIES", "SETUP_TOKEN",
+	} {
 		t.Setenv(key, "")
 	}
 	root := t.TempDir()

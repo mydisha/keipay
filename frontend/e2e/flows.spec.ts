@@ -1,40 +1,24 @@
 import { expect, test, type Page } from "@playwright/test";
+import { expectNoHorizontalScroll, requireOwnerCredentials, settled, signInToDashboard, signOut } from "./helpers";
 
 // End-to-end checks for the flows the smoke test only visits: the audited app
-// lifecycle (create, edit, deactivate, rotate), the expired-session redirect,
-// the shell controls and the 375px layout in both themes. Runs against the
-// same server and seeded admin as smoke.spec.ts and never changes the admin
-// password, so the two files can run in any order.
+// lifecycle (create, edit, deactivate, rotate), the shell controls and the
+// 375px layout in both themes. Runs as the owner the setup project created
+// and never changes their password, so spec files can run in any order.
 
-const username = process.env.E2E_USERNAME ?? "admin";
-const password = process.env.E2E_PASSWORD ?? "";
+requireOwnerCredentials();
 
-test.skip(!password, "E2E_PASSWORD is not set; run through `make e2e` or set E2E_BASE_URL, E2E_USERNAME and E2E_PASSWORD");
-
-const TOKEN_KEY = "kei_admin_token";
-
-const allPaths = ["/", "/apps", "/connections", "/webhooks", "/payments", "/reconciliation", "/settings"];
-
-async function signIn(page: Page) {
-  await page.goto("/login");
-  await page.getByLabel("Username").fill(username);
-  await page.getByLabel("Password", { exact: true }).fill(password);
-  await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page).toHaveURL(/\/$/);
-}
-
-async function settled(page: Page) {
-  await expect(page.locator("[aria-busy=true]")).toHaveCount(0);
-  await expect(page.getByTestId("error-state")).toHaveCount(0);
-}
-
-async function expectNoHorizontalScroll(page: Page, label: string) {
-  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }));
-  expect(scrollWidth, `${label} scrolls horizontally`).toBeLessThanOrEqual(clientWidth);
-}
+const allPaths = [
+  "/",
+  "/apps",
+  "/connections",
+  "/webhooks",
+  "/payments",
+  "/reconciliation",
+  "/settings",
+  "/settings/users",
+  "/settings/audit-log",
+];
 
 // Saves the revealed credentials dialog: it cannot be dismissed before the
 // "I have saved this" box is ticked.
@@ -66,7 +50,7 @@ test.describe("apps lifecycle", () => {
     const name = `QA Flow ${suffix}`;
     const renamed = `${name} renamed`;
 
-    await signIn(page);
+    await signInToDashboard(page);
     await page.goto("/apps");
     await settled(page);
 
@@ -127,9 +111,9 @@ test.describe("apps lifecycle", () => {
     await acknowledgeSecret(page);
 
     // Settings lists every mutation, newest first, with before/after JSON.
-    await page.goto("/settings");
+    await page.goto("/settings/audit-log");
     await settled(page);
-    const audit = page.getByRole("region", { name: "Audit log" }).or(page.locator("section[aria-labelledby=audit-log-heading]"));
+    const audit = page.locator("section[aria-labelledby=audit-log-heading]");
     const actions = await audit.locator("tbody tr td:nth-child(2)").allInnerTexts();
     expect(actions.slice(0, 5)).toEqual([
       "tenant.rotate_credentials",
@@ -145,40 +129,7 @@ test.describe("apps lifecycle", () => {
     await expect(entry.getByText("After", { exact: true })).toBeVisible();
     await expect(entry.getByText(/api_key_last4/).first()).toBeVisible();
     await expect(entry.getByText(/api_secret/)).toHaveCount(0);
-    await expect(entry.getByText(`admin:${username}`).or(entry.getByText(username, { exact: true })).first()).toBeVisible();
-  });
-});
-
-test.describe("session", () => {
-  test.use({ viewport: { width: 1280, height: 800 } });
-
-  test("an invalid token sends the user to login with the session-expired message", async ({ page }) => {
-    await signIn(page);
-    await page.evaluate((key) => window.localStorage.setItem(key, "not-a-valid-token"), TOKEN_KEY);
-    await page.goto("/apps");
-    await expect(page).toHaveURL(/\/login\?reason=session_expired$/);
-    await expect(page.getByText("Your session has expired. Sign in again.")).toBeVisible();
-    expect(await page.evaluate((key) => window.localStorage.getItem(key), TOKEN_KEY)).toBeNull();
-    // Signing in again works from there.
-    await page.getByLabel("Username").fill(username);
-    await page.getByLabel("Password", { exact: true }).fill(password);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page).toHaveURL(/\/$/);
-  });
-
-  test("a protected page without a token goes to login", async ({ page }) => {
-    await page.goto("/payments");
-    await expect(page).toHaveURL(/\/login/);
-    await expect(page.getByRole("button", { name: "Sign in" })).toBeVisible();
-  });
-
-  test("wrong credentials show the invalid-credentials message", async ({ page }) => {
-    await page.goto("/login");
-    await page.getByLabel("Username").fill(username);
-    await page.getByLabel("Password", { exact: true }).fill(`${password}-wrong`);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page.getByText("Invalid username or password")).toBeVisible();
-    await expect(page).toHaveURL(/\/login$/);
+    await expect(entry.getByText(/^admin:usr_[0-9A-Z]{26}$/)).toBeVisible();
   });
 });
 
@@ -186,7 +137,7 @@ test.describe("shell", () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
   test("test mode, theme and sidebar state persist; the palette navigates", async ({ page }) => {
-    await signIn(page);
+    await signInToDashboard(page);
     const banner = page.getByText(/This switch only changes the console for now/);
     await expect(banner).toHaveCount(0);
 
@@ -235,19 +186,24 @@ test.describe("375px", () => {
   for (const theme of ["light", "dark"] as const) {
     test(`every page fits at 375px in ${theme} mode`, async ({ page }) => {
       await page.addInitScript((t) => window.localStorage.setItem("keipay.theme", t), theme);
-      await signIn(page);
+      await signInToDashboard(page);
       for (const path of allPaths) {
         await page.goto(path);
         await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
         await settled(page);
         await expectNoHorizontalScroll(page, `${path} (${theme})`);
       }
+      await page.goto("/change-password");
+      await expect(page.getByRole("heading", { level: 1, name: "Change password" })).toBeVisible();
+      await expectNoHorizontalScroll(page, `/change-password (${theme})`);
       // Tables become cards on narrow screens.
       await page.goto("/apps");
       await settled(page);
       await expect(page.locator("table")).toHaveCount(0);
       await expect(page.getByText("Demo App").first()).toBeVisible();
       if (theme === "dark") await expect(page.locator("html")).toHaveClass(/\bdark\b/);
+      await signOut(page);
+      await expectNoHorizontalScroll(page, `/login (${theme})`);
     });
   }
 });

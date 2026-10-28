@@ -1,7 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
 // The gate (scripts/ci.sh) starts the real server and passes E2E_* variables,
-// so there is no webServer block here.
+// so there is no webServer block here. No user exists when the suite starts:
+// the `setup` project creates the owner through first-run setup, and every
+// other spec depends on it.
 export default defineConfig({
   testDir: "./e2e",
   outputDir: "./test-results",
@@ -18,5 +20,13 @@ export default defineConfig({
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
-  projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
+  projects: [
+    { name: "setup", testMatch: /.*\.setup\.ts/, use: { ...devices["Desktop Chrome"] } },
+    {
+      name: "chromium",
+      testIgnore: /.*\.setup\.ts/,
+      dependencies: ["setup"],
+      use: { ...devices["Desktop Chrome"] },
+    },
+  ],
 });

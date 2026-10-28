@@ -1,0 +1,15 @@
+# Lint rules for api/openapi.yaml (`make lint-api`). Warnings do not fail
+# the gate, so every rule that matters is promoted to error here.
+extends:
+  - recommended
+
+rules:
+  operation-operationId: error
+  operation-summary: error
+  security-defined: error
+  info-license: error
+  no-unused-components: error
+  no-invalid-media-type-examples: error
+  # /healthz has no client errors; every other operation lists its 4xx
+  # responses by convention, which review enforces.
+  operation-4xx-response: off

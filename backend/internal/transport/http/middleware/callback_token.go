@@ -2,12 +2,13 @@ package middleware
 
 import (
 	"crypto/subtle"
-	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/pkg/logger"
+	"github.com/mydisha/keipay/backend/internal/transport/http/response"
 )
 
 // XenditCallbackToken verifies the x-callback-token header against the account
@@ -20,7 +21,7 @@ func XenditCallbackToken(expected string, log *zap.Logger) gin.HandlerFunc {
 		if got == "" || subtle.ConstantTimeCompare([]byte(got), []byte(expected)) != 1 {
 			logger.Security(log, logger.EventCallbackInvalidToken, logger.SeverityHigh,
 				c.ClientIP(), c.GetString(ctxRequestID), "invalid callback token")
-			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid callback token"})
+			response.Error(c, domain.NewError(domain.CodeInvalidCallbackToken, "invalid callback token"))
 			return
 		}
 		c.Next()

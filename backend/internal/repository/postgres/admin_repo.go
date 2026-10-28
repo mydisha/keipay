@@ -23,7 +23,7 @@ func (r *adminRepo) GetByUsername(ctx context.Context, username string) (*domain
 	q := `SELECT id, username, password_hash, must_change_password, created_at, updated_at
 	      FROM admin_users WHERE username = $1`
 	var u domain.AdminUser
-	err := r.pool.QueryRow(ctx, q, username).Scan(
+	err := conn(ctx, r.pool).QueryRow(ctx, q, username).Scan(
 		&u.ID, &u.Username, &u.PasswordHash, &u.MustChangePassword, &u.CreatedAt, &u.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -38,13 +38,13 @@ func (r *adminRepo) GetByUsername(ctx context.Context, username string) (*domain
 func (r *adminRepo) Create(ctx context.Context, user *domain.AdminUser) error {
 	q := `INSERT INTO admin_users (username, password_hash, must_change_password)
 	      VALUES ($1, $2, $3) RETURNING id, created_at, updated_at`
-	return r.pool.QueryRow(ctx, q, user.Username, user.PasswordHash, user.MustChangePassword).
+	return conn(ctx, r.pool).QueryRow(ctx, q, user.Username, user.PasswordHash, user.MustChangePassword).
 		Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
 }
 
 func (r *adminRepo) UpdatePassword(ctx context.Context, id int64, passwordHash string) error {
 	q := `UPDATE admin_users SET password_hash = $1, must_change_password = false, updated_at = now()
 	      WHERE id = $2`
-	_, err := r.pool.Exec(ctx, q, passwordHash, id)
+	_, err := conn(ctx, r.pool).Exec(ctx, q, passwordHash, id)
 	return err
 }

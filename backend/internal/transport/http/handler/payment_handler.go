@@ -14,10 +14,9 @@
 package handler
 
 import (
-	"strconv"
-
 	"github.com/gin-gonic/gin"
 
+	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/service"
 	"github.com/mydisha/keipay/backend/internal/transport/http/dto"
 	"github.com/mydisha/keipay/backend/internal/transport/http/middleware"
@@ -40,13 +39,13 @@ func NewPaymentHandler(svc *service.PaymentService) *PaymentHandler {
 func (h *PaymentHandler) Create(c *gin.Context) {
 	tenant, ok := middleware.TenantFromContext(c)
 	if !ok {
-		response.Unauthorized(c, "no tenant context")
+		response.Error(c, domain.ErrUnauthorized)
 		return
 	}
 
 	var req dto.CreatePaymentRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, err.Error())
+	if err := bindJSON(c, &req); err != nil {
+		response.Error(c, err)
 		return
 	}
 
@@ -74,12 +73,12 @@ func (h *PaymentHandler) Create(c *gin.Context) {
 func (h *PaymentHandler) Get(c *gin.Context) {
 	tenant, ok := middleware.TenantFromContext(c)
 	if !ok {
-		response.Unauthorized(c, "no tenant context")
+		response.Error(c, domain.ErrUnauthorized)
 		return
 	}
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	id, err := pathID(c)
 	if err != nil {
-		response.BadRequest(c, "invalid id")
+		response.Error(c, err)
 		return
 	}
 	p, err := h.svc.Get(c.Request.Context(), tenant.ID, id)

@@ -71,12 +71,20 @@ func NewRouter(d Deps) *gin.Engine {
 			auth.GET("/ledger", d.Admin.ListLedger)
 			auth.GET("/webhook-deliveries", d.Admin.ListDeliveries)
 			auth.POST("/webhook-deliveries/:id/replay", d.Admin.ReplayDelivery)
+
+			auth.GET("/audit-logs", d.Admin.ListAuditLogs)
 		}
 	}
 
-	// Admin console: everything that is not an API route.
+	// Admin console: everything that is not an API route. Unknown API routes,
+	// and every unknown route when no console is built, get the JSON not_found
+	// envelope. A wrong method on a known path is a 404 too (gin does not
+	// answer 405 unless HandleMethodNotAllowed is set). Exactly /webhooks is
+	// the console's Webhooks page, so only the paths below it are reserved.
 	if d.FrontendDir != "" {
-		r.NoRoute(handler.SPA(d.FrontendDir, "/v1", "/webhooks", "/admin", "/healthz"))
+		r.NoRoute(handler.SPA(d.FrontendDir, "/v1", "/webhooks/", "/admin", "/healthz"))
+	} else {
+		r.NoRoute(handler.NotFound)
 	}
 
 	return r

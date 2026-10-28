@@ -95,11 +95,6 @@ type MessageResponse struct {
 	Message string `json:"message"`
 }
 
-// ErrorResponse is a generic error response.
-type ErrorResponse struct {
-	Error string `json:"error"`
-}
-
 // ReceivedResponse is the standard webhook acknowledgment.
 type ReceivedResponse struct {
 	Received bool `json:"received"`

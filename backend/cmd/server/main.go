@@ -99,6 +99,7 @@ func main() {
 	paymentRepo := postgres.NewPaymentRepo(pool)
 	ledgerRepo := postgres.NewLedgerRepo(pool)
 	webhookRepo := postgres.NewWebhookRepo(pool)
+	auditRepo := postgres.NewAuditRepo(pool)
 	txMgr := postgres.NewTxManager(pool)
 
 	// Initialize caches and idempotency stores.
@@ -121,11 +122,13 @@ func main() {
 
 	// Initialize services.
 	log.Debug("initializing services")
-	tenantSvc := service.NewTenantService(tenantRepo, tenantCache, cipher)
+	auditSvc := service.NewAuditService(auditRepo)
+	tenantSvc := service.NewTenantService(tenantRepo, tenantCache, cipher, txMgr, auditSvc)
 	paymentSvc := service.NewPaymentService(paymentRepo, xnd)
 	ledgerSvc := service.NewLedgerService(ledgerRepo)
 	webhookSvc := service.NewWebhookService(paymentRepo, ledgerRepo, webhookRepo, txMgr, idemp, enqueuer)
-	authSvc := service.NewAuthService(adminRepo, cfg.JWTSecret)
+	deliverySvc := service.NewDeliveryService(webhookRepo, enqueuer, auditSvc)
+	authSvc := service.NewAuthService(adminRepo, cfg.JWTSecret, txMgr, auditSvc)
 	log.Debug("services initialized")
 
 	frontendDir := resolveFrontendDir(cfg.FrontendDir)
@@ -149,7 +152,7 @@ func main() {
 		CallbackToken:   cfg.XenditCallbackToken,
 		Payment:         handler.NewPaymentHandler(paymentSvc),
 		Webhook:         handler.NewWebhookHandler(webhookSvc, log),
-		Admin:           handler.NewAdminHandler(authSvc, tenantSvc, paymentSvc, ledgerSvc, webhookRepo, enqueuer),
+		Admin:           handler.NewAdminHandler(authSvc, tenantSvc, paymentSvc, ledgerSvc, deliverySvc, auditSvc),
 		FrontendDir:     frontendDir,
 	}
 	router := transport.NewRouter(deps)

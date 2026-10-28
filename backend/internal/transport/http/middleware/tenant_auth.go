@@ -4,8 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
-	"net/http"
 	"strconv"
 	"time"
 
@@ -15,6 +15,7 @@ import (
 	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/pkg/hmac"
 	"github.com/mydisha/keipay/backend/internal/pkg/logger"
+	"github.com/mydisha/keipay/backend/internal/transport/http/response"
 )
 
 // timestampSkew is the max allowed clock skew for request signatures.
@@ -55,19 +56,19 @@ func TenantAuth(resolver TenantResolver, nonces NonceStore, cipher SecretDecrypt
 		tsStr := c.GetHeader("X-Timestamp")
 		if apiKey == "" || sig == "" || tsStr == "" {
 			logger.Security(log, logger.EventAuthMissingHeaders, logger.SeverityLow, ip, rid, "missing auth headers")
-			abortUnauthorized(c, "missing auth headers")
+			abort(c, domain.CodeMissingSignatureHeaders, "missing signature headers")
 			return
 		}
 
 		ts, err := strconv.ParseInt(tsStr, 10, 64)
 		if err != nil {
 			logger.Security(log, logger.EventAuthInvalidTimestamp, logger.SeverityLow, ip, rid, "invalid timestamp", apiKeyField(apiKey))
-			abortUnauthorized(c, "invalid timestamp")
+			abort(c, domain.CodeInvalidTimestamp, "invalid timestamp")
 			return
 		}
 		if d := time.Since(time.Unix(ts, 0)); d > timestampSkew || d < -timestampSkew {
 			logger.Security(log, logger.EventAuthTimestampSkew, logger.SeverityMedium, ip, rid, "timestamp out of range", apiKeyField(apiKey))
-			abortUnauthorized(c, "timestamp out of range")
+			abort(c, domain.CodeTimestampOutOfRange, "timestamp out of range")
 			return
 		}
 
@@ -75,43 +76,43 @@ func TenantAuth(resolver TenantResolver, nonces NonceStore, cipher SecretDecrypt
 		if err != nil {
 			if errors.Is(err, domain.ErrNotFound) {
 				logger.Security(log, logger.EventAuthUnknownAPIKey, logger.SeverityMedium, ip, rid, "unknown api key", apiKeyField(apiKey))
-				abortUnauthorized(c, "unknown api key")
+				abort(c, domain.CodeUnknownAPIKey, "unknown api key")
 				return
 			}
 			logger.Security(log, logger.EventAuthLookupFailed, logger.SeverityHigh, ip, rid, "auth lookup failed", zap.Error(err))
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "auth lookup failed"})
+			response.Error(c, domain.Internal(fmt.Errorf("auth lookup: %w", err)))
 			return
 		}
 		if !tenant.Active {
 			logger.Security(log, logger.EventAuthTenantInactive, logger.SeverityMedium, ip, rid, "tenant inactive", zap.Int64(logger.FieldTenantID, tenant.ID))
-			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "tenant inactive"})
+			abort(c, domain.CodeTenantInactive, "tenant inactive")
 			return
 		}
 
 		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
-			abortUnauthorized(c, "cannot read body")
+			abort(c, domain.CodeUnauthorized, "cannot read body")
 			return
 		}
 		c.Request.Body = io.NopCloser(bytes.NewReader(body)) // restore for handler
 
 		secret, err := cipher.Decrypt(tenant.APISecretEnc)
 		if err != nil {
-			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "secret decrypt failed"})
+			response.Error(c, domain.Internal(fmt.Errorf("decrypt tenant secret: %w", err)))
 			return
 		}
 
 		signingInput := append([]byte(tsStr+"."), body...)
 		if !hmac.Verify(secret, signingInput, sig) {
 			logger.Security(log, logger.EventAuthBadSignature, logger.SeverityHigh, ip, rid, "bad signature", zap.Int64(logger.FieldTenantID, tenant.ID))
-			abortUnauthorized(c, "bad signature")
+			abort(c, domain.CodeInvalidSignature, "invalid signature")
 			return
 		}
 
 		// Replay protection: signature is unique per (body, timestamp).
 		if nonces != nil && !nonces.Acquire(c.Request.Context(), "nonce:"+apiKey+":"+sig) {
 			logger.Security(log, logger.EventAuthReplay, logger.SeverityHigh, ip, rid, "replayed request", zap.Int64(logger.FieldTenantID, tenant.ID))
-			abortUnauthorized(c, "replayed request")
+			abort(c, domain.CodeReplayedRequest, "replayed request")
 			return
 		}
 
@@ -138,6 +139,6 @@ func TenantFromContext(c *gin.Context) (*domain.Tenant, bool) {
 	return t, ok
 }
 
-func abortUnauthorized(c *gin.Context, msg string) {
-	c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": msg})
+func abort(c *gin.Context, code domain.ErrorCode, msg string) {
+	response.Error(c, domain.NewError(code, msg))
 }

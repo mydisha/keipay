@@ -8,12 +8,16 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/transport/http/response"
 )
 
 // SPA serves the built admin console from dir. Existing files are served as-is;
 // any other GET/HEAD path falls back to index.html so client-side routes work.
 // Paths under apiPrefixes keep the JSON 404 so API clients never get HTML.
+// A prefix such as "/v1" reserves the path itself and everything below it; a
+// prefix with a trailing slash such as "/webhooks/" reserves only the paths
+// below it, so the bare path stays a console route.
 func SPA(dir string, apiPrefixes ...string) gin.HandlerFunc {
 	fsys := http.Dir(dir)
 	index := filepath.Join(dir, "index.html")
@@ -22,7 +26,7 @@ func SPA(dir string, apiPrefixes ...string) gin.HandlerFunc {
 		p := c.Request.URL.Path
 		method := c.Request.Method
 		if (method != http.MethodGet && method != http.MethodHead) || underAny(p, apiPrefixes) {
-			response.ErrorWithMessage(c, http.StatusNotFound, "not found")
+			NotFound(c)
 			return
 		}
 
@@ -48,9 +52,20 @@ func SPA(dir string, apiPrefixes ...string) gin.HandlerFunc {
 
 func underAny(p string, prefixes []string) bool {
 	for _, prefix := range prefixes {
+		if strings.HasSuffix(prefix, "/") {
+			if strings.HasPrefix(p, prefix) {
+				return true
+			}
+			continue
+		}
 		if p == prefix || strings.HasPrefix(p, prefix+"/") {
 			return true
 		}
 	}
 	return false
+}
+
+// NotFound answers unknown routes with the not_found envelope.
+func NotFound(c *gin.Context) {
+	response.Error(c, domain.ErrNotFound)
 }

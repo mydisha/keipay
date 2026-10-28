@@ -23,7 +23,7 @@ func newSPAEngine(t *testing.T) *gin.Engine {
 
 	r := gin.New()
 	r.GET("/healthz", Health)
-	r.NoRoute(SPA(dist, "/v1", "/admin", "/webhooks", "/healthz"))
+	r.NoRoute(SPA(dist, "/v1", "/admin", "/webhooks/", "/healthz"))
 	return r
 }
 
@@ -83,6 +83,33 @@ func TestSPA_APIPathsStayJSON404(t *testing.T) {
 		if ct := w.Header().Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
 			t.Fatalf("%s: Content-Type = %q, want JSON", target, ct)
 		}
+	}
+}
+
+func TestSPA_SubtreeOnlyPrefixKeepsBarePathForConsole(t *testing.T) {
+	r := newSPAEngine(t)
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
+		w := serve(r, method, "/webhooks")
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s /webhooks: got %d, want 200", method, w.Code)
+		}
+		if method == http.MethodGet && w.Body.String() != "<html>console</html>" {
+			t.Fatalf("GET /webhooks: body %q, want index.html", w.Body.String())
+		}
+	}
+	for _, tc := range []struct{ method, target string }{
+		{http.MethodGet, "/webhooks/"},
+		{http.MethodGet, "/webhooks/xendit"},
+		{http.MethodHead, "/webhooks/x"},
+		{http.MethodPost, "/webhooks"},
+	} {
+		if w := serve(r, tc.method, tc.target); w.Code != http.StatusNotFound {
+			t.Fatalf("%s %s: got %d, want 404", tc.method, tc.target, w.Code)
+		}
+	}
+	// "/webhooksx" shares the bytes but not the segment.
+	if w := serve(r, http.MethodGet, "/webhooksx"); w.Code != http.StatusOK {
+		t.Fatalf("/webhooksx: got %d, want 200", w.Code)
 	}
 }
 

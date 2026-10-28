@@ -1,121 +1,187 @@
 package handler
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
+	"github.com/mydisha/keipay/backend/internal/pkg/id"
 	"github.com/mydisha/keipay/backend/internal/pkg/logger"
 	"github.com/mydisha/keipay/backend/internal/service"
 	"github.com/mydisha/keipay/backend/internal/transport/http/dto"
 	"github.com/mydisha/keipay/backend/internal/transport/http/response"
 )
 
-// WebhookHandler receives inbound Xendit callbacks.
-//
-// Webhook endpoints are authenticated via Xendit's callback token header,
-// verified by middleware before reaching this handler.
+// WebhookHandler receives inbound gateway callbacks. Each connection has its
+// own URL and is verified with its own credentials, by the service.
 type WebhookHandler struct {
-	svc *service.WebhookService
-	log *zap.Logger
+	svc   *service.WebhookService
+	conns *service.ConnectionService
+	log   *zap.Logger
 }
 
 // NewWebhookHandler constructs a WebhookHandler.
-func NewWebhookHandler(svc *service.WebhookService, log *zap.Logger) *WebhookHandler {
-	return &WebhookHandler{svc: svc, log: log}
+func NewWebhookHandler(svc *service.WebhookService, conns *service.ConnectionService, log *zap.Logger) *WebhookHandler {
+	return &WebhookHandler{svc: svc, conns: conns, log: log}
 }
 
-// Xendit handles POST /webhooks/xendit.
-//
-// The x-callback-token is verified by middleware before this runs.
-// Always returns 200 for accepted/duplicate events so Xendit does not retry
-// on our internal hiccups; real failures return 5xx.
+// MaxCallbackBytes caps an inbound callback body. Callback URLs are public and
+// the body is read before the credentials are checked, so an unbounded read
+// would let anyone exhaust memory; gateway callbacks are a few KB.
+const MaxCallbackBytes = 1 << 20
+
+// resolver finds the connection a callback URL names, without the body.
+type resolver func(c *gin.Context) (*domain.Connection, error)
+
+// Connection handles POST /webhooks/{provider}/{connection_id}.
+func (h *WebhookHandler) Connection(c *gin.Context) {
+	h.receive(c, func(c *gin.Context) (*domain.Connection, error) {
+		connID, err := id.ParseWithPrefix(c.Param("connection_id"), id.Connection)
+		if err != nil {
+			return nil, service.ErrUnknownConnection
+		}
+		return h.conns.CallbackConnection(c.Request.Context(), c.Param("provider"), connID)
+	})
+}
+
+// Xendit handles POST /webhooks/xendit, the alias of the connection imported
+// from the deprecated XENDIT_* settings.
 func (h *WebhookHandler) Xendit(c *gin.Context) {
+	h.receive(c, func(c *gin.Context) (*domain.Connection, error) {
+		return h.conns.LegacyCallbackConnection(c.Request.Context())
+	})
+}
+
+// receive resolves the connection, then reads, verifies and applies one
+// callback. Accepted, duplicate, stale and recorded-but-mismatched callbacks
+// answer 200 so the gateway stops retrying; real processing failures answer
+// 500 so it retries.
+func (h *WebhookHandler) receive(c *gin.Context, resolve resolver) {
 	start := time.Now()
 	ctx := c.Request.Context()
-	// Correlate inbound webhook logs with the request id for end-to-end tracing.
 	log := logger.Ctx(ctx, h.log)
 
-	raw, err := io.ReadAll(c.Request.Body)
+	conn, err := resolve(c)
 	if err != nil {
+		h.rejected(c, nil, 0, err)
+		return
+	}
+
+	raw, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, MaxCallbackBytes))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		event, apiErr := "webhook.inbound.read_error", invalidBody()
+		if errors.As(err, &tooLarge) {
+			event, apiErr = "webhook.inbound.too_large", invalidRequest("request body too large")
+		}
 		log.Warn("webhook inbound read failed",
 			zap.String(logger.FieldLogType, logger.LogTypeWebhook),
-			zap.String(logger.FieldEvent, "webhook.inbound.read_error"),
+			zap.String(logger.FieldEvent, event),
+			zap.String("connection_id", conn.PublicID),
 			zap.Error(err),
 		)
-		response.Error(c, invalidBody())
+		response.Error(c, apiErr)
 		return
 	}
 
-	var cb service.XenditInvoiceCallback
-	if err := json.Unmarshal(raw, &cb); err != nil {
-		log.Warn("webhook inbound invalid json",
-			zap.String(logger.FieldLogType, logger.LogTypeWebhook),
-			zap.String(logger.FieldEvent, "webhook.inbound.invalid_json"),
-			zap.Int("bytes", len(raw)),
-			zap.Error(err),
-		)
-		response.Error(c, invalidBody())
+	ev, err := h.conns.VerifyCallback(conn, c.Request.Header, raw)
+	if err != nil {
+		h.rejected(c, conn, len(raw), err)
 		return
 	}
 
-	log.Info("webhook inbound received",
+	fields := []zap.Field{
+		zap.String("connection_id", conn.PublicID),
+		zap.String("provider", conn.Provider),
+		zap.String("event_key", ev.EventKey),
+		zap.String("external_id", ev.Reference),
+		zap.String("event_status", ev.ProviderStatus),
+	}
+	log.Info("webhook inbound received", append(fields,
 		zap.String(logger.FieldLogType, logger.LogTypeWebhook),
 		zap.String(logger.FieldEvent, "webhook.inbound.received"),
-		zap.String("provider", "xendit"),
-		zap.String("xendit_id", cb.ID),
-		zap.String("external_id", cb.ExternalID),
-		zap.String("event_status", cb.Status),
 		zap.Int("bytes", len(raw)),
-	)
+	)...)
 
-	err = h.svc.Process(ctx, cb, raw)
+	err = h.svc.Process(ctx, conn, *ev, raw)
 	if errors.Is(err, service.ErrForwardNotQueued) {
-		// Committed; the sweeper enqueues the forward. Ack so Xendit stops retrying.
-		log.Warn("webhook forward enqueue deferred",
+		// Committed; the sweeper enqueues the forward. Ack so the gateway stops retrying.
+		log.Warn("webhook forward enqueue deferred", append(fields,
 			zap.String(logger.FieldLogType, logger.LogTypeWebhook),
 			zap.String(logger.FieldEvent, "webhook.inbound.enqueue_deferred"),
-			zap.String("xendit_id", cb.ID),
-			zap.String("external_id", cb.ExternalID),
 			zap.Error(err),
-		)
+		)...)
 		err = nil
 	}
 	if errors.Is(err, service.ErrCallbackMismatch) {
 		// Recorded but not applied; retrying would not change the outcome.
+		extra := fields
+		var mismatch *service.ConnectionMismatchError
+		if errors.As(err, &mismatch) {
+			extra = append(extra, zap.Int64("connection_db_id", mismatch.ConnectionID))
+			if mismatch.PaymentConnectionID != nil {
+				extra = append(extra, zap.Int64("payment_connection_db_id", *mismatch.PaymentConnectionID))
+			}
+		}
 		logger.Security(h.log, logger.EventCallbackMismatch, logger.SeverityHigh,
-			c.ClientIP(), logger.RequestIDFromContext(ctx), err.Error(),
-			zap.String("xendit_id", cb.ID),
-			zap.String("external_id", cb.ExternalID),
-		)
+			c.ClientIP(), logger.RequestIDFromContext(ctx), err.Error(), extra...)
 		err = nil
 	}
 	if err != nil {
-		log.Error("webhook inbound process failed",
+		log.Error("webhook inbound process failed", append(fields,
 			zap.String(logger.FieldLogType, logger.LogTypeWebhook),
 			zap.String(logger.FieldEvent, "webhook.inbound.failed"),
-			zap.String("xendit_id", cb.ID),
-			zap.String("external_id", cb.ExternalID),
 			zap.Int64(logger.FieldLatencyMS, time.Since(start).Milliseconds()),
 			zap.Error(err),
-		)
-		// Every processing failure is a 500, including an unknown external_id,
-		// so Xendit retries once the payment row exists.
+		)...)
+		// Every processing failure is a 500, including an unknown reference,
+		// so the gateway retries once the payment row exists.
 		response.Error(c, domain.Internal(err))
 		return
 	}
 
-	log.Info("webhook inbound accepted",
+	log.Info("webhook inbound accepted", append(fields,
 		zap.String(logger.FieldLogType, logger.LogTypeWebhook),
 		zap.String(logger.FieldEvent, "webhook.inbound.accepted"),
-		zap.String("xendit_id", cb.ID),
-		zap.String("external_id", cb.ExternalID),
 		zap.Int64(logger.FieldLatencyMS, time.Since(start).Milliseconds()),
-	)
+	)...)
 	response.Success(c, dto.ReceivedResponse{Received: true})
+}
+
+// rejected answers a callback that could not be verified or read. conn is set
+// when the connection was found.
+func (h *WebhookHandler) rejected(c *gin.Context, conn *domain.Connection, bytes int, err error) {
+	ctx := c.Request.Context()
+	reqID := logger.RequestIDFromContext(ctx)
+	switch {
+	case errors.Is(err, service.ErrUnknownConnection):
+		logger.Security(h.log, logger.EventCallbackUnknownConnection, logger.SeverityLow, c.ClientIP(), reqID,
+			"callback for an unknown connection", zap.String("path", c.Request.URL.Path))
+		response.Error(c, domain.NewError(domain.CodeNotFound, "not found"))
+	case errors.Is(err, domain.ErrInvalidCallbackToken):
+		logger.Security(h.log, logger.EventCallbackInvalidToken, logger.SeverityHigh, c.ClientIP(), reqID,
+			"invalid callback token", zap.String("connection_id", conn.PublicID), zap.String("provider", conn.Provider))
+		response.Error(c, err)
+	case errors.Is(err, domain.ErrInvalidInput):
+		logger.Ctx(ctx, h.log).Warn("webhook inbound invalid body",
+			zap.String(logger.FieldLogType, logger.LogTypeWebhook),
+			zap.String(logger.FieldEvent, "webhook.inbound.invalid_body"),
+			zap.String("connection_id", conn.PublicID),
+			zap.Int("bytes", bytes),
+			zap.Error(err),
+		)
+		response.Error(c, invalidBody())
+	default:
+		logger.Ctx(ctx, h.log).Error("webhook inbound verification failed",
+			zap.String(logger.FieldLogType, logger.LogTypeWebhook),
+			zap.String(logger.FieldEvent, "webhook.inbound.failed"),
+			zap.Error(err),
+		)
+		response.Error(c, domain.Internal(err))
+	}
 }

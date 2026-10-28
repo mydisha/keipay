@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
+	"github.com/mydisha/keipay/backend/internal/provider"
+	"github.com/mydisha/keipay/backend/internal/provider/xendit"
 )
 
 // --- mocks ---
@@ -174,12 +176,41 @@ func (m *mockEnqueuer) EnqueueWebhookForward(_ context.Context, id int64) error 
 	return nil
 }
 
+// testConn is the connection the test payments were created through.
+var testConn = &domain.Connection{ID: 7, PublicID: "con_01JBKQ7Z8M4X2Y6V3N9T5R1W0C", Provider: "xendit", Status: domain.ConnectionActive}
+
+func connID(id int64) *int64 { return &id }
+
+// xenditCallback is a Xendit invoice callback as the tests write it; event
+// turns it into what the adapter hands the service.
+type xenditCallback struct {
+	ID, ExternalID, Status string
+	Amount                 int64
+	Currency               string
+	PaidAmount, FeesPaid   int64
+	PaidAt                 string
+	SettlementDate         string
+	Updated                string
+}
+
+func (cb xenditCallback) event() provider.InboundEvent {
+	raw, _ := json.Marshal(map[string]any{"id": cb.ID, "external_id": cb.ExternalID, "status": cb.Status, "amount": cb.Amount,
+		"currency": cb.Currency, "paid_amount": cb.PaidAmount, "fees_paid_amount": cb.FeesPaid, "paid_at": cb.PaidAt,
+		"settlement_date": cb.SettlementDate, "updated": cb.Updated})
+	ev, err := xendit.New().ParseWebhook(raw)
+	if err != nil {
+		// Callbacks the adapter refuses still reach Process in TestProcessMissingIDs.
+		return provider.InboundEvent{EventKey: cb.ID, Reference: cb.ExternalID, ProviderStatus: cb.Status, Status: xendit.MapStatus(cb.Status)}
+	}
+	return *ev
+}
+
 // --- tests ---
 
 func newSvc() (*WebhookService, *mockPaymentRepo, *mockLedgerRepo, *mockWebhookRepo, *mockEnqueuer) {
 	pr := &mockPaymentRepo{byExternal: map[string]*domain.Payment{
 		"acme:order-1": {ID: 10, PublicID: "pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C", AppID: 1, OrderID: "order-1",
-			ExternalID: "acme:order-1", Amount: 5000, Currency: "IDR", Status: domain.PaymentStatusPending},
+			ExternalID: "acme:order-1", ConnectionID: connID(testConn.ID), Amount: 5000, Currency: "IDR", Status: domain.PaymentStatusPending},
 	}}
 	lr := &mockLedgerRepo{}
 	wr := &mockWebhookRepo{}
@@ -190,14 +221,14 @@ func newSvc() (*WebhookService, *mockPaymentRepo, *mockLedgerRepo, *mockWebhookR
 
 func TestProcessPaidRoutesToAppAndLedger(t *testing.T) {
 	svc, pr, lr, _, eq := newSvc()
-	cb := XenditInvoiceCallback{
+	cb := xenditCallback{
 		ID:         "inv_1",
 		ExternalID: "acme:order-1",
 		Status:     "PAID",
 		PaidAmount: 5000,
 		FeesPaid:   100,
 	}
-	if err := svc.Process(context.Background(), cb, []byte(`{}`)); err != nil {
+	if err := svc.Process(context.Background(), testConn, cb.event(), []byte(`{}`)); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if len(pr.updated) != 1 || pr.updated[0] != domain.PaymentStatusPaid {
@@ -213,9 +244,9 @@ func TestProcessPaidRoutesToAppAndLedger(t *testing.T) {
 
 func TestProcessIdempotentDuplicate(t *testing.T) {
 	svc, _, lr, _, eq := newSvc()
-	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", PaidAmount: 5000}
-	_ = svc.Process(context.Background(), cb, []byte(`{}`))
-	_ = svc.Process(context.Background(), cb, []byte(`{}`))
+	cb := xenditCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", PaidAmount: 5000}
+	_ = svc.Process(context.Background(), testConn, cb.event(), []byte(`{}`))
+	_ = svc.Process(context.Background(), testConn, cb.event(), []byte(`{}`))
 	if lr.created != 1 {
 		t.Fatalf("duplicate created extra ledger: %d", lr.created)
 	}
@@ -226,7 +257,7 @@ func TestProcessIdempotentDuplicate(t *testing.T) {
 
 func TestProcessSettledRecordsSettlement(t *testing.T) {
 	svc, pr, lr, wr, _ := newSvc()
-	cb := XenditInvoiceCallback{
+	cb := xenditCallback{
 		ID:             "inv_2",
 		ExternalID:     "acme:order-1",
 		Status:         "SETTLED",
@@ -234,7 +265,7 @@ func TestProcessSettledRecordsSettlement(t *testing.T) {
 		FeesPaid:       100,
 		SettlementDate: "2026-01-02T03:04:05Z",
 	}
-	if err := svc.Process(context.Background(), cb, []byte(`{}`)); err != nil {
+	if err := svc.Process(context.Background(), testConn, cb.event(), []byte(`{}`)); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if len(pr.updated) != 1 || pr.updated[0] != domain.PaymentStatusSettled {
@@ -253,12 +284,12 @@ func TestProcessSettledRecordsSettlement(t *testing.T) {
 func TestProcessRetryAfterFailureIsNotSkipped(t *testing.T) {
 	svc, pr, lr, wr, eq := newSvc()
 	pr.failUpdates = 1
-	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", PaidAmount: 5000}
+	cb := xenditCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", PaidAmount: 5000}
 
-	if err := svc.Process(context.Background(), cb, []byte(`{}`)); err == nil {
+	if err := svc.Process(context.Background(), testConn, cb.event(), []byte(`{}`)); err == nil {
 		t.Fatal("expected first attempt to fail")
 	}
-	if err := svc.Process(context.Background(), cb, []byte(`{}`)); err != nil {
+	if err := svc.Process(context.Background(), testConn, cb.event(), []byte(`{}`)); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 	if len(pr.updated) != 1 || pr.updated[0] != domain.PaymentStatusPaid {
@@ -277,9 +308,9 @@ func TestProcessRetryAfterFailureIsNotSkipped(t *testing.T) {
 func TestProcessFailureLeavesNoTrace(t *testing.T) {
 	svc, pr, lr, wr, eq := newSvc()
 	pr.failUpdates = 1
-	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", PaidAmount: 5000}
+	cb := xenditCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", PaidAmount: 5000}
 
-	if err := svc.Process(context.Background(), cb, []byte(`{}`)); err == nil {
+	if err := svc.Process(context.Background(), testConn, cb.event(), []byte(`{}`)); err == nil {
 		t.Fatal("expected failure")
 	}
 	if svc.idemp.Seen(context.Background(), "inv_1:PAID") {
@@ -298,8 +329,8 @@ func TestProcessFailureLeavesNoTrace(t *testing.T) {
 // payment row appears later (e.g. a slow insert on create).
 func TestProcessUnknownExternalIDNotRecorded(t *testing.T) {
 	svc, _, _, wr, _ := newSvc()
-	cb := XenditInvoiceCallback{ID: "inv_x", ExternalID: "ghost:order", Status: "PAID"}
-	if err := svc.Process(context.Background(), cb, []byte(`{}`)); !errors.Is(err, domain.ErrNotFound) {
+	cb := xenditCallback{ID: "inv_x", ExternalID: "ghost:order", Status: "PAID"}
+	if err := svc.Process(context.Background(), testConn, cb.event(), []byte(`{}`)); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 	if len(wr.events) != 0 {
@@ -312,9 +343,9 @@ func TestProcessUnknownExternalIDNotRecorded(t *testing.T) {
 func TestProcessEnqueueFailureKeepsDelivery(t *testing.T) {
 	svc, pr, lr, wr, eq := newSvc()
 	eq.err = errors.New("redis down")
-	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", PaidAmount: 5000}
+	cb := xenditCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", PaidAmount: 5000}
 
-	err := svc.Process(context.Background(), cb, []byte(`{}`))
+	err := svc.Process(context.Background(), testConn, cb.event(), []byte(`{}`))
 	if !errors.Is(err, ErrForwardNotQueued) {
 		t.Fatalf("expected ErrForwardNotQueued, got %v", err)
 	}
@@ -327,7 +358,7 @@ func TestProcessEnqueueFailureKeepsDelivery(t *testing.T) {
 
 	// The retry Xendit would not send anyway is still a no-op.
 	eq.err = nil
-	if err := svc.Process(context.Background(), cb, []byte(`{}`)); err != nil {
+	if err := svc.Process(context.Background(), testConn, cb.event(), []byte(`{}`)); err != nil {
 		t.Fatalf("duplicate: %v", err)
 	}
 	if len(wr.deliveries) != 1 || lr.created != 1 {
@@ -339,12 +370,12 @@ func TestProcessEnqueueFailureKeepsDelivery(t *testing.T) {
 // the DB event record is the final guard.
 func TestProcessDBGuardWithoutRedis(t *testing.T) {
 	svc, _, lr, wr, eq := newSvc()
-	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", PaidAmount: 5000}
-	if err := svc.Process(context.Background(), cb, []byte(`{}`)); err != nil {
+	cb := xenditCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", PaidAmount: 5000}
+	if err := svc.Process(context.Background(), testConn, cb.event(), []byte(`{}`)); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	svc.idemp.(*memIdemp).marked = nil
-	if err := svc.Process(context.Background(), cb, []byte(`{}`)); err != nil {
+	if err := svc.Process(context.Background(), testConn, cb.event(), []byte(`{}`)); err != nil {
 		t.Fatalf("duplicate: %v", err)
 	}
 	if lr.created != 1 || len(wr.deliveries) != 1 || len(eq.enqueued) != 1 {
@@ -354,11 +385,11 @@ func TestProcessDBGuardWithoutRedis(t *testing.T) {
 
 func TestProcessMissingIDs(t *testing.T) {
 	svc, _, _, _, _ := newSvc()
-	for _, cb := range []XenditInvoiceCallback{
+	for _, cb := range []xenditCallback{
 		{ExternalID: "acme:order-1", Status: "PAID"},
 		{ID: "inv_1", Status: "PAID"},
 	} {
-		if err := svc.Process(context.Background(), cb, nil); !errors.Is(err, domain.ErrInvalidInput) {
+		if err := svc.Process(context.Background(), testConn, cb.event(), nil); !errors.Is(err, domain.ErrInvalidInput) {
 			t.Fatalf("expected ErrInvalidInput for %+v, got %v", cb, err)
 		}
 	}
@@ -369,13 +400,13 @@ func TestProcessMissingIDs(t *testing.T) {
 func TestProcessLatePaidAfterSettledIsIgnored(t *testing.T) {
 	svc, pr, _, wr, _ := newSvc()
 	ctx := context.Background()
-	settled := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "SETTLED", Amount: 5000, PaidAmount: 5000}
-	paid := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", Amount: 5000, PaidAmount: 5000}
+	settled := xenditCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "SETTLED", Amount: 5000, PaidAmount: 5000}
+	paid := xenditCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", Amount: 5000, PaidAmount: 5000}
 
-	if err := svc.Process(ctx, settled, []byte(`{}`)); err != nil {
+	if err := svc.Process(ctx, testConn, settled.event(), []byte(`{}`)); err != nil {
 		t.Fatalf("settled: %v", err)
 	}
-	if err := svc.Process(ctx, paid, []byte(`{}`)); err != nil {
+	if err := svc.Process(ctx, testConn, paid.event(), []byte(`{}`)); err != nil {
 		t.Fatalf("late paid: %v", err)
 	}
 	if got := pr.byExternal["acme:order-1"].Status; got != domain.PaymentStatusSettled {
@@ -390,9 +421,9 @@ func TestProcessLatePaidAfterSettledIsIgnored(t *testing.T) {
 // made outside KeiPay that reused the external_id) must not mark it paid.
 func TestProcessAmountMismatchIsNotApplied(t *testing.T) {
 	svc, pr, lr, wr, _ := newSvc()
-	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", Amount: 1000, PaidAmount: 1000}
+	cb := xenditCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", Amount: 1000, PaidAmount: 1000}
 
-	err := svc.Process(context.Background(), cb, []byte(`{}`))
+	err := svc.Process(context.Background(), testConn, cb.event(), []byte(`{}`))
 	if !errors.Is(err, ErrCallbackMismatch) {
 		t.Fatalf("expected ErrCallbackMismatch, got %v", err)
 	}
@@ -403,15 +434,15 @@ func TestProcessAmountMismatchIsNotApplied(t *testing.T) {
 	if !wr.events["inv_1:PAID"] {
 		t.Fatal("mismatched event not recorded")
 	}
-	if err := svc.Process(context.Background(), cb, []byte(`{}`)); err != nil {
+	if err := svc.Process(context.Background(), testConn, cb.event(), []byte(`{}`)); err != nil {
 		t.Fatalf("retry of mismatched callback: %v", err)
 	}
 }
 
 func TestProcessCurrencyMismatchIsNotApplied(t *testing.T) {
 	svc, pr, _, _, _ := newSvc()
-	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", Amount: 5000, Currency: "USD"}
-	if err := svc.Process(context.Background(), cb, []byte(`{}`)); !errors.Is(err, ErrCallbackMismatch) {
+	cb := xenditCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", Amount: 5000, Currency: "USD"}
+	if err := svc.Process(context.Background(), testConn, cb.event(), []byte(`{}`)); !errors.Is(err, ErrCallbackMismatch) {
 		t.Fatalf("expected ErrCallbackMismatch, got %v", err)
 	}
 	if len(pr.updated) != 0 {
@@ -422,8 +453,8 @@ func TestProcessCurrencyMismatchIsNotApplied(t *testing.T) {
 // Matching amount and currency, as Xendit sends them, is applied normally.
 func TestProcessMatchingAmountAndCurrencyApplied(t *testing.T) {
 	svc, pr, _, _, _ := newSvc()
-	cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", Amount: 5000, Currency: "IDR"}
-	if err := svc.Process(context.Background(), cb, []byte(`{}`)); err != nil {
+	cb := xenditCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: "PAID", Amount: 5000, Currency: "IDR"}
+	if err := svc.Process(context.Background(), testConn, cb.event(), []byte(`{}`)); err != nil {
 		t.Fatalf("process: %v", err)
 	}
 	if len(pr.updated) != 1 || pr.updated[0] != domain.PaymentStatusPaid {
@@ -437,8 +468,8 @@ func TestProcessPaidAfterExpiredIsApplied(t *testing.T) {
 	svc, pr, lr, wr, _ := newSvc()
 	ctx := context.Background()
 	for _, st := range []string{"EXPIRED", "PAID"} {
-		cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: st, Amount: 5000}
-		if err := svc.Process(ctx, cb, []byte(`{}`)); err != nil {
+		cb := xenditCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: st, Amount: 5000}
+		if err := svc.Process(ctx, testConn, cb.event(), []byte(`{}`)); err != nil {
 			t.Fatalf("%s: %v", st, err)
 		}
 	}
@@ -455,8 +486,8 @@ func TestProcessUnknownStatusAfterPaidIsIgnored(t *testing.T) {
 	svc, pr, _, wr, _ := newSvc()
 	ctx := context.Background()
 	for _, st := range []string{"PAID", "SOMETHING_NEW"} {
-		cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: st, Amount: 5000}
-		if err := svc.Process(ctx, cb, []byte(`{}`)); err != nil {
+		cb := xenditCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: st, Amount: 5000}
+		if err := svc.Process(ctx, testConn, cb.event(), []byte(`{}`)); err != nil {
 			t.Fatalf("%s: %v", st, err)
 		}
 	}
@@ -472,9 +503,9 @@ func TestProcessSettledMarksLedgerSettled(t *testing.T) {
 	svc, _, lr, _, _ := newSvc()
 	ctx := context.Background()
 	for _, st := range []string{"PAID", "SETTLED"} {
-		cb := XenditInvoiceCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: st, Amount: 5000,
+		cb := xenditCallback{ID: "inv_1", ExternalID: "acme:order-1", Status: st, Amount: 5000,
 			SettlementDate: "2026-01-02T03:04:05Z"}
-		if err := svc.Process(ctx, cb, []byte(`{}`)); err != nil {
+		if err := svc.Process(ctx, testConn, cb.event(), []byte(`{}`)); err != nil {
 			t.Fatalf("%s: %v", st, err)
 		}
 	}
@@ -491,18 +522,18 @@ func TestProcessRoutesByStoredReference(t *testing.T) {
 	const pub = "pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0D"
 	svc, pr, lr, wr, _ := newSvc()
 	pr.byExternal["kp_"+pub] = &domain.Payment{ID: 11, PublicID: pub, AppID: 2, OrderID: "ord-ü",
-		ExternalID: "kp_" + pub, Amount: 7000, Currency: "IDR", Status: domain.PaymentStatusPending,
+		ExternalID: "kp_" + pub, ConnectionID: connID(testConn.ID), Amount: 7000, Currency: "IDR", Status: domain.PaymentStatusPending,
 		Metadata: domain.Metadata{"note": "héllo 🌏 你好", "tier": json.Number("12345678901234567890")}}
 	pr.byExternal["globex:ord-1"] = &domain.Payment{ID: 12, PublicID: "pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0E", AppID: 1,
-		OrderID: "ord-1", ExternalID: "globex:ord-1", Amount: 100, Currency: "IDR", Status: domain.PaymentStatusPending}
+		OrderID: "ord-1", ExternalID: "globex:ord-1", ConnectionID: connID(testConn.ID), Amount: 100, Currency: "IDR", Status: domain.PaymentStatusPending}
 	ctx := context.Background()
 
-	for _, cb := range []XenditInvoiceCallback{
+	for _, cb := range []xenditCallback{
 		{ID: "inv_new", ExternalID: "kp_" + pub, Status: "PAID", Amount: 7000},
 		{ID: "inv_legacy", ExternalID: "acme:order-1", Status: "PAID", Amount: 5000},
 		{ID: "inv_lookalike", ExternalID: "globex:ord-1", Status: "PAID", Amount: 100},
 	} {
-		if err := svc.Process(ctx, cb, []byte(`{}`)); err != nil {
+		if err := svc.Process(ctx, testConn, cb.event(), []byte(`{}`)); err != nil {
 			t.Fatalf("%s: %v", cb.ExternalID, err)
 		}
 	}
@@ -547,7 +578,7 @@ func TestProcessRoutesByStoredReference(t *testing.T) {
 func TestProcessUnknownReferenceFails(t *testing.T) {
 	svc, _, _, wr, _ := newSvc()
 	for _, ref := range []string{"ghost:ord-1", "kp_pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0Z", "order-1"} {
-		err := svc.Process(context.Background(), XenditInvoiceCallback{ID: "inv_" + ref, ExternalID: ref, Status: "PAID"}, nil)
+		err := svc.Process(context.Background(), testConn, xenditCallback{ID: "inv_" + ref, ExternalID: ref, Status: "PAID"}.event(), nil)
 		if !errors.Is(err, domain.ErrNotFound) {
 			t.Fatalf("%s: err = %v, want not found", ref, err)
 		}

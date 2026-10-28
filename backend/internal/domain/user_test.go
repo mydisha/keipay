@@ -9,9 +9,11 @@ import (
 // T-2: the table from the "Roles and permissions" section of the contract.
 func TestRolePermissionsTable(t *testing.T) {
 	want := map[Role][]Permission{
-		RoleOwner:  {"apps:read", "apps:write", "audit:read", "deliveries:read", "deliveries:replay", "payments:read", "users:manage"},
-		RoleAdmin:  {"apps:read", "apps:write", "audit:read", "deliveries:read", "deliveries:replay", "payments:read"},
-		RoleViewer: {"apps:read", "deliveries:read", "payments:read"},
+		RoleOwner: {"apps:read", "apps:write", "audit:read", "connections:read", "connections:write", "deliveries:read",
+			"deliveries:replay", "payments:read", "users:manage"},
+		RoleAdmin: {"apps:read", "apps:write", "audit:read", "connections:read", "connections:write", "deliveries:read",
+			"deliveries:replay", "payments:read"},
+		RoleViewer: {"apps:read", "connections:read", "deliveries:read", "payments:read"},
 	}
 	if len(RolePermissions) != len(want) {
 		t.Fatalf("roles = %v", RolePermissions)
@@ -43,6 +45,9 @@ func TestRoleCan(t *testing.T) {
 		{RoleViewer, PermAppsWrite, false},
 		{RoleViewer, PermDeliveriesReplay, false},
 		{RoleViewer, PermAuditRead, false},
+		{RoleViewer, PermConnectionsRead, true},
+		{RoleViewer, PermConnectionsWrite, false},
+		{RoleAdmin, PermConnectionsWrite, true},
 		{Role("root"), PermAppsRead, false},
 		{"", PermAppsRead, false},
 	}

@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -57,7 +56,7 @@ func keysOf(t *testing.T, label string, obj any, want ...string) map[string]any 
 }
 
 var appKeys = []string{"id", "slug", "name", "environment", "status", "metadata", "webhook_url",
-	"redirect_success_url", "redirect_failure_url", "created_at", "updated_at"}
+	"redirect_success_url", "redirect_failure_url", "default_connection", "created_at", "updated_at"}
 var apiKeyKeys = []string{"id", "app_id", "label", "environment", "prefix", "last4", "status",
 	"last_used_at", "expires_at", "revoked_at", "created_at"}
 
@@ -65,9 +64,12 @@ type createdApp struct {
 	id, keyID, apiKey, apiSecret, webhookSecret string
 }
 
+// createApp creates an app through the API and makes the fixture's
+// connection of its environment its default, so /v1 payments work.
 func (f *apiFixture) createApp(t *testing.T, b *browser, body string) createdApp {
 	t.Helper()
 	m := decode(t, f.send(b, http.MethodPost, "/admin/apps", body), http.StatusCreated)
+	f.useDefaultConnection(t, m["app"].(map[string]any)["id"].(string))
 	return createdApp{
 		id:            m["app"].(map[string]any)["id"].(string),
 		keyID:         m["key"].(map[string]any)["id"].(string),
@@ -324,12 +326,8 @@ type v1Client struct {
 	apiKey, secret string
 }
 
-// v1Calls makes every signed call's timestamp, and so its signature,
-// unique, which keeps the replay guard out of the way.
-var v1Calls atomic.Int64
-
 func (c v1Client) do(method, target, body string, headers ...string) *httptest.ResponseRecorder {
-	ts := strconv.FormatInt(time.Now().Unix()-v1Calls.Add(1)%240, 10)
+	ts := signedTimestamp(c.secret, body)
 	h := append([]string{"X-Api-Key", c.apiKey, "X-Timestamp", ts, "X-Signature", hmac.Sign(c.secret, []byte(ts+"."+body))}, headers...)
 	return c.f.send(nil, method, target, body, h...)
 }

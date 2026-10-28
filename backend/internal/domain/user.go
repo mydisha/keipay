@@ -31,6 +31,8 @@ type Permission string
 const (
 	PermAppsRead         Permission = "apps:read"
 	PermAppsWrite        Permission = "apps:write"
+	PermConnectionsRead  Permission = "connections:read"
+	PermConnectionsWrite Permission = "connections:write"
 	PermPaymentsRead     Permission = "payments:read"
 	PermDeliveriesRead   Permission = "deliveries:read"
 	PermDeliveriesReplay Permission = "deliveries:replay"
@@ -41,8 +43,8 @@ const (
 // AllPermissions returns every defined permission, sorted.
 func AllPermissions() []Permission {
 	return sortedPermissions(
-		PermAppsRead, PermAppsWrite, PermPaymentsRead, PermDeliveriesRead,
-		PermDeliveriesReplay, PermAuditRead, PermUsersManage,
+		PermAppsRead, PermAppsWrite, PermConnectionsRead, PermConnectionsWrite,
+		PermPaymentsRead, PermDeliveriesRead, PermDeliveriesReplay, PermAuditRead, PermUsersManage,
 	)
 }
 
@@ -52,10 +54,10 @@ func AllPermissions() []Permission {
 var RolePermissions = map[Role][]Permission{
 	RoleOwner: AllPermissions(),
 	RoleAdmin: sortedPermissions(
-		PermAppsRead, PermAppsWrite, PermPaymentsRead, PermDeliveriesRead,
-		PermDeliveriesReplay, PermAuditRead,
+		PermAppsRead, PermAppsWrite, PermConnectionsRead, PermConnectionsWrite,
+		PermPaymentsRead, PermDeliveriesRead, PermDeliveriesReplay, PermAuditRead,
 	),
-	RoleViewer: sortedPermissions(PermAppsRead, PermPaymentsRead, PermDeliveriesRead),
+	RoleViewer: sortedPermissions(PermAppsRead, PermConnectionsRead, PermPaymentsRead, PermDeliveriesRead),
 }
 
 func sortedPermissions(ps ...Permission) []Permission {

@@ -1,9 +1,13 @@
 package response
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
+	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
@@ -21,7 +25,8 @@ func TestErrorCodesMatchOpenAPI(t *testing.T) {
 		Components struct {
 			Schemas struct {
 				ErrorCode struct {
-					Enum []string `yaml:"enum"`
+					Description string   `yaml:"description"`
+					Enum        []string `yaml:"enum"`
 				} `yaml:"ErrorCode"`
 			} `yaml:"schemas"`
 		} `yaml:"components"`
@@ -41,5 +46,24 @@ func TestErrorCodesMatchOpenAPI(t *testing.T) {
 	slices.Sort(got)
 	if !slices.Equal(got, want) {
 		t.Fatalf("domain codes %v\nspec codes   %v", got, want)
+	}
+
+	// The status column of the table in the enum's description equals the
+	// status each code is sent with.
+	row := regexp.MustCompile("^\\| `([a-z_]+)` \\| ([0-9]{3}) \\|")
+	rows := 0
+	for _, line := range strings.Split(spec.Components.Schemas.ErrorCode.Description, "\n") {
+		m := row.FindStringSubmatch(strings.TrimSpace(line))
+		if m == nil {
+			continue
+		}
+		rows++
+		status, _ := strconv.Atoi(m[2])
+		if sent := statusByCode[domain.ErrorCode(m[1])]; sent != status {
+			t.Errorf("%s: status %d, spec table says %d (%s)", m[1], sent, status, http.StatusText(status))
+		}
+	}
+	if rows != len(want) {
+		t.Fatalf("spec table has %d rows, enum has %d codes", rows, len(want))
 	}
 }

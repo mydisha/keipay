@@ -77,9 +77,15 @@ type Payment struct {
 	PublicID string
 	AppID    int64
 	// App is the owning app's summary; repositories fill it on every read.
-	App             AppSummary
-	OrderID         string
-	ExternalID      string
+	App        AppSummary
+	OrderID    string
+	ExternalID string
+	// ConnectionID and Provider name the connection the checkout was created
+	// on; nil and "" for payments made before connections existed.
+	ConnectionID *int64
+	Provider     string
+	// XenditInvoiceID is the provider's payment id; the column predates
+	// providers other than Xendit.
 	XenditInvoiceID string
 	Amount          int64
 	Currency        string

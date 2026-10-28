@@ -12,8 +12,10 @@ info:
 
     - `/v1/*`: the app API, authenticated with an app API key and an
       HMAC-SHA256 signature (see App API keys).
-    - `/webhooks/*`: inbound gateway callbacks. Every callback lives below
-      `/webhooks/`; `GET /webhooks` itself is the console's Webhooks page.
+    - `/webhooks/*`: inbound gateway callbacks, one URL per connection
+      (`/webhooks/{provider}/{connection_id}`, see Connections). Every
+      callback lives below `/webhooks/`; `GET /webhooks` itself is the
+      console's Webhooks page.
     - `/admin/*`: the admin console API, authenticated with a session
       cookie and protected against CSRF (see Admin authentication).
     - `/healthz`: liveness.
@@ -44,8 +46,8 @@ info:
     ## Identifiers
 
     Resources are identified by prefixed public ids: `app_…` (app),
-    `key_…` (API key), `pay_…` (payment), `usr_…` (user), `aud_…` (audit
-    entry). The part after the prefix is a ULID; lower case is accepted.
+    `key_…` (API key), `pay_…` (payment), `con_…` (gateway connection),
+    `usr_…` (user), `aud_…` (audit entry). The part after the prefix is a ULID; lower case is accepted.
     Internal integer ids are not exposed, with three exceptions kept for
     existing integrations: the `payment_id` field of `/v1` payments and
     webhook events, and the ids of ledger entries and webhook deliveries
@@ -98,6 +100,36 @@ info:
     `Idempotent-Replayed: true`. Keys are stored with the payment and do
     not expire. Different apps may use the same `order_id` or key.
 
+    ## Connections and providers
+
+    A provider is a gateway adapter built into KeiPay (today: `xendit`).
+    `GET /admin/providers` describes each one: its credential and
+    settings fields (`ConfigSchema`), capabilities and webhook setup
+    steps. The console renders its forms from that data, so a new
+    provider needs no console change.
+
+    A connection is one set of credentials for one gateway account, with
+    an environment (`test` or `live`, the same vocabulary as apps), a
+    name, provider settings and the channels it may offer. Credentials
+    are validated against the provider's schema, encrypted at rest
+    (envelope encryption: a random data key per connection, itself
+    encrypted with the server's `ENCRYPTION_KEY`) and never returned:
+    responses carry only the last 4 characters of each value (`null`
+    when the value is shorter than 12 characters).
+
+    Each app has an optional default connection with the same
+    environment. `POST /v1/payments` creates the checkout on that
+    connection; without one it returns `422 no_eligible_connection`.
+    Multi-connection routing comes later and keeps this contract.
+
+    Each connection has its own callback URL,
+    `{HTTP_BASE_URL}/webhooks/{provider}/{connection_id}`, verified with
+    that connection's credentials only: a callback signed for one
+    connection and sent to another connection's URL is rejected.
+    `POST /webhooks/xendit` remains as an alias for the connection
+    imported from the deprecated `XENDIT_SECRET_KEY` and
+    `XENDIT_CALLBACK_TOKEN` settings (see that operation).
+
     ## Admin authentication
 
     On first run, while no user exists, `POST /admin/setup` creates the
@@ -144,6 +176,8 @@ info:
     |---|---|---|---|
     | `apps:read` | yes | yes | yes |
     | `apps:write` | yes | yes | no |
+    | `connections:read` | yes | yes | yes |
+    | `connections:write` | yes | yes | no |
     | `payments:read` | yes | yes | yes |
     | `deliveries:read` | yes | yes | yes |
     | `deliveries:replay` | yes | yes | no |
@@ -171,6 +205,8 @@ tags:
     description: Console users and roles (owner only).
   - name: admin-apps
     description: Apps, their API keys and settings.
+  - name: admin-connections
+    description: Gateway providers and connections (credentials, settings, channels).
   - name: admin-payments
     description: Payment and ledger reporting.
   - name: admin-webhooks
@@ -217,6 +253,18 @@ paths:
         `metadata`, returns `400 invalid_request` with `details.fields`
         (for example `items.0.quantity` or `metadata.note`).
         `400 validation_failed` is for business rules.
+
+        The checkout is created on the app's default connection (see
+        Connections and providers). Idempotent replays are answered before
+        the connection is looked at, so they succeed even if the
+        connection was changed since. Without a usable default connection
+        the request returns `422 no_eligible_connection` with
+        `details.reasons` (`["no_default_connection"]` or
+        `["connection_disabled"]`). When the gateway refuses the request
+        (validation, amount limits, credentials) it returns
+        `422 provider_rejected`; when the gateway cannot be reached or
+        answers with a server error it returns `503 provider_unavailable`.
+        Neither creates a payment, so the same `order_id` may be retried.
       security:
         - appApiKey: []
           appTimestamp: []
@@ -247,8 +295,12 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /v1/payments/{id}:
     get:
@@ -280,16 +332,88 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /webhooks/{provider}/{connection_id}:
+    post:
+      tags: [gateway-webhooks]
+      operationId: receiveConnectionCallback
+      summary: Receive a gateway callback for one connection
+      description: |
+        Paste this URL (shown as `webhook_url` on the connection) into the
+        gateway dashboard. KeiPay resolves the connection by id, requires
+        `provider` to equal the connection's provider, then verifies the
+        callback with that connection's credentials before reading the
+        body. For `xendit`, the `x-callback-token` header must equal the
+        connection's `callback_token` (constant-time comparison).
+
+        - Unknown connection id, malformed id, or a provider that differs
+          from the connection's: `404 not_found`.
+        - Verification fails: `401 invalid_callback_token`, logged as a
+          security event. A token valid for another connection is still
+          rejected.
+        - Body is not valid JSON for the provider: `400 invalid_request`.
+        - Duplicate and stale callbacks, callbacks whose amount or
+          currency does not match the payment, and callbacks for a payment
+          created through a different connection are acknowledged with
+          `200` (the last two are recorded, not applied, and logged as
+          security events) so the gateway stops retrying.
+        - Real processing failures, including an unknown payment
+          reference, return `500` so the gateway retries.
+
+        Disabled connections still accept callbacks, so payments created
+        before disabling keep updating.
+      security: []
+      parameters:
+        - name: provider
+          in: path
+          required: true
+          description: The connection's provider.
+          schema:
+            $ref: '#/components/schemas/ProviderName'
+        - name: connection_id
+          in: path
+          required: true
+          description: The connection's `con_…` id (lower case is accepted). Any other format returns `404 not_found`.
+          schema:
+            type: string
+            pattern: '^con_[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
+            examples: [con_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/GatewayCallback'
+      responses:
+        '200':
+          description: Accepted (applied, duplicate, stale or recorded mismatch).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceivedResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /webhooks/xendit:
     post:
       tags: [gateway-webhooks]
       operationId: receiveXenditInvoiceCallback
-      summary: Receive a Xendit invoice callback
+      summary: Receive a Xendit invoice callback (legacy alias)
+      deprecated: true
       description: |
-        Configure this URL in the Xendit dashboard. Duplicate and stale
-        callbacks, and callbacks whose amount or currency does not match the
-        payment, are acknowledged with `200` so Xendit stops retrying; real
-        processing failures return `500` so Xendit retries.
+        Alias of `/webhooks/xendit/{connection_id}` for the connection
+        imported from the deprecated `XENDIT_SECRET_KEY` and
+        `XENDIT_CALLBACK_TOKEN` settings (its `legacy_webhook_alias` is
+        `true`), so a Xendit dashboard that still points here keeps
+        working. Behaves exactly like the per-connection URL, including
+        verification with that connection's `callback_token`. Returns
+        `404 not_found` when no connection was imported. Point the Xendit
+        dashboard at the connection's own `webhook_url` instead.
       security:
         - xenditCallbackToken: []
       requestBody:
@@ -309,6 +433,8 @@ paths:
           $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -867,6 +993,13 @@ paths:
         unknown fields are ignored. A request that changes nothing returns
         the app and records nothing; otherwise it records `app.update`
         with only the changed fields.
+
+        `default_connection_id` sets (`con_…`) or clears (`null`) the
+        connection `POST /v1/payments` uses. It returns
+        `400 invalid_request` with field `default_connection_id` and rule
+        `public_id` (malformed), `exists` (no such connection),
+        `environment` (the connection's environment differs from the
+        app's) or `status` (the connection is disabled).
       parameters:
         - $ref: '#/components/parameters/AppIdPath'
       requestBody:
@@ -1090,6 +1223,392 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ApiKeyResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/providers:
+    get:
+      tags: [admin-connections]
+      operationId: listProviders
+      summary: List gateway providers
+      description: |
+        Every provider adapter built into this server, sorted by `name`,
+        with the schemas the console renders forms from. Not paginated:
+        the list is small and fixed per server version.
+      x-keipay-permission: connections:read
+      responses:
+        '200':
+          description: The providers.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/connections:
+    get:
+      tags: [admin-connections]
+      operationId: listConnections
+      summary: List connections
+      description: |
+        Cursor-paginated, newest first (`created_at` descending, then `id`
+        descending). Includes disabled connections unless filtered. An
+        unknown `environment`, `status` or `provider` returns
+        `400 invalid_request` with rule `oneof`.
+      x-keipay-permission: connections:read
+      parameters:
+        - name: environment
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/AppEnvironment'
+        - name: status
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ConnectionStatus'
+        - name: provider
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/ProviderName'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of connections. Credentials are never returned here.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [admin-connections]
+      operationId: createConnection
+      summary: Create a connection
+      x-keipay-permission: connections:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Creates an active, untested connection. `credentials` and
+        `settings` are validated against the provider's `ConfigSchema`:
+        errors use field `credentials.<key>` or `settings.<key>` with rule
+        `required`, `type`, `min_length`, `max_length`, `pattern`,
+        `minimum`, `maximum`, `oneof` or `unknown` (a key the schema does
+        not define), and the provider's own cross-field rules (Xendit:
+        `credentials.secret_key` rule `environment` when a
+        `xnd_development_` key is used for `live` or a `xnd_production_`
+        key for `test`). Credential values are trimmed. Missing settings
+        take their schema default. An unknown `provider` returns rule
+        `oneof`. `name` must be unused (`409 conflict`). Does not contact
+        the gateway; call `/test` next. Records `connection.create`
+        (without credentials).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConnectionRequest'
+      responses:
+        '201':
+          description: The connection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/connections/{id}:
+    get:
+      tags: [admin-connections]
+      operationId: getConnection
+      summary: Get a connection
+      x-keipay-permission: connections:read
+      parameters:
+        - $ref: '#/components/parameters/ConnectionIdPath'
+      responses:
+        '200':
+          description: The connection, with credential hints, settings and channels.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [admin-connections]
+      operationId: updateConnection
+      summary: Update a connection's name or settings
+      x-keipay-permission: connections:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Send only the fields to change; `settings` replaces the whole
+        object (missing keys take their default) and is validated like on
+        create. `provider` and `environment` never change: a body
+        containing either returns `400 invalid_request` with rule
+        `immutable`. `credentials` in the body returns rule `immutable`
+        too; use `PATCH /admin/connections/{id}/credentials`. A body with
+        none of the updatable fields returns `400 invalid_request` with
+        field `body` and rule `required`. A request that changes nothing
+        returns the connection and records nothing; otherwise it records
+        `connection.update` with only the changed fields.
+      parameters:
+        - $ref: '#/components/parameters/ConnectionIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateConnectionRequest'
+      responses:
+        '200':
+          description: The connection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/connections/{id}/credentials:
+    patch:
+      tags: [admin-connections]
+      operationId: updateConnectionCredentials
+      summary: Replace some or all credentials
+      x-keipay-permission: connections:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Keys present in `credentials` replace the stored values; keys left
+        out keep theirs. The merged result is validated like on create
+        (an empty string fails `required`). An empty `credentials` object
+        returns `400 invalid_request` with field `credentials` and rule
+        `required`. The connection's test result is reset
+        (`last_test_status` and `last_tested_at` become `null`). Records
+        `connection.update_credentials` with the names of the replaced
+        keys only.
+      parameters:
+        - $ref: '#/components/parameters/ConnectionIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateConnectionCredentialsRequest'
+      responses:
+        '200':
+          description: The connection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/connections/{id}/disable:
+    post:
+      tags: [admin-connections]
+      operationId: disableConnection
+      summary: Disable a connection
+      x-keipay-permission: connections:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        A disabled connection cannot be chosen as an app's default and
+        creates no new checkouts; its callback URL keeps working for
+        payments made earlier. Returns `409 connection_in_use` while any
+        app (active or disabled) uses it as its default connection;
+        `details.apps` lists up to 10 of them (`AppSummary`) and
+        `details.app_count` their number. Disabling a disabled connection
+        returns it unchanged and records nothing; otherwise records
+        `connection.disable`.
+      parameters:
+        - $ref: '#/components/parameters/ConnectionIdPath'
+      responses:
+        '200':
+          description: The connection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/connections/{id}/enable:
+    post:
+      tags: [admin-connections]
+      operationId: enableConnection
+      summary: Enable a connection
+      x-keipay-permission: connections:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Enabling an active connection returns it unchanged and records
+        nothing; otherwise records `connection.enable`.
+      parameters:
+        - $ref: '#/components/parameters/ConnectionIdPath'
+      responses:
+        '200':
+          description: The connection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/connections/{id}/test:
+    post:
+      tags: [admin-connections]
+      operationId: testConnection
+      summary: Test a connection's credentials
+      x-keipay-permission: connections:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Calls the gateway with the stored credentials (Xendit: list one
+        invoice, which needs the invoice read permission KeiPay uses
+        anyway) with a 10-second timeout. The outcome is a result, not an
+        error: `200` with `result` `ok` or `failed` and a short `message`
+        that never contains credentials or raw gateway responses. Stores
+        `last_tested_at`, `last_test_status` and `last_test_error` and
+        records `connection.test`. Works on disabled connections too.
+      parameters:
+        - $ref: '#/components/parameters/ConnectionIdPath'
+      responses:
+        '200':
+          description: The test outcome and the updated connection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionTestResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/connections/{id}/channels:
+    put:
+      tags: [admin-connections]
+      operationId: replaceConnectionChannels
+      summary: Choose the channels a connection offers
+      x-keipay-permission: connections:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Replaces the connection's channel list. Every `channel` must be
+        one of the provider's `capabilities.channels` (rule `oneof` on
+        `channels.<i>.channel`) and appear once (rule `duplicate`). A
+        non-empty list must enable at least one channel (field `channels`,
+        rule `min_enabled`). An empty list resets to the default: every
+        channel of the provider enabled. When the enabled channels are a
+        strict subset of the provider's channels, checkouts are limited to
+        them (Xendit `payment_methods`); otherwise the checkout offers
+        everything the gateway account has activated. Records
+        `connection.update_channels` with before and after lists; a
+        request that changes nothing records nothing.
+      parameters:
+        - $ref: '#/components/parameters/ConnectionIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReplaceConnectionChannelsRequest'
+      responses:
+        '200':
+          description: The connection.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1363,7 +1882,7 @@ components:
       type: apiKey
       in: header
       name: x-callback-token
-      description: The webhook verification token from the Xendit dashboard.
+      description: The webhook verification token from the Xendit dashboard; must equal the target connection's `callback_token` credential.
 
   parameters:
     UserIdPath:
@@ -1413,6 +1932,18 @@ components:
         type: string
         pattern: '^key_[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
         examples: [key_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+    ConnectionIdPath:
+      name: id
+      in: path
+      required: true
+      description: |
+        Connection id (`con_…`; lower case is accepted). Any other format
+        returns `400 invalid_request` with `details.fields`
+        `[{"field": "id", "rule": "public_id"}]`.
+      schema:
+        type: string
+        pattern: '^con_[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
+        examples: [con_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
     AppIdFilter:
       name: app_id
       in: query
@@ -1538,10 +2069,28 @@ components:
             $ref: '#/components/schemas/ErrorResponse'
     Conflict:
       description: |
-        `conflict` (duplicate slug within an environment or duplicate
-        email, or an `order_id` reused with a different amount or
-        currency), `idempotency_key_reused`, `setup_completed`,
-        `last_owner`, or `cannot_modify_self`.
+        `conflict` (duplicate slug within an environment, duplicate
+        connection name or email, or an `order_id` reused with a different
+        amount or currency), `idempotency_key_reused`, `setup_completed`,
+        `last_owner`, `cannot_modify_self`, or `connection_in_use`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UnprocessableEntity:
+      description: |
+        `no_eligible_connection` (the app has no usable default
+        connection; `details.reasons`) or `provider_rejected` (the gateway
+        refused the request; `details.provider` names it).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ServiceUnavailable:
+      description: |
+        `provider_unavailable`: the gateway could not be reached, timed
+        out, or answered with a server error. No payment was stored; retry
+        with the same `order_id`.
       content:
         application/json:
           schema:
@@ -1600,8 +2149,12 @@ components:
         | `setup_completed` | 409 | First-run setup already happened; sign in instead. |
         | `last_owner` | 409 | The change would leave no active owner. |
         | `cannot_modify_self` | 409 | Owners cannot disable themselves or reset their own password through the users API. |
+        | `connection_in_use` | 409 | The connection is some app's default connection. `details.apps` lists up to 10 (`AppSummary`), `details.app_count` counts them. |
+        | `no_eligible_connection` | 422 | No connection can take the payment. `details.reasons` is a list of strings: `no_default_connection`, `connection_disabled`. More reasons may be added. |
+        | `provider_rejected` | 422 | The gateway refused the request (validation, limits, credentials). `details.provider` names the provider. The message is generic; the gateway's own text is only logged. |
         | `rate_limited` | 429 | Too many failed attempts. `details.retry_after_seconds` and the `Retry-After` header say when to retry. |
         | `internal_error` | 500 | Unexpected server error. |
+        | `provider_unavailable` | 503 | The gateway could not be reached, timed out, or answered with a server error. Retry with the same `order_id`. |
       enum:
         - invalid_request
         - validation_failed
@@ -1634,6 +2187,10 @@ components:
         - api_key_revoked
         - api_key_expired
         - idempotency_key_reused
+        - connection_in_use
+        - no_eligible_connection
+        - provider_rejected
+        - provider_unavailable
 
     ErrorResponse:
       type: object
@@ -1825,6 +2382,11 @@ components:
           type: string
           format: date-time
 
+    GatewayCallback:
+      type: object
+      description: The provider's own callback body, stored raw. For `xendit` see `XenditInvoiceCallback`.
+      additionalProperties: true
+
     XenditInvoiceCallback:
       type: object
       description: The subset of the Xendit invoice callback KeiPay reads. Other fields are stored raw and ignored.
@@ -1884,6 +2446,8 @@ components:
       enum:
         - 'apps:read'
         - 'apps:write'
+        - 'connections:read'
+        - 'connections:write'
         - 'payments:read'
         - 'deliveries:read'
         - 'deliveries:replay'
@@ -2145,8 +2709,13 @@ components:
 
     App:
       type: object
-      required: [id, slug, name, environment, status, metadata, webhook_url, redirect_success_url, redirect_failure_url, created_at, updated_at]
+      required: [id, slug, name, environment, status, metadata, webhook_url, redirect_success_url, redirect_failure_url, default_connection, created_at, updated_at]
       properties:
+        default_connection:
+          description: The connection `POST /v1/payments` uses; `null` when none is set. Always the app's environment.
+          oneOf:
+            - $ref: '#/components/schemas/ConnectionSummary'
+            - type: 'null'
         id:
           type: string
           pattern: '^app_[0-9A-HJKMNP-TV-Z]{26}$'
@@ -2217,6 +2786,10 @@ components:
         Send only the fields to change. `slug` or `environment` in the body
         returns `400 invalid_request` with rule `immutable`.
       properties:
+        default_connection_id:
+          type: [string, 'null']
+          pattern: '^con_[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
+          description: An active connection with the app's environment, or `null` to clear.
         name:
           $ref: '#/components/schemas/AppName'
         webhook_url:
@@ -2362,6 +2935,404 @@ components:
           type: string
           format: password
           description: The HMAC secret for `X-Signature`. Shown once; store it now.
+
+    ProviderName:
+      type: string
+      pattern: '^[a-z][a-z0-9_]{1,31}$'
+      description: |
+        A provider adapter built into the server, e.g. `xendit`. The set
+        is whatever `GET /admin/providers` returns; an unknown name is
+        rejected with rule `oneof`.
+      examples: [xendit]
+
+    Channel:
+      type: string
+      pattern: '^[A-Z][A-Z0-9_]{1,39}$'
+      description: |
+        Normalized payment method code, e.g. `QRIS`, `VA_BCA`,
+        `EWALLET_OVO`, `CARD`. The set a provider supports is in its
+        `capabilities.channels`; new codes may be added.
+      examples: [QRIS, VA_BCA]
+
+    ChannelInfo:
+      type: object
+      required: [code, label]
+      properties:
+        code:
+          $ref: '#/components/schemas/Channel'
+        label:
+          type: string
+          description: Display name, e.g. `BCA Virtual Account`.
+
+    SchemaFieldType:
+      type: string
+      description: |
+        `string` (text; credentials are always strings), `integer`,
+        `boolean`, or `enum` (one of `options[].value`, a string). New
+        types may be added; a client that does not know a type should not
+        offer the form.
+      enum: [string, integer, boolean, enum]
+
+    SchemaFieldOption:
+      type: object
+      required: [value, label]
+      properties:
+        value:
+          type: string
+        label:
+          type: string
+
+    SchemaField:
+      type: object
+      description: |
+        One form field, in display order. Validation keywords mirror JSON
+        Schema; the server enforces the same rules and reports violations
+        as `credentials.<key>` or `settings.<key>` with the rule named
+        after the keyword (`required`, `type`, `min_length`,
+        `max_length`, `pattern`, `minimum`, `maximum`, `oneof`).
+      required: [key, type, label, description, secret, required, default]
+      properties:
+        key:
+          type: string
+          pattern: '^[a-z][a-z0-9_]{0,63}$'
+          examples: [secret_key]
+        type:
+          $ref: '#/components/schemas/SchemaFieldType'
+        label:
+          type: string
+          examples: [Secret API key]
+        description:
+          type: string
+          description: Help text shown under the field; may be empty.
+        placeholder:
+          type: string
+          description: Example input; never a real value.
+        secret:
+          type: boolean
+          description: Masked in forms, never returned, redacted from logs and audit entries.
+        required:
+          type: boolean
+        default:
+          description: Used when the value is omitted; `null` when there is none. Secret fields never have one.
+          type: [string, integer, boolean, 'null']
+        options:
+          type: array
+          description: Set for `enum` fields only.
+          items:
+            $ref: '#/components/schemas/SchemaFieldOption'
+        min_length:
+          type: integer
+          minimum: 0
+        max_length:
+          type: integer
+          minimum: 1
+        pattern:
+          type: string
+          description: An RE2 regular expression the whole value must match (anchored).
+        pattern_hint:
+          type: string
+          description: Human-readable form of `pattern` for error messages, e.g. "Starts with xnd_development_ or xnd_production_".
+        minimum:
+          type: integer
+          format: int64
+        maximum:
+          type: integer
+          format: int64
+
+    ConfigSchema:
+      type: object
+      required: [fields]
+      properties:
+        fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/SchemaField'
+
+    ProviderCapabilities:
+      type: object
+      required: [channels, currencies, can_restrict_channels, can_cancel, reports_fee]
+      properties:
+        channels:
+          type: array
+          description: Channels the provider can offer, in display order.
+          items:
+            $ref: '#/components/schemas/ChannelInfo'
+        currencies:
+          type: array
+          description: ISO 4217 codes. Informational until routing uses it.
+          items:
+            type: string
+            examples: [IDR]
+        can_restrict_channels:
+          type: boolean
+          description: A checkout can be limited to chosen channels.
+        can_cancel:
+          type: boolean
+          description: An unpaid checkout can be cancelled (expired).
+        reports_fee:
+          type: boolean
+          description: Callbacks carry the gateway fee.
+
+    ProviderWebhookSetup:
+      type: object
+      required: [instructions]
+      properties:
+        instructions:
+          type: array
+          description: Plain-text steps, in order, for pasting the connection's `webhook_url` into the gateway dashboard.
+          items:
+            type: string
+        dashboard_url:
+          type: string
+          description: Where those settings live in the gateway dashboard.
+
+    Provider:
+      type: object
+      required: [name, display_name, description, credential_schema, settings_schema, capabilities, webhook_setup]
+      properties:
+        name:
+          $ref: '#/components/schemas/ProviderName'
+        display_name:
+          type: string
+          examples: [Xendit]
+        description:
+          type: string
+        docs_url:
+          type: string
+        credential_schema:
+          $ref: '#/components/schemas/ConfigSchema'
+        settings_schema:
+          $ref: '#/components/schemas/ConfigSchema'
+        capabilities:
+          $ref: '#/components/schemas/ProviderCapabilities'
+        webhook_setup:
+          $ref: '#/components/schemas/ProviderWebhookSetup'
+
+    ProviderListResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Provider'
+
+    ConnectionStatus:
+      type: string
+      description: '`disabled` connections create no new checkouts and cannot be an app default; their callbacks still work.'
+      enum: [active, disabled]
+
+    ConnectionTestStatus:
+      type: string
+      description: Outcome of the last `POST /admin/connections/{id}/test`.
+      enum: [ok, failed]
+
+    ConnectionName:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$'
+      description: |
+        3-64 characters of `a-z`, `0-9` and `-`, starting and ending with
+        a letter or digit (surrounding spaces are trimmed and upper case is
+        lowered before checking). Unique across connections
+        (`409 conflict`). Invalid: rule `slug`.
+      examples: [xendit-live]
+
+    ConnectionSummary:
+      type: object
+      description: The connection a row refers to.
+      required: [id, name, provider, environment, status]
+      properties:
+        id:
+          type: string
+          pattern: '^con_[0-9A-HJKMNP-TV-Z]{26}$'
+          examples: [con_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+        name:
+          type: string
+        provider:
+          $ref: '#/components/schemas/ProviderName'
+        environment:
+          $ref: '#/components/schemas/AppEnvironment'
+        status:
+          $ref: '#/components/schemas/ConnectionStatus'
+
+    ConnectionListItem:
+      type: object
+      required: [id, name, provider, environment, status, legacy_webhook_alias, last_tested_at, last_test_status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          pattern: '^con_[0-9A-HJKMNP-TV-Z]{26}$'
+          examples: [con_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+        name:
+          type: string
+        provider:
+          $ref: '#/components/schemas/ProviderName'
+        environment:
+          $ref: '#/components/schemas/AppEnvironment'
+        status:
+          $ref: '#/components/schemas/ConnectionStatus'
+        legacy_webhook_alias:
+          type: boolean
+          description: '`true` for the connection imported from `XENDIT_*` settings; `POST /webhooks/xendit` also reaches it.'
+        last_tested_at:
+          type: [string, 'null']
+          format: date-time
+        last_test_status:
+          oneOf:
+            - $ref: '#/components/schemas/ConnectionTestStatus'
+            - type: 'null'
+          description: '`null` when never tested or since the credentials changed.'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CredentialHint:
+      type: object
+      required: [key, last4]
+      properties:
+        key:
+          type: string
+          description: A `credential_schema` field key.
+        last4:
+          type: [string, 'null']
+          description: The last 4 characters of the stored value; `null` when the value is shorter than 12 characters.
+
+    ConnectionChannel:
+      type: object
+      required: [channel, label, enabled]
+      properties:
+        channel:
+          $ref: '#/components/schemas/Channel'
+        label:
+          type: string
+        enabled:
+          type: boolean
+
+    Connection:
+      description: A connection with everything except credential values.
+      allOf:
+        - $ref: '#/components/schemas/ConnectionListItem'
+        - type: object
+          required: [credentials, settings, channels, webhook_url, last_test_error]
+          properties:
+            credentials:
+              type: array
+              description: One hint per `credential_schema` field, in schema order. Values are never returned.
+              items:
+                $ref: '#/components/schemas/CredentialHint'
+            settings:
+              type: object
+              additionalProperties: true
+              description: Current settings, defaults filled in, keyed by `settings_schema` field.
+            channels:
+              type: array
+              description: Every channel of the provider, in capability order, with whether this connection offers it.
+              items:
+                $ref: '#/components/schemas/ConnectionChannel'
+            webhook_url:
+              type: string
+              description: '`{HTTP_BASE_URL}/webhooks/{provider}/{id}`. Paste it into the gateway dashboard.'
+              examples: [https://pay.example.com/webhooks/xendit/con_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+            last_test_error:
+              type: [string, 'null']
+              description: Sanitized reason of the last failed test; `null` otherwise.
+
+    CreateConnectionRequest:
+      type: object
+      required: [provider, name, environment, credentials]
+      properties:
+        provider:
+          $ref: '#/components/schemas/ProviderName'
+        name:
+          $ref: '#/components/schemas/ConnectionName'
+        environment:
+          $ref: '#/components/schemas/AppEnvironment'
+        credentials:
+          type: object
+          description: Values keyed by `credential_schema` field.
+          additionalProperties:
+            type: string
+        settings:
+          type: object
+          description: Values keyed by `settings_schema` field; omitted means all defaults.
+          additionalProperties: true
+
+    UpdateConnectionRequest:
+      type: object
+      minProperties: 1
+      description: |
+        Send only the fields to change. `provider`, `environment` or
+        `credentials` in the body returns `400 invalid_request` with rule
+        `immutable`.
+      properties:
+        name:
+          $ref: '#/components/schemas/ConnectionName'
+        settings:
+          type: object
+          additionalProperties: true
+
+    UpdateConnectionCredentialsRequest:
+      type: object
+      required: [credentials]
+      properties:
+        credentials:
+          type: object
+          minProperties: 1
+          description: The values to replace, keyed by `credential_schema` field.
+          additionalProperties:
+            type: string
+
+    ReplaceConnectionChannelsRequest:
+      type: object
+      required: [channels]
+      properties:
+        channels:
+          type: array
+          items:
+            type: object
+            required: [channel, enabled]
+            properties:
+              channel:
+                $ref: '#/components/schemas/Channel'
+              enabled:
+                type: boolean
+
+    ConnectionResponse:
+      type: object
+      required: [connection]
+      properties:
+        connection:
+          $ref: '#/components/schemas/Connection'
+
+    ConnectionListResponse:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConnectionListItem'
+        next_cursor:
+          type: [string, 'null']
+          description: Pass as `cursor` to get the next page; `null` on the last page.
+
+    ConnectionTestResponse:
+      type: object
+      required: [result, message, tested_at, connection]
+      properties:
+        result:
+          $ref: '#/components/schemas/ConnectionTestStatus'
+        message:
+          type: string
+          description: Short, sanitized outcome, e.g. "Credentials accepted." or "The provider rejected the credentials (HTTP 401)."
+        tested_at:
+          type: string
+          format: date-time
+        connection:
+          $ref: '#/components/schemas/Connection'
 
     Payment:
       type: object
@@ -2608,7 +3579,7 @@ components:
         type:
           type: string
           description: Entries written before users existed use `admin_user` for the console admin; entries written before apps existed use `tenant` with the integer tenant id.
-          examples: [app, api_key, user, webhook_delivery]
+          examples: [app, api_key, connection, user, webhook_delivery]
         id:
           type: string
           description: The target's identifier as a string (`app_…`, `key_…`, `usr_…`). Empty for a failed sign-in with an unknown email.
@@ -2631,7 +3602,10 @@ components:
           description: |
             `{target_type}.{verb}`. Current values: `app.create`,
             `app.update`, `app.disable`, `app.enable`, `api_key.create`,
-            `api_key.rotate`, `api_key.revoke`, `webhook_delivery.replay`,
+            `api_key.rotate`, `api_key.revoke`, `connection.create`,
+            `connection.update`, `connection.update_credentials`,
+            `connection.update_channels`, `connection.disable`,
+            `connection.enable`, `connection.test`, `webhook_delivery.replay`,
             `user.setup`, `user.create`, `user.update`, `user.disable`,
             `user.enable`, `user.reset_password`, `user.change_password`,
             `user.login`, `user.login_failed`, `user.logout`. Older entries

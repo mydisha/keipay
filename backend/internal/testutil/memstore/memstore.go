@@ -1,5 +1,6 @@
 // Package memstore holds in-memory implementations of the user, session,
-// failure-counter, audit, app, API key and payment ports for tests. Tx gives them transaction
+// failure-counter, audit, app, API key, connection, merchant and payment
+// ports for tests. Tx gives them transaction
 // semantics: every store registered with it is restored when fn fails.
 package memstore
 

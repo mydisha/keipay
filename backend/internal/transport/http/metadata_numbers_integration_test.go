@@ -28,8 +28,8 @@ func TestIntegrationMetadataNumberOutsideNumericRangeIsInvalidRequest(t *testing
 			t.Fatalf("%s: want a metadata field error, got %+v", n, env.Error.Details)
 		}
 	}
-	if len(e.xendit.created) != 0 {
-		t.Fatalf("invalid metadata opened %d invoices", len(e.xendit.created))
+	if n := e.invoicesCreated(); n != 0 {
+		t.Fatalf("invalid metadata opened %d invoices", n)
 	}
 
 	_, err := e.appSvc.Create(domain.WithActor(context.Background(), domain.SystemActor("test")), service.CreateAppInput{

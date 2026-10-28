@@ -23,7 +23,7 @@ func NewPaymentRepo(db *pgxpool.Pool) *PaymentRepo { return &PaymentRepo{db: db}
 
 // paymentSelect joins the owning app so every payment carries its summary.
 const paymentSelect = `SELECT p.id, p.public_id, p.app_id, a.public_id, a.slug, a.name, a.environment,
-	p.order_id, p.external_id, p.xendit_invoice_id, p.amount, p.currency, p.status, p.description,
+	p.order_id, p.external_id, p.connection_id, COALESCE(p.provider, ''), p.xendit_invoice_id, p.amount, p.currency, p.status, p.description,
 	p.invoice_url, p.payer_email, p.items, p.metadata, COALESCE(p.idempotency_key, ''),
 	COALESCE(p.idempotency_fingerprint, ''), p.expires_at, p.paid_at, p.settled_at,
 	p.expected_settlement_at, p.created_at, p.updated_at
@@ -34,7 +34,7 @@ func scanPayment(row pgx.Row) (*domain.Payment, error) {
 	var env string
 	var items, meta []byte
 	err := row.Scan(&p.ID, &p.PublicID, &p.AppID, &p.App.PublicID, &p.App.Slug, &p.App.Name, &env,
-		&p.OrderID, &p.ExternalID, &p.XenditInvoiceID, &p.Amount, &p.Currency, &p.Status, &p.Description,
+		&p.OrderID, &p.ExternalID, &p.ConnectionID, &p.Provider, &p.XenditInvoiceID, &p.Amount, &p.Currency, &p.Status, &p.Description,
 		&p.InvoiceURL, &p.PayerEmail, &items, &meta, &p.IdempotencyKey, &p.IdempotencyFingerprint,
 		&p.ExpiresAt, &p.PaidAt, &p.SettledAt, &p.ExpectedSettlementAt, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -80,13 +80,14 @@ func (r *PaymentRepo) Create(ctx context.Context, p *domain.Payment) error {
 	}
 	const q = `INSERT INTO payments (public_id, app_id, order_id, external_id, xendit_invoice_id,
 		amount, currency, status, description, invoice_url, payer_email, items, metadata,
-		idempotency_key, idempotency_fingerprint, expires_at, expected_settlement_at, raw)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+		idempotency_key, idempotency_fingerprint, expires_at, expected_settlement_at, raw,
+		connection_id, provider)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 		RETURNING id, created_at, updated_at`
 	err = conn(ctx, r.db).QueryRow(ctx, q, p.PublicID, p.AppID, p.OrderID, p.ExternalID, p.XenditInvoiceID,
 		p.Amount, p.Currency, p.Status, p.Description, p.InvoiceURL, p.PayerEmail, items, meta,
 		nullIfEmpty(p.IdempotencyKey), nullIfEmpty(p.IdempotencyFingerprint), p.ExpiresAt,
-		p.ExpectedSettlementAt, p.Raw).
+		p.ExpectedSettlementAt, p.Raw, p.ConnectionID, nullIfEmpty(p.Provider)).
 		Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 	switch uniqueConstraint(err) {
 	case "":
@@ -190,4 +191,15 @@ func (r *PaymentRepo) List(ctx context.Context, f domain.PaymentFilter, p domain
 	return keysetPage(items, p.Limit, func(pay domain.Payment) domain.Cursor {
 		return domain.Cursor{Time: pay.CreatedAt, ID: pay.PublicID}
 	}), nil
+}
+
+// BackfillConnection assigns every payment without a connection to
+// connectionID and returns how many it changed.
+func (r *PaymentRepo) BackfillConnection(ctx context.Context, connectionID int64, provider string) (int64, error) {
+	ct, err := conn(ctx, r.db).Exec(ctx,
+		`UPDATE payments SET connection_id=$1, provider=$2 WHERE connection_id IS NULL`, connectionID, provider)
+	if err != nil {
+		return 0, fmt.Errorf("backfill payment connection: %w", err)
+	}
+	return ct.RowsAffected(), nil
 }

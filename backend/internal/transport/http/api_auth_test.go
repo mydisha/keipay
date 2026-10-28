@@ -72,7 +72,7 @@ func TestSetupOverHTTP(t *testing.T) {
 		t.Fatalf("setup: %d %s", w.Code, w.Body.String())
 	}
 	user, perms := meBody(t, w)
-	if user["email"] != "owner@example.com" || user["role"] != "owner" || user["status"] != "active" || len(perms) != 7 {
+	if user["email"] != "owner@example.com" || user["role"] != "owner" || user["status"] != "active" || len(perms) != 9 {
 		t.Fatalf("me = %v %v", user, perms)
 	}
 	cookies := setCookies(t, w)
@@ -137,7 +137,7 @@ func TestLoginOverHTTP(t *testing.T) {
 		t.Fatalf("login: %d %s", w.Code, w.Body.String())
 	}
 	user, perms := meBody(t, w)
-	if user["id"] != u.PublicID || !slices.Equal(perms, []string{"apps:read", "deliveries:read", "payments:read"}) {
+	if user["id"] != u.PublicID || !slices.Equal(perms, []string{"apps:read", "connections:read", "deliveries:read", "payments:read"}) {
 		t.Fatalf("me = %v %v", user, perms)
 	}
 	if user["last_login_at"] == nil {
@@ -390,7 +390,7 @@ func TestRoleChangeAppliesOnNextRequest(t *testing.T) {
 	}
 	expectError(t, f.send(b, http.MethodGet, "/admin/audit-logs", ""), http.StatusForbidden, domain.CodeForbidden)
 	_, perms := meBody(t, f.send(b, http.MethodGet, "/admin/me", ""))
-	if !slices.Equal(perms, []string{"apps:read", "deliveries:read", "payments:read"}) {
+	if !slices.Equal(perms, []string{"apps:read", "connections:read", "deliveries:read", "payments:read"}) {
 		t.Fatalf("permissions = %v", perms)
 	}
 }
@@ -502,7 +502,7 @@ func TestMeShape(t *testing.T) {
 	if user["disabled_at"] != nil || user["status"] != "active" || user["id"] != f.owner.PublicID {
 		t.Fatalf("user = %v", user)
 	}
-	if !slices.IsSorted(perms) || len(perms) != 7 {
+	if !slices.IsSorted(perms) || len(perms) != 9 {
 		t.Fatalf("permissions = %v", perms)
 	}
 	if strings.Contains(w.Body.String(), "password_hash") || strings.Contains(w.Body.String(), "$2a$") {

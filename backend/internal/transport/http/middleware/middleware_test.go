@@ -44,28 +44,6 @@ func newEngine(mw ...gin.HandlerFunc) *gin.Engine {
 	return r
 }
 
-// --- XenditCallbackToken ---
-
-func TestCallbackToken(t *testing.T) {
-	r := newEngine(XenditCallbackToken("cb-token", zap.NewNop()))
-	for _, token := range []string{"", "wrong"} {
-		req := httptest.NewRequest(http.MethodPost, "/x", nil)
-		if token != "" {
-			req.Header.Set("x-callback-token", token)
-		}
-		w := httptest.NewRecorder()
-		r.ServeHTTP(w, req)
-		assertEnvelope(t, w, http.StatusUnauthorized, domain.CodeInvalidCallbackToken)
-	}
-	req := httptest.NewRequest(http.MethodPost, "/x", nil)
-	req.Header.Set("x-callback-token", "cb-token")
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("valid token: %d", w.Code)
-	}
-}
-
 // --- Recover ---
 
 func TestRecoverReturnsEnvelope(t *testing.T) {

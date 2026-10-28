@@ -27,6 +27,8 @@ type Config struct {
 	RedisPassword string `mapstructure:"REDIS_PASSWORD"`
 	RedisDB       int    `mapstructure:"REDIS_DB"`
 
+	// XenditSecretKey and XenditCallbackToken are deprecated: when both are
+	// set, the server imports them once into a connection, then ignores them.
 	XenditSecretKey     string `mapstructure:"XENDIT_SECRET_KEY"`
 	XenditCallbackToken string `mapstructure:"XENDIT_CALLBACK_TOKEN"`
 
@@ -143,11 +145,8 @@ func (c *Config) validate() error {
 	if c.PostgresDSN == "" {
 		missing = append(missing, "POSTGRES_DSN")
 	}
-	if c.XenditSecretKey == "" {
-		missing = append(missing, "XENDIT_SECRET_KEY")
-	}
-	if c.XenditCallbackToken == "" {
-		missing = append(missing, "XENDIT_CALLBACK_TOKEN")
+	if (c.XenditSecretKey == "") != (c.XenditCallbackToken == "") {
+		return fmt.Errorf("XENDIT_SECRET_KEY and XENDIT_CALLBACK_TOKEN must be set together")
 	}
 	if len(c.EncryptionKey) != 64 {
 		return fmt.Errorf("ENCRYPTION_KEY must be 64 hex chars (32 bytes)")

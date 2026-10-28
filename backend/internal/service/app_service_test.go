@@ -32,6 +32,7 @@ type appFixture struct {
 	svc    *AppService
 	apps   *memstore.Apps
 	keys   *memstore.APIKeys
+	conns  *memstore.Connections
 	audit  *memstore.Audit
 	tx     *memstore.Tx
 	cipher *recordingCipher
@@ -43,10 +44,11 @@ func newAppFixture(t *testing.T) *appFixture {
 	f := &appFixture{clock: memstore.NewClock(time.Date(2026, 10, 29, 9, 0, 0, 0, time.UTC)), cipher: &recordingCipher{}, audit: &memstore.Audit{}}
 	f.apps = memstore.NewApps(f.clock.Now)
 	f.keys = memstore.NewAPIKeys(f.apps, f.clock.Now)
-	f.tx = memstore.NewTx(f.apps, f.keys, f.audit)
+	f.conns = memstore.NewConnections(f.apps, f.clock.Now)
+	f.tx = memstore.NewTx(f.apps, f.keys, f.conns, f.audit)
 	auditSvc := NewAuditService(f.audit)
 	auditSvc.now = f.clock.Now
-	f.svc = NewAppService(f.apps, f.keys, f.cipher, f.tx, auditSvc)
+	f.svc = NewAppService(f.apps, f.keys, f.conns, f.cipher, f.tx, auditSvc)
 	f.svc.now = f.clock.Now
 	return f
 }
@@ -609,5 +611,99 @@ func TestTouch(t *testing.T) {
 	f.keys.TouchErr = errors.New("db down")
 	if err := f.svc.Touch(ctx, f.keys.Get(c.Key.PublicID)); !errors.Is(err, f.keys.TouchErr) {
 		t.Fatalf("touch error: %v", err)
+	}
+}
+
+// addConnection stores a connection directly; AppService only reads them.
+func (f *appFixture) addConnection(t *testing.T, name string, env domain.Environment, status domain.ConnectionStatus) *domain.Connection {
+	t.Helper()
+	c := &domain.Connection{PublicID: id.New(id.Connection), MerchantID: memstore.DefaultMerchantID, Provider: "fake",
+		Name: name, Environment: env, Status: status}
+	if err := f.conns.Create(context.Background(), c); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// T-16 / AC-14
+func TestAppDefaultConnection(t *testing.T) {
+	f := newAppFixture(t)
+	app := f.create(t, "acme", domain.EnvTest).App
+	testConn := f.addConnection(t, "fake-test", domain.EnvTest, domain.ConnectionActive)
+	other := f.addConnection(t, "fake-test-2", domain.EnvTest, domain.ConnectionActive)
+	liveConn := f.addConnection(t, "fake-live", domain.EnvLive, domain.ConnectionActive)
+	disabled := f.addConnection(t, "fake-off", domain.EnvTest, domain.ConnectionDisabled)
+	f.audit.Reset()
+	ctx := adminCtx()
+	set := func(v *string) (*domain.App, error) {
+		return f.svc.Update(ctx, app.PublicID, UpdateAppInput{DefaultConnectionSet: true, DefaultConnectionID: v})
+	}
+	ptr := func(s string) *string { return &s }
+
+	for _, tc := range []struct {
+		value *string
+		rule  string
+	}{
+		{ptr("con_nope"), "public_id"},
+		{ptr("app_01JBKQ7Z8M4X2Y6V3N9T5R1W0C"), "public_id"},
+		{ptr(id.New(id.Connection)), "exists"},
+		{&liveConn.PublicID, "environment"},
+		{&disabled.PublicID, "status"},
+	} {
+		_, err := set(tc.value)
+		assertFields(t, err, domain.FieldError{Field: "default_connection_id", Rule: tc.rule})
+	}
+	if len(f.audit.Logs()) != 0 {
+		t.Fatalf("refused updates recorded %v", f.actions())
+	}
+
+	// Lower case is accepted; the app answers with the summary.
+	got, err := set(ptr(strings.ToLower(testConn.PublicID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DefaultConnectionID == nil || *got.DefaultConnectionID != testConn.ID || got.DefaultConnection == nil ||
+		got.DefaultConnection.PublicID != testConn.PublicID || got.DefaultConnection.Name != "fake-test" {
+		t.Fatalf("app = %+v", got)
+	}
+	stored, _ := f.svc.Get(ctx, app.PublicID)
+	if stored.DefaultConnection == nil || stored.DefaultConnection.PublicID != testConn.PublicID {
+		t.Fatalf("stored = %+v", stored.DefaultConnection)
+	}
+	logs := f.audit.Logs()
+	if len(logs) != 1 || logs[0].Action != "app.update" {
+		t.Fatalf("audit = %v", f.actions())
+	}
+	assertJSON(t, "before", logs[0].Before, map[string]any{"default_connection_id": nil})
+	assertJSON(t, "after", logs[0].After, map[string]any{"default_connection_id": testConn.PublicID})
+
+	// The same connection again is a no-op; another one is recorded as a change.
+	if _, err := set(&testConn.PublicID); err != nil || len(f.audit.Logs()) != 1 {
+		t.Fatalf("no-op: %v %v", err, f.actions())
+	}
+	name := "Renamed"
+	if _, err := f.svc.Update(ctx, app.PublicID, UpdateAppInput{Name: &name, DefaultConnectionSet: true, DefaultConnectionID: &other.PublicID}); err != nil {
+		t.Fatal(err)
+	}
+	assertJSON(t, "after", f.audit.Logs()[1].After, map[string]any{"name": "Renamed", "default_connection_id": other.PublicID})
+
+	// null clears it.
+	got, err = set(nil)
+	if err != nil || got.DefaultConnectionID != nil || got.DefaultConnection != nil {
+		t.Fatalf("clear: %+v %v", got, err)
+	}
+	assertJSON(t, "before", f.audit.Logs()[2].Before, map[string]any{"default_connection_id": other.PublicID})
+	assertJSON(t, "after", f.audit.Logs()[2].After, map[string]any{"default_connection_id": nil})
+	if _, err := set(nil); err != nil || len(f.audit.Logs()) != 3 {
+		t.Fatalf("clearing twice: %v %v", err, f.actions())
+	}
+
+	// Apps list rows carry the summary.
+	if _, err := set(&testConn.PublicID); err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.svc.List(ctx, domain.AppFilter{}, domain.PageRequest{})
+	if err != nil || len(res.Items) != 1 || res.Items[0].DefaultConnection == nil || res.Items[0].DefaultConnection.Status != domain.ConnectionActive {
+		t.Fatalf("list = %+v %v", res, err)
 	}
 }

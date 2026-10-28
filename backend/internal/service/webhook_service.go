@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
-	"github.com/mydisha/keipay/backend/internal/xendit"
+	"github.com/mydisha/keipay/backend/internal/provider"
 )
 
 // Enqueuer schedules a webhook delivery for async forwarding (asynq).
@@ -29,29 +29,36 @@ type Idempotencer interface {
 // callback should still be acknowledged.
 var ErrForwardNotQueued = errors.New("forward not queued")
 
-// ErrCallbackMismatch means a callback's amount or currency does not match the
-// payment it routes to. The event is recorded (so it is not retried) but not
-// applied; it needs a manual look.
+// ErrCallbackMismatch means a callback does not belong to the payment it
+// routes to: its amount or currency differs, or the payment was created
+// through another connection. It is not applied and needs a manual look; the
+// caller acknowledges it so the gateway stops retrying. An amount or currency
+// mismatch is recorded as processed; a connection mismatch is not (see
+// ConnectionMismatchError).
 var ErrCallbackMismatch = errors.New("callback does not match payment")
 
-// XenditInvoiceCallback is the subset of Xendit's invoice webhook we consume.
-type XenditInvoiceCallback struct {
-	ID         string `json:"id"`
-	ExternalID string `json:"external_id"`
-	Status     string `json:"status"`
-	Amount     int64  `json:"amount"`
-	Currency   string `json:"currency"`
-	PaidAmount int64  `json:"paid_amount"`
-	FeesPaid   int64  `json:"fees_paid_amount"`
-	PaidAt     string `json:"paid_at"`
-	// SettlementDate is the date Xendit settles funds for this invoice. Xendit
-	// sends it as "settlement_date" on PAID callbacks and as the event time on
-	// SETTLED callbacks; we use whichever is present.
-	SettlementDate string `json:"settlement_date"`
-	Updated        string `json:"updated"`
+// ConnectionMismatchError is the ErrCallbackMismatch of a callback that
+// arrived at another connection than the payment's. Its event key is left
+// unrecorded, so it cannot mark the payment's real callback as a duplicate.
+type ConnectionMismatchError struct {
+	PaymentID int64
+	// PaymentConnectionID is nil for a payment without a connection.
+	PaymentConnectionID *int64
+	ConnectionID        int64
 }
 
-// WebhookService processes inbound Xendit callbacks and queues app forwards.
+func (e *ConnectionMismatchError) Error() string {
+	paymentConn := "none"
+	if e.PaymentConnectionID != nil {
+		paymentConn = fmt.Sprint(*e.PaymentConnectionID)
+	}
+	return fmt.Sprintf("%v: payment %d belongs to connection %s, callback arrived at connection %d",
+		ErrCallbackMismatch, e.PaymentID, paymentConn, e.ConnectionID)
+}
+
+func (e *ConnectionMismatchError) Unwrap() error { return ErrCallbackMismatch }
+
+// WebhookService applies verified gateway callbacks and queues app forwards.
 type WebhookService struct {
 	payments domain.PaymentRepository
 	ledger   domain.LedgerRepository
@@ -90,29 +97,19 @@ type ForwardPayload struct {
 	Timestamp       time.Time            `json:"timestamp"`
 }
 
-// parseTime parses an RFC3339 timestamp, returning nil on empty/invalid input.
-func parseTime(s string) *time.Time {
-	if s == "" {
-		return nil
-	}
-	if t, err := time.Parse(time.RFC3339, s); err == nil {
-		return &t
-	}
-	return nil
-}
-
-// Process handles one inbound Xendit invoice callback. It is idempotent: repeated
-// (id,status) events are ignored. Returns nil when accepted or safely skipped.
+// Process applies one verified callback that arrived at conn. It is
+// idempotent: a repeated (event key, provider status) is ignored. Returns nil
+// when accepted or safely skipped.
 //
 // The idempotency record, status update, ledger entry and delivery row commit in
-// one transaction, so a failure leaves nothing behind and Xendit's retry is
+// one transaction, so a failure leaves nothing behind and the gateway's retry is
 // processed in full. The forward is enqueued after commit; see ErrForwardNotQueued.
-func (s *WebhookService) Process(ctx context.Context, cb XenditInvoiceCallback, raw []byte) error {
-	if cb.ExternalID == "" || cb.ID == "" {
-		return fmt.Errorf("%w: missing id/external_id", domain.ErrInvalidInput)
+func (s *WebhookService) Process(ctx context.Context, conn *domain.Connection, ev provider.InboundEvent, raw []byte) error {
+	if ev.Reference == "" || ev.EventKey == "" {
+		return fmt.Errorf("%w: missing event key or reference", domain.ErrInvalidInput)
 	}
 
-	dedupKey := cb.ID + ":" + cb.Status
+	dedupKey := ev.EventKey + ":" + ev.ProviderStatus
 	if s.idemp.Seen(ctx, dedupKey) {
 		return nil // already processed (Redis)
 	}
@@ -120,13 +117,16 @@ func (s *WebhookService) Process(ctx context.Context, cb XenditInvoiceCallback, 
 	var res applyResult
 	err := s.tx.WithinTx(ctx, func(ctx context.Context) error {
 		var err error
-		res, err = s.apply(ctx, cb, raw)
+		res, err = s.apply(ctx, conn, ev, raw)
 		return err
 	})
 	if err != nil {
 		return err
 	}
-	s.idemp.Mark(ctx, dedupKey)
+	var foreign *ConnectionMismatchError
+	if !errors.As(res.rejected, &foreign) {
+		s.idemp.Mark(ctx, dedupKey) // see apply: a foreign callback must not consume the key
+	}
 	if res.rejected != nil {
 		return res.rejected
 	}
@@ -149,8 +149,25 @@ type applyResult struct {
 }
 
 // apply writes the effects of one callback inside the caller's transaction.
-func (s *WebhookService) apply(ctx context.Context, cb XenditInvoiceCallback, raw []byte) (applyResult, error) {
-	isNew, err := s.webhooks.CreateEventIfNew(ctx, cb.ID, cb.Status)
+func (s *WebhookService) apply(ctx context.Context, conn *domain.Connection, ev provider.InboundEvent, raw []byte) (applyResult, error) {
+	// The reference is matched as stored, never parsed: it finds kp_pay_…
+	// references and legacy {slug}:{order_id} ones alike. Locked until commit,
+	// so PAID and SETTLED for one payment apply in turn.
+	p, err := s.payments.GetByReferenceForUpdate(ctx, ev.Reference)
+	if err != nil {
+		return applyResult{}, fmt.Errorf("lookup payment %q: %w", ev.Reference, err)
+	}
+
+	// A callback only updates payments of the connection it arrived at: the
+	// same reference at another gateway account is not this payment. This is
+	// checked before the event is recorded because the dedupe key is not
+	// scoped by connection: recording it would make the payment's own
+	// gateway callback look like a duplicate and drop it.
+	if p.ConnectionID == nil || *p.ConnectionID != conn.ID {
+		return applyResult{rejected: &ConnectionMismatchError{PaymentID: p.ID, PaymentConnectionID: p.ConnectionID, ConnectionID: conn.ID}}, nil
+	}
+
+	isNew, err := s.webhooks.CreateEventIfNew(ctx, ev.EventKey, ev.ProviderStatus)
 	if err != nil {
 		return applyResult{}, err
 	}
@@ -158,30 +175,22 @@ func (s *WebhookService) apply(ctx context.Context, cb XenditInvoiceCallback, ra
 		return applyResult{}, nil
 	}
 
-	// The reference is matched as stored, never parsed: it finds kp_pay_…
-	// references and legacy {slug}:{order_id} ones alike. Locked until commit,
-	// so PAID and SETTLED for one payment apply in turn.
-	p, err := s.payments.GetByReferenceForUpdate(ctx, cb.ExternalID)
-	if err != nil {
-		return applyResult{}, fmt.Errorf("lookup payment %q: %w", cb.ExternalID, err)
-	}
-
 	// Invoices have a fixed amount, so a mismatch means the callback is not for
 	// this payment (e.g. an invoice made outside KeiPay reused external_id).
 	// A missing amount/currency is not treated as a mismatch.
-	if (cb.Amount != 0 && cb.Amount != p.Amount) || (cb.Currency != "" && cb.Currency != p.Currency) {
+	if (ev.Amount != 0 && ev.Amount != p.Amount) || (ev.Currency != "" && ev.Currency != p.Currency) {
 		return applyResult{rejected: fmt.Errorf("%w: payment %d is %d %s, callback has %d %s",
-			ErrCallbackMismatch, p.ID, p.Amount, p.Currency, cb.Amount, cb.Currency)}, nil
+			ErrCallbackMismatch, p.ID, p.Amount, p.Currency, ev.Amount, ev.Currency)}, nil
 	}
 
-	status := xendit.MapStatus(cb.Status)
+	status := ev.Status
 	if !p.Status.CanTransitionTo(status) {
 		return applyResult{}, nil // stale, e.g. PAID arriving after SETTLED
 	}
 
 	var paidAt *time.Time
 	if status.IsSuccessful() {
-		paidAt = parseTime(cb.PaidAt)
+		paidAt = ev.PaidAt
 		if paidAt == nil && status == domain.PaymentStatusPaid {
 			now := time.Now().UTC()
 			paidAt = &now
@@ -192,10 +201,7 @@ func (s *WebhookService) apply(ctx context.Context, cb XenditInvoiceCallback, ra
 	// PAID callbacks may carry settlement_date as a forward-looking estimate.
 	var settledAt *time.Time
 	if status == domain.PaymentStatusSettled {
-		settledAt = parseTime(cb.SettlementDate)
-		if settledAt == nil {
-			settledAt = parseTime(cb.Updated)
-		}
+		settledAt = ev.SettledAt
 		if settledAt == nil {
 			now := time.Now().UTC()
 			settledAt = &now
@@ -208,7 +214,7 @@ func (s *WebhookService) apply(ctx context.Context, cb XenditInvoiceCallback, ra
 
 	// Record ledger on successful payment (idempotent via unique payment_id,type).
 	if status.IsSuccessful() {
-		amount := cb.PaidAmount
+		amount := ev.PaidAmount
 		if amount == 0 {
 			amount = p.Amount
 		}
@@ -216,8 +222,8 @@ func (s *WebhookService) apply(ctx context.Context, cb XenditInvoiceCallback, ra
 			AppID:     p.AppID,
 			PaymentID: p.ID,
 			Amount:    amount,
-			XenditFee: cb.FeesPaid,
-			NetAmount: amount - cb.FeesPaid,
+			XenditFee: ev.Fee,
+			NetAmount: amount - ev.Fee,
 			Type:      domain.LedgerEntryTypePayment,
 			SettledAt: settledAt,
 		}

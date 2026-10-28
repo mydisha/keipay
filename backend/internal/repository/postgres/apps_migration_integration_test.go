@@ -86,7 +86,9 @@ func TestIntegrationMigration7UpDownUp(t *testing.T) {
 	seedTenants(t, pool)
 	before := tenantRows(t, pool)
 
-	if err := db.Migrate.Migrate(7); err != nil {
+	// The repositories read the current schema; 000008 only adds to what
+	// 000007 builds, so migrating through it checks 000007 just the same.
+	if err := db.Migrate.Migrate(8); err != nil {
 		t.Fatalf("up: %v", err)
 	}
 	apps := postgres.NewAppRepo(pool)
@@ -193,7 +195,7 @@ func TestIntegrationMigration7UpDownUp(t *testing.T) {
 	}
 	exec(t, pool, `INSERT INTO tenants (name, slug, api_key, api_secret_enc) VALUES ('Next', 'next', 'kp_next', 'x')`)
 
-	if err := db.Migrate.Migrate(7); err != nil {
+	if err := db.Migrate.Migrate(8); err != nil {
 		t.Fatalf("up again: %v", err)
 	}
 	if k, a, err := keys.GetByHashWithApp(ctx, keygen.HashAPIKey(acmeKey)); err != nil || a.Name != "Acme Renamed" || k == nil {
@@ -214,7 +216,7 @@ func lowerID(s string) string {
 // T-25 / AC-1: the migration works on an empty database too.
 func TestIntegrationMigration7Empty(t *testing.T) {
 	db := pgtest.New(t, 6)
-	for _, v := range []uint{7, 6, 7} {
+	for _, v := range []uint{7, 6, 7, 8} {
 		if err := db.Migrate.Migrate(v); err != nil {
 			t.Fatalf("migrate to %d: %v", v, err)
 		}

@@ -202,7 +202,8 @@ func TestRoleRouteMatrix(t *testing.T) {
 		t.Fatal(err)
 	}
 	paths := strings.NewReplacer("/users/:id", "/users/"+target.PublicID, "/apps/:id", "/apps/"+app.App.PublicID,
-		":key_id", app.Key.PublicID, "/webhook-deliveries/:id", "/webhook-deliveries/3")
+		":key_id", app.Key.PublicID, "/webhook-deliveries/:id", "/webhook-deliveries/3",
+		"/connections/:id", "/connections/"+f.testConn.PublicID)
 
 	for _, rt := range adminRoutes(Deps{}) {
 		path := "/admin" + paths.Replace(rt.path)

@@ -16,6 +16,8 @@ import (
 	"github.com/mydisha/keipay/backend/internal/config"
 	"github.com/mydisha/keipay/backend/internal/pkg/crypto"
 	"github.com/mydisha/keipay/backend/internal/pkg/logger"
+	"github.com/mydisha/keipay/backend/internal/provider"
+	"github.com/mydisha/keipay/backend/internal/provider/xendit"
 	"github.com/mydisha/keipay/backend/internal/repository/postgres"
 	redisrepo "github.com/mydisha/keipay/backend/internal/repository/redis"
 	"github.com/mydisha/keipay/backend/internal/service"
@@ -109,6 +111,8 @@ func main() {
 	ledgerRepo := postgres.NewLedgerRepo(pool)
 	webhookRepo := postgres.NewWebhookRepo(pool)
 	auditRepo := postgres.NewAuditRepo(pool)
+	connRepo := postgres.NewConnectionRepo(pool)
+	merchantRepo := postgres.NewMerchantRepo(pool)
 	txMgr := postgres.NewTxManager(pool)
 
 	// Initialize idempotency stores. API keys and apps are not cached, so a
@@ -126,16 +130,29 @@ func main() {
 	defer func() { _ = enqueuer.Close() }()
 	log.Debug("asynq enqueuer initialized", zap.Int("max_retry", cfg.WebhookMaxRetry))
 
-	// Initialize external clients.
-	log.Debug("initializing xendit client")
-	xnd := xenditClient(cfg)
-	log.Debug("xendit client initialized")
+	// Gateway adapters built into this server.
+	registry, err := provider.NewRegistry(xendit.New())
+	if err != nil {
+		log.Fatal("failed to register providers", zap.Error(err))
+	}
 
 	// Initialize services.
 	log.Debug("initializing services")
 	auditSvc := service.NewAuditService(auditRepo)
-	appSvc := service.NewAppService(appRepo, apiKeyRepo, cipher, txMgr, auditSvc)
-	paymentSvc := service.NewPaymentService(paymentRepo, xnd)
+	appSvc := service.NewAppService(appRepo, apiKeyRepo, connRepo, cipher, txMgr, auditSvc)
+	connSvc := service.NewConnectionService(service.ConnectionDeps{
+		Connections: connRepo,
+		Merchants:   merchantRepo,
+		Apps:        appRepo,
+		Payments:    paymentRepo,
+		Registry:    registry,
+		Sealer:      cipher,
+		Tx:          txMgr,
+		Audit:       auditSvc,
+		Log:         log,
+		BaseURL:     cfg.HTTPBaseURL,
+	})
+	paymentSvc := service.NewPaymentService(paymentRepo, connRepo, registry, cipher, log)
 	ledgerSvc := service.NewLedgerService(ledgerRepo)
 	webhookSvc := service.NewWebhookService(paymentRepo, ledgerRepo, webhookRepo, txMgr, idemp, enqueuer)
 	deliverySvc := service.NewDeliveryService(webhookRepo, enqueuer, auditSvc)
@@ -162,6 +179,11 @@ func main() {
 	}
 	log.Debug("services initialized")
 
+	// One-time import of the deprecated XENDIT_* settings, before serving so
+	// the first callback and payment already find the connection.
+	imported, err := connSvc.ImportLegacyXendit(ctx, cfg.XenditSecretKey, cfg.XenditCallbackToken)
+	logLegacyImport(log, imported, err)
+
 	frontendDir := resolveFrontendDir(cfg.FrontendDir)
 	switch {
 	case frontendDir != "":
@@ -180,15 +202,15 @@ func main() {
 		AppResolver:     appSvc,
 		NonceStore:      nonces,
 		SecretDecryptor: cipher,
-		CallbackToken:   cfg.XenditCallbackToken,
 		Sessions:        authSvc,
 		Cookies:         cookies,
 		NewToken:        service.NewToken,
 		TrustedProxies:  cfg.TrustedProxies,
 		Payment:         handler.NewPaymentHandler(paymentSvc),
-		Webhook:         handler.NewWebhookHandler(webhookSvc, log),
+		Webhook:         handler.NewWebhookHandler(webhookSvc, connSvc, log),
 		Admin:           handler.NewAdminHandler(paymentSvc, ledgerSvc, deliverySvc, auditSvc),
 		Apps:            handler.NewAppHandler(appSvc),
+		Connections:     handler.NewConnectionHandler(connSvc),
 		Auth:            handler.NewAuthHandler(authSvc, cookies, service.NewToken),
 		Users:           handler.NewUserHandler(userSvc),
 		FrontendDir:     frontendDir,

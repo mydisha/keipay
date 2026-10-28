@@ -66,6 +66,9 @@ export REDIS_PASSWORD=""
 export REDIS_DB=0
 ENCRYPTION_KEY="$(openssl rand -hex 32)"
 export ENCRYPTION_KEY
+# Deprecated settings, kept on purpose: the e2e server imports them once into
+# the `xendit-imported` test connection (the seeded demo app's default), which
+# exercises the upgrade path. The key is fake, so no checkout ever succeeds.
 export XENDIT_SECRET_KEY="xnd_development_ci"
 export XENDIT_CALLBACK_TOKEN="ci-callback-token"
 export KEI_TEST_POSTGRES_DSN="$POSTGRES_DSN"

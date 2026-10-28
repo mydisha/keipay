@@ -63,7 +63,7 @@ func (r *APIKeyRepo) Create(ctx context.Context, k *domain.APIKey) error {
 // GetByHashWithApp loads a key by its hash together with its app, in one query.
 func (r *APIKeyRepo) GetByHashWithApp(ctx context.Context, hash string) (*domain.APIKey, *domain.App, error) {
 	q := `SELECT ` + apiKeyColumns + `, ` + appColumns + `
-		FROM app_api_keys k JOIN apps a ON a.id = k.app_id
+		FROM app_api_keys k JOIN apps a ON a.id = k.app_id` + appJoins + `
 		WHERE k.key_hash = $1`
 	var k domain.APIKey
 	var a domain.App

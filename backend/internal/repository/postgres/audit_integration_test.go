@@ -91,7 +91,7 @@ func newAuditFixture(t *testing.T) *auditFixture {
 }
 
 func (f *auditFixture) service(audit service.Auditor) *service.AppService {
-	return service.NewAppService(f.apps, f.keys, plainCipher{}, f.tx, audit)
+	return service.NewAppService(f.apps, f.keys, postgres.NewConnectionRepo(f.pool), plainCipher{}, f.tx, audit)
 }
 
 func actorCtx() context.Context {

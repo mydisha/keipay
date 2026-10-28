@@ -22,6 +22,7 @@ const allPaths = [
   "/",
   "/apps",
   "/connections",
+  "/connections/new",
   "/webhooks",
   "/payments",
   "/reconciliation",
@@ -159,7 +160,7 @@ test.describe("shell", () => {
 
   test("test mode, theme and sidebar state persist; the palette navigates", async ({ page }) => {
     await signInToDashboard(page);
-    const banner = page.getByText(/The Apps list and new apps follow this switch/);
+    const banner = page.getByText(/The Apps and Connections lists, new apps and new connections follow this switch/);
     await expect(banner).toHaveCount(0);
 
     await page.getByRole("switch", { name: "Test mode" }).click();

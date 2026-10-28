@@ -47,8 +47,8 @@ test("the session cookie is HttpOnly and nothing about it is in web storage", as
 
 test("an unsafe call without X-CSRF-Token is refused even with a session", async ({ page }) => {
   await signInToDashboard(page);
-  const response = await page.request.post("/admin/tenants", {
-    data: { name: "No CSRF", slug: `nocsrf-${Date.now().toString(36)}` },
+  const response = await page.request.post("/admin/apps", {
+    data: { name: "No CSRF", slug: `nocsrf-${Date.now().toString(36)}`, environment: "test" },
   });
   expect(response.status()).toBe(403);
   expect(await errorCode(response)).toBe("invalid_csrf_token");

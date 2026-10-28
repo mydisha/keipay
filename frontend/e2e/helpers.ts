@@ -67,6 +67,77 @@ export async function expectAuditAction(page: Page, action: string) {
   throw new Error(`audit log has no ${action} entry`);
 }
 
+/** The Apps list starts filtered to the Test/Live mode (live by default); show every environment. */
+export async function showAllEnvironments(page: Page) {
+  await page
+    .getByRole("group", { name: "Filter by environment" })
+    .getByRole("button", { name: "All", exact: true })
+    .click();
+  await settled(page);
+}
+
+/**
+ * Reads the values a SecretRevealDialog shows, checks that it can't be
+ * dismissed before "I have saved this" is ticked, then closes it.
+ */
+export async function acknowledgeSecrets(page: Page, title: string, labels: string[]) {
+  const dialog = page.getByRole("dialog", { name: title });
+  await expect(dialog).toBeVisible();
+  const values: Record<string, string> = {};
+  for (const label of labels) {
+    const value = dialog.locator("dt", { hasText: new RegExp(`^${label}$`) }).locator("xpath=following-sibling::dd[1]//code");
+    values[label] = (await value.innerText()).trim();
+    await expect(dialog.getByRole("button", { name: `Copy ${label}` })).toBeVisible();
+  }
+  const done = dialog.getByRole("button", { name: "Done" });
+  await expect(done).toBeDisabled();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("checkbox", { name: "I have saved this" }).check();
+  await done.click();
+  await expect(dialog).toBeHidden();
+  return values;
+}
+
+export interface CreatedApp {
+  id: string;
+  slug: string;
+  apiKey: string;
+  apiSecret: string;
+  webhookSecret: string;
+}
+
+/** Creates an app through the console's dialog and returns the one-time credentials. Ends on its detail page. */
+export async function createAppInConsole(
+  page: Page,
+  { name, environment = "Test", metadata }: { name: string; environment?: "Test" | "Live"; metadata?: string },
+): Promise<CreatedApp> {
+  await page.goto("/apps");
+  await settled(page);
+  await page.getByRole("button", { name: "Create app" }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Create app" });
+  await dialog.getByLabel("Name").fill(name);
+  const slug = await dialog.getByLabel("Slug").inputValue();
+  await dialog.getByRole("radio", { name: environment }).click();
+  if (metadata) await dialog.getByLabel("Metadata (optional)").fill(metadata);
+  await dialog.getByRole("button", { name: "Create app" }).click();
+  const secrets = await acknowledgeSecrets(page, "Save these credentials", [
+    "API key",
+    "API secret",
+    "Webhook signing secret",
+  ]);
+  await expect(page).toHaveURL(/\/apps\/app_[0-9A-Z]{26}$/);
+  await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
+  const id = new URL(page.url()).pathname.split("/").pop()!;
+  return {
+    id,
+    slug,
+    apiKey: secrets["API key"]!,
+    apiSecret: secrets["API secret"]!,
+    webhookSecret: secrets["Webhook signing secret"]!,
+  };
+}
+
 export async function errorCode(response: APIResponse): Promise<string | undefined> {
   const body = (await response.json().catch(() => null)) as { error?: { code?: string } } | null;
   return body?.error?.code;

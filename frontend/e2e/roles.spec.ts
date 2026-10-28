@@ -1,4 +1,4 @@
-import { expect, test, type Browser, type Page } from "@playwright/test";
+import { expect, test, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import {
   errorCode,
   expectAuditAction,
@@ -6,6 +6,7 @@ import {
   ownerEmail,
   requireOwnerCredentials,
   settled,
+  showAllEnvironments,
   signIn,
   signInToDashboard,
 } from "./helpers";
@@ -69,6 +70,10 @@ async function firstSignIn(browser: Browser, email: string, temporary: string, c
   return { context, page };
 }
 
+async function csrfToken(context: BrowserContext) {
+  return (await context.cookies()).find((c) => c.name === "keipay_csrf")?.value ?? "";
+}
+
 function settingsTabs(page: Page) {
   return page.getByRole("navigation", { name: "Settings sections" }).getByRole("link");
 }
@@ -96,9 +101,26 @@ test("roles shape the console and disabling ends a session", async ({ page, brow
   const viewer = await firstSignIn(browser, viewerEmail, viewerTemp, chosen);
   await viewer.page.goto("/apps");
   await settled(viewer.page);
+  await showAllEnvironments(viewer.page);
   await expect(viewer.page.getByText("Demo App").first()).toBeVisible();
   await expect(viewer.page.getByRole("button", { name: "Create app" })).toHaveCount(0);
-  await expect(viewer.page.getByRole("button", { name: /^Actions for/ })).toHaveCount(0);
+  // The app's pages are readable but offer no write action (T-61).
+  await viewer.page.getByRole("link", { name: "Demo App" }).first().click();
+  await expect(viewer.page.getByRole("heading", { level: 1, name: "Demo App" })).toBeVisible();
+  for (const name of ["Edit", "Disable", "Enable"]) {
+    await expect(viewer.page.getByRole("button", { name, exact: true })).toHaveCount(0);
+  }
+  await viewer.page.getByRole("navigation", { name: "App sections" }).getByRole("link", { name: "API keys" }).click();
+  await settled(viewer.page);
+  await expect(viewer.page.getByText(/kp_test_/).first()).toBeVisible();
+  await expect(viewer.page.getByRole("button", { name: "Create key" })).toHaveCount(0);
+  await expect(viewer.page.getByRole("button", { name: /^Actions for key/ })).toHaveCount(0);
+  const write = await viewer.page.request.post("/admin/apps", {
+    data: { name: "Viewer app", slug: `viewer-${suffix}`, environment: "test" },
+    headers: { "X-CSRF-Token": await csrfToken(viewer.context) },
+  });
+  expect(write.status()).toBe(403);
+  expect(await errorCode(write)).toBe("forbidden");
   await viewer.page.goto("/settings");
   await expect(settingsTabs(viewer.page)).toHaveText(["Account"]);
   await viewer.page.goto("/settings/users");

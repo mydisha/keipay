@@ -4,17 +4,20 @@ import {
   expectNoHorizontalScroll,
   requireOwnerCredentials,
   settled,
+  showAllEnvironments,
   signInToDashboard,
   signOut,
 } from "./helpers";
 
-// T-55: sign in with email, visit every section, sign out; mobile fits.
+// T-55 / T-60: sign in with email, visit every section and the app detail
+// tabs, sign out; mobile fits. The seeded Demo App is a test app, and the
+// Apps list starts at the live mode, so the specs pick All first.
 
 requireOwnerCredentials();
 
 const pages = [
   { link: "Dashboard", heading: "Dashboard", path: "/" },
-  { link: "Apps", heading: "Apps", path: "/apps", expectText: "Demo App" },
+  { link: "Apps", heading: "Apps", path: "/apps" },
   { link: "Connections", heading: "Connections", path: "/connections" },
   { link: "Webhooks", heading: "Webhooks", path: "/webhooks" },
   { link: "Payments", heading: "Payments", path: "/payments" },
@@ -29,6 +32,33 @@ async function expectPageReady(page: Page, item: (typeof pages)[number]) {
   if (item.expectText) await expect(page.getByText(item.expectText).first()).toBeVisible();
 }
 
+const appTabs = [
+  { name: "Overview", suffix: "", expectText: "Details" },
+  { name: "API keys", suffix: "/keys", expectText: "kp_test_" },
+  { name: "Webhooks", suffix: "/webhooks", expectText: "Webhook endpoints are coming soon" },
+  { name: "Routing", suffix: "/routing", expectText: "Routing is coming soon" },
+];
+
+/** On /apps: shows the Demo App (after choosing All) and opens it; returns its detail path. */
+async function openDemoApp(page: Page) {
+  await showAllEnvironments(page);
+  await page.getByRole("link", { name: "Demo App" }).first().click();
+  await expect(page).toHaveURL(/\/apps\/app_[0-9A-Z]{26}$/);
+  await expect(page.getByRole("heading", { level: 1, name: "Demo App" })).toBeVisible();
+  return new URL(page.url()).pathname;
+}
+
+/** Visits each app tab through its link and checks the content and the layout. */
+async function visitAppTabs(page: Page, detailPath: string, checkScroll: boolean) {
+  for (const tab of appTabs) {
+    await page.getByRole("navigation", { name: "App sections" }).getByRole("link", { name: tab.name }).click();
+    await expect(page).toHaveURL(new RegExp(`${detailPath}${tab.suffix}$`));
+    await settled(page);
+    await expect(page.getByText(tab.expectText).first()).toBeVisible();
+    if (checkScroll) await expectNoHorizontalScroll(page, `${detailPath}${tab.suffix}`);
+  }
+}
+
 test.describe("desktop", () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
@@ -39,7 +69,10 @@ test.describe("desktop", () => {
       await nav.getByRole("link", { name: item.link, exact: true }).click();
       await expectPageReady(page, item);
     }
-    await expectAuditAction(page, "tenant.create");
+    await page.goto("/apps");
+    await settled(page);
+    await visitAppTabs(page, await openDemoApp(page), false);
+    await expectAuditAction(page, "app.create");
     await expectAuditAction(page, "user.setup");
     await signOut(page);
   });
@@ -54,6 +87,17 @@ test.describe("deep links", () => {
       await page.goto(item.path);
       await expectPageReady(page, item);
     }
+    await page.goto("/apps");
+    await settled(page);
+    const detail = await openDemoApp(page);
+    for (const tab of appTabs) {
+      await page.goto(`${detail}${tab.suffix}`);
+      await expect(page.getByRole("heading", { level: 1, name: "Demo App" })).toBeVisible();
+      await settled(page);
+      await expect(page.getByText(tab.expectText).first()).toBeVisible();
+    }
+    await page.goto("/apps/app_00000000000000000000000000");
+    await expect(page.getByText("App not found")).toBeVisible();
     for (const path of ["/settings/users", "/settings/audit-log"]) {
       await page.goto(path);
       await settled(page);
@@ -89,6 +133,12 @@ test.describe("mobile 390x844", () => {
       await settled(page);
       await expectNoHorizontalScroll(page, path);
     }
+    await page.goto("/apps");
+    await settled(page);
+    const detail = await openDemoApp(page);
+    await expectNoHorizontalScroll(page, detail);
+    await visitAppTabs(page, detail, true);
+    await expect(page.locator("table")).toHaveCount(0);
     // The users table is cards on a phone.
     await page.goto("/settings/users");
     await settled(page);

@@ -84,7 +84,7 @@ func TimingFuncWithResult(log *zap.Logger, operation string) (time.Duration, fun
 //
 // Example:
 //
-//	reqLog := logger.WithRequestContext(log, requestID, tenantID)
+//	reqLog := logger.WithRequestContext(log, requestID, appID)
 //	reqLog.Info("processing payment")
 func WithRequestContext(log *zap.Logger, requestID string, fields ...zap.Field) *zap.Logger {
 	base := []zap.Field{zap.String(FieldRequestID, requestID)}

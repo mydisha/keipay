@@ -4,11 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
@@ -22,56 +21,84 @@ type PaymentRepo struct {
 // NewPaymentRepo constructs a PaymentRepo.
 func NewPaymentRepo(db *pgxpool.Pool) *PaymentRepo { return &PaymentRepo{db: db} }
 
-const paymentColumns = `id, tenant_id, order_id, external_id, xendit_invoice_id, amount,
-	currency, status, description, invoice_url, payer_email, items, expires_at, paid_at,
-	settled_at, expected_settlement_at, created_at, updated_at`
+// paymentSelect joins the owning app so every payment carries its summary.
+const paymentSelect = `SELECT p.id, p.public_id, p.app_id, a.public_id, a.slug, a.name, a.environment,
+	p.order_id, p.external_id, p.xendit_invoice_id, p.amount, p.currency, p.status, p.description,
+	p.invoice_url, p.payer_email, p.items, p.metadata, COALESCE(p.idempotency_key, ''),
+	COALESCE(p.idempotency_fingerprint, ''), p.expires_at, p.paid_at, p.settled_at,
+	p.expected_settlement_at, p.created_at, p.updated_at
+	FROM payments p JOIN apps a ON a.id = p.app_id`
 
 func scanPayment(row pgx.Row) (*domain.Payment, error) {
 	var p domain.Payment
-	var items []byte
-	err := row.Scan(&p.ID, &p.TenantID, &p.OrderID, &p.ExternalID, &p.XenditInvoiceID,
-		&p.Amount, &p.Currency, &p.Status, &p.Description, &p.InvoiceURL, &p.PayerEmail,
-		&items, &p.ExpiresAt, &p.PaidAt, &p.SettledAt, &p.ExpectedSettlementAt,
-		&p.CreatedAt, &p.UpdatedAt)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, domain.ErrNotFound
-		}
-		return nil, err
+	var env string
+	var items, meta []byte
+	err := row.Scan(&p.ID, &p.PublicID, &p.AppID, &p.App.PublicID, &p.App.Slug, &p.App.Name, &env,
+		&p.OrderID, &p.ExternalID, &p.XenditInvoiceID, &p.Amount, &p.Currency, &p.Status, &p.Description,
+		&p.InvoiceURL, &p.PayerEmail, &items, &meta, &p.IdempotencyKey, &p.IdempotencyFingerprint,
+		&p.ExpiresAt, &p.PaidAt, &p.SettledAt, &p.ExpectedSettlementAt, &p.CreatedAt, &p.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, domain.ErrNotFound
 	}
+	if err != nil {
+		return nil, fmt.Errorf("scan payment: %w", err)
+	}
+	p.App.Environment = domain.Environment(env)
 	if len(items) > 0 {
 		if err := json.Unmarshal(items, &p.Items); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decode payment items: %w", err)
 		}
+	}
+	if p.Metadata, err = decodeMetadata(meta); err != nil {
+		return nil, err
 	}
 	return &p, nil
 }
 
-// Create inserts a payment and populates generated fields.
+// nullIfEmpty stores "" as SQL NULL, so the partial unique index ignores
+// payments created without an idempotency key.
+func nullIfEmpty(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+// Create inserts a payment and fills in its id and timestamps.
 func (r *PaymentRepo) Create(ctx context.Context, p *domain.Payment) error {
 	var items []byte
 	if len(p.Items) > 0 {
 		b, err := json.Marshal(p.Items)
 		if err != nil {
-			return err
+			return fmt.Errorf("encode payment items: %w", err)
 		}
 		items = b
 	}
-	const q = `INSERT INTO payments (tenant_id, order_id, external_id, xendit_invoice_id,
-		amount, currency, status, description, invoice_url, payer_email, items, expires_at,
-		expected_settlement_at, raw)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-		RETURNING id, created_at, updated_at`
-	err := conn(ctx, r.db).QueryRow(ctx, q, p.TenantID, p.OrderID, p.ExternalID, p.XenditInvoiceID,
-		p.Amount, p.Currency, p.Status, p.Description, p.InvoiceURL, p.PayerEmail,
-		items, p.ExpiresAt, p.ExpectedSettlementAt, p.Raw).
-		Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
+	meta, err := encodeMetadata(p.Metadata)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return domain.ErrConflict
-		}
 		return err
+	}
+	const q = `INSERT INTO payments (public_id, app_id, order_id, external_id, xendit_invoice_id,
+		amount, currency, status, description, invoice_url, payer_email, items, metadata,
+		idempotency_key, idempotency_fingerprint, expires_at, expected_settlement_at, raw)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+		RETURNING id, created_at, updated_at`
+	err = conn(ctx, r.db).QueryRow(ctx, q, p.PublicID, p.AppID, p.OrderID, p.ExternalID, p.XenditInvoiceID,
+		p.Amount, p.Currency, p.Status, p.Description, p.InvoiceURL, p.PayerEmail, items, meta,
+		nullIfEmpty(p.IdempotencyKey), nullIfEmpty(p.IdempotencyFingerprint), p.ExpiresAt,
+		p.ExpectedSettlementAt, p.Raw).
+		Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
+	switch uniqueConstraint(err) {
+	case "":
+	case "payments_app_order_key":
+		return domain.ErrDuplicateOrderID
+	case "payments_app_idempotency_key":
+		return domain.ErrDuplicateIdempotencyKey
+	default:
+		return fmt.Errorf("%w: payment exists", domain.ErrConflict)
+	}
+	if err != nil {
+		return fmt.Errorf("insert payment: %w", err)
 	}
 	return nil
 }
@@ -85,7 +112,7 @@ func (r *PaymentRepo) UpdateStatus(ctx context.Context, id int64, status domain.
 		WHERE id=$1`
 	ct, err := conn(ctx, r.db).Exec(ctx, q, id, status, paidAt, settledAt, raw)
 	if err != nil {
-		return err
+		return fmt.Errorf("update payment status: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
 		return domain.ErrNotFound
@@ -93,81 +120,74 @@ func (r *PaymentRepo) UpdateStatus(ctx context.Context, id int64, status domain.
 	return nil
 }
 
-// GetByID loads a payment by primary key.
-func (r *PaymentRepo) GetByID(ctx context.Context, id int64) (*domain.Payment, error) {
-	q := `SELECT ` + paymentColumns + ` FROM payments WHERE id=$1`
-	return scanPayment(conn(ctx, r.db).QueryRow(ctx, q, id))
+func (r *PaymentRepo) getOne(ctx context.Context, where string, args ...any) (*domain.Payment, error) {
+	return scanPayment(conn(ctx, r.db).QueryRow(ctx, paymentSelect+` WHERE `+where, args...))
 }
 
-// GetByExternalID loads a payment by its Xendit external_id.
-func (r *PaymentRepo) GetByExternalID(ctx context.Context, externalID string) (*domain.Payment, error) {
-	q := `SELECT ` + paymentColumns + ` FROM payments WHERE external_id=$1`
-	return scanPayment(conn(ctx, r.db).QueryRow(ctx, q, externalID))
+// GetByReferenceForUpdate loads the payment whose external_id equals ref and
+// locks its row until the caller's transaction ends, so concurrent callbacks
+// for one payment apply in turn.
+func (r *PaymentRepo) GetByReferenceForUpdate(ctx context.Context, ref string) (*domain.Payment, error) {
+	return r.getOne(ctx, `p.external_id=$1 FOR UPDATE OF p`, ref)
 }
 
-// GetByExternalIDForUpdate loads a payment and locks its row until the caller's
-// transaction ends, so concurrent callbacks for one payment apply in turn.
-func (r *PaymentRepo) GetByExternalIDForUpdate(ctx context.Context, externalID string) (*domain.Payment, error) {
-	q := `SELECT ` + paymentColumns + ` FROM payments WHERE external_id=$1 FOR UPDATE`
-	return scanPayment(conn(ctx, r.db).QueryRow(ctx, q, externalID))
+// GetByPublicID loads one of the app's payments by pay_ id.
+func (r *PaymentRepo) GetByPublicID(ctx context.Context, appID int64, publicID string) (*domain.Payment, error) {
+	return r.getOne(ctx, `p.app_id=$1 AND p.public_id=$2`, appID, publicID)
 }
 
-// List returns filtered payments plus the total count matching the filter.
-func (r *PaymentRepo) List(ctx context.Context, f domain.PaymentFilter) ([]domain.Payment, int64, error) {
-	var conds []string
-	var args []any
-	i := 1
-	if f.TenantID != nil {
-		conds = append(conds, "tenant_id=$"+itoa(i))
-		args = append(args, *f.TenantID)
-		i++
+// GetByID loads one of the app's payments by its legacy integer id.
+func (r *PaymentRepo) GetByID(ctx context.Context, appID, id int64) (*domain.Payment, error) {
+	return r.getOne(ctx, `p.app_id=$1 AND p.id=$2`, appID, id)
+}
+
+// GetByOrderID loads one of the app's payments by order_id.
+func (r *PaymentRepo) GetByOrderID(ctx context.Context, appID int64, orderID string) (*domain.Payment, error) {
+	return r.getOne(ctx, `p.app_id=$1 AND p.order_id=$2`, appID, orderID)
+}
+
+// GetByIdempotencyKey loads the app's payment created with an Idempotency-Key.
+func (r *PaymentRepo) GetByIdempotencyKey(ctx context.Context, appID int64, key string) (*domain.Payment, error) {
+	return r.getOne(ctx, `p.app_id=$1 AND p.idempotency_key=$2`, appID, key)
+}
+
+// List returns one page of payments, newest first, using a keyset on
+// (created_at, public_id).
+func (r *PaymentRepo) List(ctx context.Context, f domain.PaymentFilter, p domain.Page) (domain.PageResult[domain.Payment], error) {
+	var w filters
+	if f.AppPublicID != nil {
+		w.add("a.public_id = ?", *f.AppPublicID)
 	}
 	if f.Status != nil {
-		conds = append(conds, "status=$"+itoa(i))
-		args = append(args, *f.Status)
-		i++
+		w.add("p.status = ?", string(*f.Status))
 	}
 	if f.From != nil {
-		conds = append(conds, "created_at>=$"+itoa(i))
-		args = append(args, *f.From)
-		i++
+		w.add("p.created_at >= ?", *f.From)
 	}
 	if f.To != nil {
-		conds = append(conds, "created_at<=$"+itoa(i))
-		args = append(args, *f.To)
-		i++
+		w.add("p.created_at <= ?", *f.To)
 	}
-	where := ""
-	if len(conds) > 0 {
-		where = " WHERE " + strings.Join(conds, " AND ")
+	if p.After != nil {
+		w.add("(p.created_at, p.public_id) < (?, ?)", p.After.Time, p.After.ID)
 	}
-
-	var total int64
-	if err := conn(ctx, r.db).QueryRow(ctx, `SELECT count(*) FROM payments`+where, args...).Scan(&total); err != nil {
-		return nil, 0, err
-	}
-
-	limit := f.Limit
-	if limit <= 0 || limit > 200 {
-		limit = 50
-	}
-	q := `SELECT ` + paymentColumns + ` FROM payments` + where +
-		` ORDER BY id DESC LIMIT $` + itoa(i) + ` OFFSET $` + itoa(i+1)
-	args = append(args, limit, f.Offset)
-
-	rows, err := conn(ctx, r.db).Query(ctx, q, args...)
+	q := paymentSelect + w.where() + ` ORDER BY p.created_at DESC, p.public_id DESC LIMIT ` + w.arg(p.Limit+1)
+	rows, err := conn(ctx, r.db).Query(ctx, q, w.args...)
 	if err != nil {
-		return nil, 0, err
+		return domain.PageResult[domain.Payment]{}, fmt.Errorf("list payments: %w", err)
 	}
 	defer rows.Close()
-
-	var out []domain.Payment
+	items := make([]domain.Payment, 0, p.Limit+1)
 	for rows.Next() {
-		p, err := scanPayment(rows)
+		pay, err := scanPayment(rows)
 		if err != nil {
-			return nil, 0, err
+			return domain.PageResult[domain.Payment]{}, err
 		}
-		out = append(out, *p)
+		items = append(items, *pay)
 	}
-	return out, total, rows.Err()
+	if err := rows.Err(); err != nil {
+		return domain.PageResult[domain.Payment]{}, fmt.Errorf("list payments: %w", err)
+	}
+	return keysetPage(items, p.Limit, func(pay domain.Payment) domain.Cursor {
+		return domain.Cursor{Time: pay.CreatedAt, ID: pay.PublicID}
+	}), nil
 }

@@ -67,7 +67,7 @@ func newAdminHarness() *adminHarness {
 	}
 	g.Any("/public", ok)
 	g.GET("/me", RequireSession(log), ok)
-	g.POST("/write", RequireSession(log), RequirePasswordChanged(), RequirePermission(domain.PermTenantsWrite, log), ok)
+	g.POST("/write", RequireSession(log), RequirePasswordChanged(), RequirePermission(domain.PermAppsWrite, log), ok)
 	h.engine = r
 	return h
 }
@@ -204,7 +204,7 @@ func TestPasswordGateAndPermission(t *testing.T) {
 	}
 	fields := events[0].ContextMap()
 	if fields["user_id"] != "usr_01JBKQ7Z8M4X2Y6V3N9T5R1W0D" || fields["route"] != "POST /admin/write" ||
-		fields["permission"] != "tenants:write" || fields["client_ip"] != "198.51.100.9" || fields["request_id"] != "req-42" {
+		fields["permission"] != "apps:write" || fields["client_ip"] != "198.51.100.9" || fields["request_id"] != "req-42" {
 		t.Fatalf("forbidden fields = %v", fields)
 	}
 }

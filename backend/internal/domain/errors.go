@@ -11,8 +11,6 @@ var (
 	ErrInvalidInput = errors.New("invalid input")
 	// ErrUnauthorized is returned when authentication or signature checks fail.
 	ErrUnauthorized = errors.New("unauthorized")
-	// ErrInactiveTenant is returned when a tenant exists but is disabled.
-	ErrInactiveTenant = errors.New("tenant inactive")
 )
 
 // ErrorCode is a stable, machine-readable error code sent to API clients. The
@@ -49,6 +47,9 @@ const (
 	CodeLastOwner               ErrorCode = "last_owner"
 	CodeCannotModifySelf        ErrorCode = "cannot_modify_self"
 	CodeRateLimited             ErrorCode = "rate_limited"
+	CodeAPIKeyRevoked           ErrorCode = "api_key_revoked"
+	CodeAPIKeyExpired           ErrorCode = "api_key_expired"
+	CodeIdempotencyKeyReused    ErrorCode = "idempotency_key_reused"
 )
 
 // ErrorCodes returns every defined error code.
@@ -62,6 +63,7 @@ func ErrorCodes() []ErrorCode {
 		CodeInternal, CodeSessionRequired, CodeSessionExpired, CodeForbidden,
 		CodePasswordChangeRequired, CodeInvalidCSRFToken, CodeInvalidSetupToken,
 		CodeSetupCompleted, CodeLastOwner, CodeCannotModifySelf, CodeRateLimited,
+		CodeAPIKeyRevoked, CodeAPIKeyExpired, CodeIdempotencyKeyReused,
 	}
 }
 
@@ -156,6 +158,18 @@ var (
 	ErrSetupCompleted = &Error{Code: CodeSetupCompleted, Message: "setup already completed"}
 	// ErrLastOwner refuses a change that would leave no active owner.
 	ErrLastOwner = &Error{Code: CodeLastOwner, Message: "the change would leave no active owner"}
+	// ErrUnknownAPIKey is an X-Api-Key that matches no key of the right environment.
+	ErrUnknownAPIKey = &Error{Code: CodeUnknownAPIKey, Message: "unknown api key", Err: ErrUnauthorized}
+	// ErrAPIKeyRevoked is a key that was revoked.
+	ErrAPIKeyRevoked = &Error{Code: CodeAPIKeyRevoked, Message: "api key revoked", Err: ErrUnauthorized}
+	// ErrAPIKeyExpired is a key whose expires_at has passed.
+	ErrAPIKeyExpired = &Error{Code: CodeAPIKeyExpired, Message: "api key expired", Err: ErrUnauthorized}
+	// ErrAppDisabled is a /v1 request for a disabled app. The code predates
+	// apps and keeps its name.
+	ErrAppDisabled = &Error{Code: CodeTenantInactive, Message: "app disabled"}
+	// ErrIdempotencyKeyReused is an Idempotency-Key sent again with a
+	// different request.
+	ErrIdempotencyKeyReused = &Error{Code: CodeIdempotencyKeyReused, Message: "idempotency key already used for a different request", Err: ErrConflict}
 	// ErrCannotModifySelf refuses disabling or resetting your own account.
 	ErrCannotModifySelf = &Error{Code: CodeCannotModifySelf, Message: "you cannot do this to your own account"}
 )

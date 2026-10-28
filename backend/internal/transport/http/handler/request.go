@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-playground/validator/v10"
@@ -40,15 +41,8 @@ func newValidator() *validator.Validate {
 // bindJSON decodes the request body into dst and validates it. Failures are
 // invalid_request errors listing the offending fields.
 func bindJSON(c *gin.Context, dst any) error {
-	if c.Request.Body == nil {
-		return invalidBody()
-	}
-	if err := json.NewDecoder(c.Request.Body).Decode(dst); err != nil {
-		var typeErr *json.UnmarshalTypeError
-		if errors.As(err, &typeErr) && typeErr.Field != "" {
-			return invalidBody(domain.FieldError{Field: typeErr.Field, Rule: "type"})
-		}
-		return invalidBody()
+	if err := decodeJSON(c, dst); err != nil {
+		return err
 	}
 	if err := validate.Struct(dst); err != nil {
 		var verrs validator.ValidationErrors
@@ -60,6 +54,22 @@ func bindJSON(c *gin.Context, dst any) error {
 			fields = append(fields, domain.FieldError{Field: jsonPath(fe.Namespace()), Rule: fe.Tag()})
 		}
 		return invalidBody(fields...)
+	}
+	return nil
+}
+
+// decodeJSON decodes the request body into dst without validating it. A
+// field of the wrong JSON type fails with rule type.
+func decodeJSON(c *gin.Context, dst any) error {
+	if c.Request.Body == nil {
+		return invalidBody()
+	}
+	if err := json.NewDecoder(c.Request.Body).Decode(dst); err != nil {
+		var typeErr *json.UnmarshalTypeError
+		if errors.As(err, &typeErr) && typeErr.Field != "" {
+			return invalidBody(domain.FieldError{Field: typeErr.Field, Rule: "type"})
+		}
+		return invalidBody()
 	}
 	return nil
 }
@@ -105,11 +115,69 @@ func pathID(c *gin.Context) (int64, error) {
 // pathUserID parses the :id path parameter as a usr_ id (lower case
 // accepted) and returns its canonical form.
 func pathUserID(c *gin.Context) (string, error) {
-	uid, err := id.ParseWithPrefix(c.Param("id"), id.User)
+	return pathPublicID(c, "id", id.User)
+}
+
+// pathPublicID parses a path parameter as a public id with the given prefix
+// (lower case accepted) and returns its canonical form.
+func pathPublicID(c *gin.Context, param string, prefix id.Prefix) (string, error) {
+	v, err := id.ParseWithPrefix(c.Param(param), prefix)
 	if err != nil {
-		return "", invalidRequest("invalid path parameter", domain.FieldError{Field: "id", Rule: "public_id"})
+		return "", invalidRequest("invalid path parameter", domain.FieldError{Field: param, Rule: "public_id"})
 	}
-	return uid, nil
+	return v, nil
+}
+
+// queryPublicID parses an optional query parameter as a public id. Absent
+// is nil; a malformed value fails with rule public_id.
+func queryPublicID(c *gin.Context, param string, prefix id.Prefix) (*string, error) {
+	raw, ok := c.GetQuery(param)
+	if !ok || raw == "" {
+		return nil, nil
+	}
+	v, err := id.ParseWithPrefix(raw, prefix)
+	if err != nil {
+		return nil, invalidRequest("invalid query parameter", domain.FieldError{Field: param, Rule: "public_id"})
+	}
+	return &v, nil
+}
+
+// lenientPublicID is queryPublicID for the legacy offset lists, which ignore
+// a malformed value.
+func lenientPublicID(c *gin.Context, param string, prefix id.Prefix) *string {
+	v, err := queryPublicID(c, param, prefix)
+	if err != nil {
+		return nil
+	}
+	return v
+}
+
+// queryTime parses an optional RFC 3339 query parameter; a malformed value
+// fails with rule datetime.
+func queryTime(c *gin.Context, param string) (*time.Time, error) {
+	raw := c.Query(param)
+	if raw == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return nil, invalidRequest("invalid query parameter", domain.FieldError{Field: param, Rule: "datetime"})
+	}
+	return &t, nil
+}
+
+// queryEnum parses an optional query parameter that must satisfy valid; a
+// value that does not fails with rule oneof.
+func queryEnum[T ~string](c *gin.Context, param string, valid func(T) bool) (*T, error) {
+	raw := c.Query(param)
+	if raw == "" {
+		return nil, nil
+	}
+	v := T(raw)
+	if !valid(v) {
+		return nil, invalidRequest("invalid query parameter", domain.FieldError{Field: param, Rule: "oneof"})
+	}
+	return &v, nil
 }
 
 // clientMeta describes the caller for sessions, rate limits and audit.

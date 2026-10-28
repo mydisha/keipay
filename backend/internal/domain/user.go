@@ -29,8 +29,8 @@ type Permission string
 
 // Permissions checked by the admin API.
 const (
-	PermTenantsRead      Permission = "tenants:read"
-	PermTenantsWrite     Permission = "tenants:write"
+	PermAppsRead         Permission = "apps:read"
+	PermAppsWrite        Permission = "apps:write"
 	PermPaymentsRead     Permission = "payments:read"
 	PermDeliveriesRead   Permission = "deliveries:read"
 	PermDeliveriesReplay Permission = "deliveries:replay"
@@ -41,7 +41,7 @@ const (
 // AllPermissions returns every defined permission, sorted.
 func AllPermissions() []Permission {
 	return sortedPermissions(
-		PermTenantsRead, PermTenantsWrite, PermPaymentsRead, PermDeliveriesRead,
+		PermAppsRead, PermAppsWrite, PermPaymentsRead, PermDeliveriesRead,
 		PermDeliveriesReplay, PermAuditRead, PermUsersManage,
 	)
 }
@@ -52,10 +52,10 @@ func AllPermissions() []Permission {
 var RolePermissions = map[Role][]Permission{
 	RoleOwner: AllPermissions(),
 	RoleAdmin: sortedPermissions(
-		PermTenantsRead, PermTenantsWrite, PermPaymentsRead, PermDeliveriesRead,
+		PermAppsRead, PermAppsWrite, PermPaymentsRead, PermDeliveriesRead,
 		PermDeliveriesReplay, PermAuditRead,
 	),
-	RoleViewer: sortedPermissions(PermTenantsRead, PermPaymentsRead, PermDeliveriesRead),
+	RoleViewer: sortedPermissions(PermAppsRead, PermPaymentsRead, PermDeliveriesRead),
 }
 
 func sortedPermissions(ps ...Permission) []Permission {

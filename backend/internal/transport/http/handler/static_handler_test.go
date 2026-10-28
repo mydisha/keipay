@@ -55,7 +55,7 @@ func TestSPA_ServesBuiltAssetWithLongCache(t *testing.T) {
 
 func TestSPA_ClientRoutesFallBackToIndex(t *testing.T) {
 	r := newSPAEngine(t)
-	for _, target := range []string{"/", "/tenants", "/payments?page=2", "/login", "/assets/", "/assets/missing.js"} {
+	for _, target := range []string{"/", "/apps", "/payments?page=2", "/login", "/assets/", "/assets/missing.js"} {
 		w := serve(r, http.MethodGet, target)
 		if w.Code != http.StatusOK || w.Body.String() != "<html>console</html>" {
 			t.Fatalf("%s: got %d %q", target, w.Code, w.Body.String())
@@ -67,7 +67,7 @@ func TestSPA_ClientRoutesFallBackToIndex(t *testing.T) {
 }
 
 func TestSPA_HeadIsServed(t *testing.T) {
-	w := serve(newSPAEngine(t), http.MethodHead, "/tenants")
+	w := serve(newSPAEngine(t), http.MethodHead, "/apps")
 	if w.Code != http.StatusOK {
 		t.Fatalf("got %d", w.Code)
 	}
@@ -124,7 +124,7 @@ func TestSPA_PrefixMatchIsSegmentAware(t *testing.T) {
 func TestSPA_NonGetIsNotFound(t *testing.T) {
 	r := newSPAEngine(t)
 	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodDelete} {
-		if w := serve(r, method, "/tenants"); w.Code != http.StatusNotFound {
+		if w := serve(r, method, "/apps"); w.Code != http.StatusNotFound {
 			t.Fatalf("%s: got %d, want 404", method, w.Code)
 		}
 	}

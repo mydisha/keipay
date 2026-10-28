@@ -20,7 +20,7 @@ func newAuditSvc() (*AuditService, *memAuditRepo) {
 
 func TestAuditRecordWithoutActorFailsClosed(t *testing.T) {
 	svc, repo := newAuditSvc()
-	err := svc.Record(context.Background(), ActionTenantUpdate, domain.AuditTarget{Type: "tenant", ID: "1"}, nil, nil)
+	err := svc.Record(context.Background(), ActionAppUpdate, domain.AuditTarget{Type: "app", ID: "1"}, nil, nil)
 	if !errors.Is(err, ErrNoActor) {
 		t.Fatalf("err = %v, want ErrNoActor", err)
 	}
@@ -33,7 +33,7 @@ func TestAuditRecordRejectsInvalidActor(t *testing.T) {
 	for _, a := range []domain.Actor{{Type: "robot", ID: "x"}, {Type: domain.ActorAdmin}, {}} {
 		svc, repo := newAuditSvc()
 		ctx := domain.WithActor(context.Background(), a)
-		if err := svc.Record(ctx, ActionTenantUpdate, domain.AuditTarget{Type: "tenant", ID: "1"}, nil, nil); err == nil {
+		if err := svc.Record(ctx, ActionAppUpdate, domain.AuditTarget{Type: "app", ID: "1"}, nil, nil); err == nil {
 			t.Fatalf("actor %+v accepted", a)
 		}
 		if len(repo.logs) != 0 {
@@ -44,7 +44,7 @@ func TestAuditRecordRejectsInvalidActor(t *testing.T) {
 
 func TestAuditRecordStoresActorTargetAndSnapshots(t *testing.T) {
 	svc, repo := newAuditSvc()
-	err := svc.Record(adminCtx(), ActionTenantUpdate, domain.AuditTarget{Type: "tenant", ID: "7"},
+	err := svc.Record(adminCtx(), ActionAppUpdate, domain.AuditTarget{Type: "app", ID: "7"},
 		map[string]any{"name": "Old"}, map[string]any{"name": "Acme Ünïcode"})
 	if err != nil {
 		t.Fatalf("record: %v", err)
@@ -63,7 +63,7 @@ func TestAuditRecordStoresActorTargetAndSnapshots(t *testing.T) {
 	if l.Actor != want {
 		t.Fatalf("actor = %+v, want %+v", l.Actor, want)
 	}
-	if l.Action != ActionTenantUpdate || l.Target != (domain.AuditTarget{Type: "tenant", ID: "7"}) {
+	if l.Action != ActionAppUpdate || l.Target != (domain.AuditTarget{Type: "app", ID: "7"}) {
 		t.Fatalf("action/target = %s %+v", l.Action, l.Target)
 	}
 	assertJSON(t, "before", l.Before, map[string]any{"name": "Old"})
@@ -72,8 +72,8 @@ func TestAuditRecordStoresActorTargetAndSnapshots(t *testing.T) {
 
 func TestAuditRecordNilSnapshotsAreNull(t *testing.T) {
 	svc, repo := newAuditSvc()
-	var typedNil *tenantSnapshot
-	if err := svc.Record(adminCtx(), ActionTenantCreate, domain.AuditTarget{Type: "tenant", ID: "1"}, nil, typedNil); err != nil {
+	var typedNil *appSnapshot
+	if err := svc.Record(adminCtx(), ActionAppCreate, domain.AuditTarget{Type: "app", ID: "1"}, nil, typedNil); err != nil {
 		t.Fatalf("record: %v", err)
 	}
 	if repo.logs[0].Before != nil || repo.logs[0].After != nil {

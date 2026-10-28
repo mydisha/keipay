@@ -1,21 +1,16 @@
 package middleware
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
-	"github.com/mydisha/keipay/backend/internal/pkg/hmac"
 )
 
 type envelope struct {
@@ -47,108 +42,6 @@ func newEngine(mw ...gin.HandlerFunc) *gin.Engine {
 	handlers := append(mw, func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
 	r.Any("/x", handlers...)
 	return r
-}
-
-// --- TenantAuth ---
-
-type stubResolver struct {
-	tenants map[string]*domain.Tenant
-	err     error
-}
-
-func (s stubResolver) GetByAPIKey(_ context.Context, key string) (*domain.Tenant, error) {
-	if s.err != nil {
-		return nil, s.err
-	}
-	if t, ok := s.tenants[key]; ok {
-		return t, nil
-	}
-	return nil, domain.ErrNotFound
-}
-
-type memNonces map[string]bool
-
-func (m memNonces) Acquire(_ context.Context, key string) bool {
-	if m[key] {
-		return false
-	}
-	m[key] = true
-	return true
-}
-
-type stubDecryptor struct{ err error }
-
-func (s stubDecryptor) Decrypt(c string) (string, error) {
-	if s.err != nil {
-		return "", s.err
-	}
-	return strings.TrimPrefix(c, "enc:"), nil
-}
-
-const tenantSecret = "sk_test_secret"
-
-func signedRequest(apiKey, ts, body string) *http.Request {
-	req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(body))
-	req.Header.Set("X-Api-Key", apiKey)
-	req.Header.Set("X-Timestamp", ts)
-	req.Header.Set("X-Signature", hmac.Sign(tenantSecret, []byte(ts+"."+body)))
-	return req
-}
-
-func TestTenantAuth(t *testing.T) {
-	resolver := stubResolver{tenants: map[string]*domain.Tenant{
-		"kp_active":   {ID: 1, Active: true, APISecretEnc: "enc:" + tenantSecret},
-		"kp_inactive": {ID: 2, Active: false, APISecretEnc: "enc:" + tenantSecret},
-	}}
-	now := strconv.FormatInt(time.Now().Unix(), 10)
-	old := strconv.FormatInt(time.Now().Add(-10*time.Minute).Unix(), 10)
-
-	missingSig := signedRequest("kp_active", now, `{}`)
-	missingSig.Header.Del("X-Signature")
-	badSig := signedRequest("kp_active", now, `{}`)
-	badSig.Header.Set("X-Signature", strings.Repeat("0", 64))
-
-	cases := []struct {
-		name   string
-		req    *http.Request
-		auth   gin.HandlerFunc
-		status int
-		code   domain.ErrorCode
-	}{
-		{"missing headers", missingSig, TenantAuth(resolver, memNonces{}, stubDecryptor{}, zap.NewNop()), 401, domain.CodeMissingSignatureHeaders},
-		{"invalid timestamp", signedRequest("kp_active", "yesterday", `{}`), TenantAuth(resolver, memNonces{}, stubDecryptor{}, zap.NewNop()), 401, domain.CodeInvalidTimestamp},
-		{"timestamp out of range", signedRequest("kp_active", old, `{}`), TenantAuth(resolver, memNonces{}, stubDecryptor{}, zap.NewNop()), 401, domain.CodeTimestampOutOfRange},
-		{"unknown api key", signedRequest("kp_nope", now, `{}`), TenantAuth(resolver, memNonces{}, stubDecryptor{}, zap.NewNop()), 401, domain.CodeUnknownAPIKey},
-		{"lookup failure", signedRequest("kp_active", now, `{}`), TenantAuth(stubResolver{err: errors.New("redis down")}, memNonces{}, stubDecryptor{}, zap.NewNop()), 500, domain.CodeInternal},
-		{"inactive tenant", signedRequest("kp_inactive", now, `{}`), TenantAuth(resolver, memNonces{}, stubDecryptor{}, zap.NewNop()), 403, domain.CodeTenantInactive},
-		{"decrypt failure", signedRequest("kp_active", now, `{}`), TenantAuth(resolver, memNonces{}, stubDecryptor{err: errors.New("bad key")}, zap.NewNop()), 500, domain.CodeInternal},
-		{"invalid signature", badSig, TenantAuth(resolver, memNonces{}, stubDecryptor{}, zap.NewNop()), 401, domain.CodeInvalidSignature},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			w := httptest.NewRecorder()
-			newEngine(tc.auth).ServeHTTP(w, tc.req)
-			assertEnvelope(t, w, tc.status, tc.code)
-			if strings.Contains(w.Body.String(), "redis") || strings.Contains(w.Body.String(), "bad key") {
-				t.Fatalf("internal error text leaked: %s", w.Body.String())
-			}
-		})
-	}
-}
-
-func TestTenantAuthReplay(t *testing.T) {
-	resolver := stubResolver{tenants: map[string]*domain.Tenant{"kp_active": {ID: 1, Active: true, APISecretEnc: "enc:" + tenantSecret}}}
-	r := newEngine(TenantAuth(resolver, memNonces{}, stubDecryptor{}, zap.NewNop()))
-	now := strconv.FormatInt(time.Now().Unix(), 10)
-
-	w := httptest.NewRecorder()
-	r.ServeHTTP(w, signedRequest("kp_active", now, `{"a":1}`))
-	if w.Code != http.StatusOK {
-		t.Fatalf("first request: %d %s", w.Code, w.Body.String())
-	}
-	w = httptest.NewRecorder()
-	r.ServeHTTP(w, signedRequest("kp_active", now, `{"a":1}`))
-	assertEnvelope(t, w, http.StatusUnauthorized, domain.CodeReplayedRequest)
 }
 
 // --- XenditCallbackToken ---

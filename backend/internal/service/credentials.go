@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -122,6 +123,24 @@ func (f *fieldErrors) check(field, rule string) {
 	if rule != "" {
 		*f = append(*f, domain.FieldError{Field: field, Rule: rule})
 	}
+}
+
+// sorted returns the errors ordered by field, following order; fields not in
+// order (such as metadata.<key>) keep their place after the field they
+// belong to.
+func (f fieldErrors) sorted(order []string) fieldErrors {
+	rank := func(field string) int {
+		base, _, _ := strings.Cut(field, ".")
+		for i, o := range order {
+			if o == base {
+				return i
+			}
+		}
+		return len(order)
+	}
+	out := slices.Clone(f)
+	slices.SortStableFunc(out, func(a, b domain.FieldError) int { return rank(a.Field) - rank(b.Field) })
+	return out
 }
 
 func (f fieldErrors) err() error {

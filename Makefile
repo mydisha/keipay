@@ -96,7 +96,7 @@ down:
 migrate:
 	cd $(BACKEND_DIR) && go run ./cmd/migrate
 
-## seed: apply migrations and create the demo tenant (credentials printed once). The first owner is created in the console.
+## seed: apply migrations and create the demo test app (key and secrets printed once). The first owner is created in the console.
 seed:
 	cd $(BACKEND_DIR) && go run ./cmd/migrate -seed
 

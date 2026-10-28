@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -52,53 +51,67 @@ func (f failAfter) Record(ctx context.Context, action string, target domain.Audi
 }
 
 type auditFixture struct {
-	pool    *pgxpool.Pool
-	tenants *postgres.TenantRepo
-	tx      *postgres.TxManager
-	audit   *service.AuditService
-	slug    string
+	pool  *pgxpool.Pool
+	apps  *postgres.AppRepo
+	keys  *postgres.APIKeyRepo
+	tx    *postgres.TxManager
+	audit *service.AuditService
+	slug  string
 }
 
 func newAuditFixture(t *testing.T) *auditFixture {
 	t.Helper()
 	pool := testPool(t)
 	f := &auditFixture{
-		pool:    pool,
-		tenants: postgres.NewTenantRepo(pool),
-		tx:      postgres.NewTxManager(pool),
-		audit:   service.NewAuditService(postgres.NewAuditRepo(pool)),
-		slug:    fmt.Sprintf("it-audit-%d", time.Now().UnixNano()),
+		pool:  pool,
+		apps:  postgres.NewAppRepo(pool),
+		keys:  postgres.NewAPIKeyRepo(pool),
+		tx:    postgres.NewTxManager(pool),
+		audit: service.NewAuditService(postgres.NewAuditRepo(pool)),
+		slug:  fmt.Sprintf("it-audit-%d", time.Now().UnixNano()),
 	}
 	t.Cleanup(func() {
 		ctx := context.Background()
-		var id int64
-		if err := pool.QueryRow(ctx, `SELECT id FROM tenants WHERE slug=$1`, f.slug).Scan(&id); err == nil {
-			_, _ = pool.Exec(ctx, `DELETE FROM audit_logs WHERE target_type='tenant' AND target_id=$1`, strconv.FormatInt(id, 10))
-			_, _ = pool.Exec(ctx, `DELETE FROM tenants WHERE id=$1`, id)
+		for _, env := range []domain.Environment{domain.EnvTest, domain.EnvLive} {
+			if a, err := f.apps.GetBySlug(ctx, env, f.slug); err == nil {
+				rows, _ := pool.Query(ctx, `SELECT public_id FROM app_api_keys WHERE app_id=$1`, a.ID)
+				var keyIDs []string
+				for rows.Next() {
+					var k string
+					_ = rows.Scan(&k)
+					keyIDs = append(keyIDs, k)
+				}
+				rows.Close()
+				_, _ = pool.Exec(ctx, `DELETE FROM audit_logs WHERE target_id = ANY($1)`, keyIDs)
+				deleteApp(pool, a)
+			}
 		}
 	})
 	return f
 }
 
-func (f *auditFixture) service(audit service.Auditor) *service.TenantService {
-	return service.NewTenantService(f.tenants, nil, plainCipher{}, f.tx, audit)
+func (f *auditFixture) service(audit service.Auditor) *service.AppService {
+	return service.NewAppService(f.apps, f.keys, plainCipher{}, f.tx, audit)
 }
 
 func actorCtx() context.Context {
 	return domain.WithActor(context.Background(), domain.Actor{
-		Type: domain.ActorAdmin, ID: "admin", IP: "203.0.113.7", UserAgent: "it-agent", RequestID: "req-it",
+		Type: domain.ActorAdmin, ID: "usr_01JBKQ7Z8M4X2Y6V3N9T5R1W0C", IP: "203.0.113.7", UserAgent: "it-agent", RequestID: "req-it",
 	})
 }
 
 type auditRow struct {
-	actorType, actorID, action, ip, ua, rid string
-	before, after                           []byte
+	actorType, actorID, action, targetType, targetID, ip, ua, rid string
+	before, after                                                 []byte
 }
 
-func (f *auditFixture) rows(t *testing.T, tenantID int64) []auditRow {
+// rows returns the entries of the app and its keys, oldest first.
+func (f *auditFixture) rows(t *testing.T, app *domain.App) []auditRow {
 	t.Helper()
-	rows, err := f.pool.Query(context.Background(), `SELECT actor_type, actor_id, action, ip, user_agent, request_id, before, after
-		FROM audit_logs WHERE target_type='tenant' AND target_id=$1 ORDER BY occurred_at, public_id`, strconv.FormatInt(tenantID, 10))
+	rows, err := f.pool.Query(context.Background(), `SELECT actor_type, actor_id, action, target_type, target_id, ip, user_agent,
+		request_id, before, after FROM audit_logs
+		WHERE target_id = $1 OR target_id IN (SELECT public_id FROM app_api_keys WHERE app_id = $2)
+		ORDER BY occurred_at, public_id`, app.PublicID, app.ID)
 	if err != nil {
 		t.Fatalf("query audit: %v", err)
 	}
@@ -106,7 +119,7 @@ func (f *auditFixture) rows(t *testing.T, tenantID int64) []auditRow {
 	var out []auditRow
 	for rows.Next() {
 		var r auditRow
-		if err := rows.Scan(&r.actorType, &r.actorID, &r.action, &r.ip, &r.ua, &r.rid, &r.before, &r.after); err != nil {
+		if err := rows.Scan(&r.actorType, &r.actorID, &r.action, &r.targetType, &r.targetID, &r.ip, &r.ua, &r.rid, &r.before, &r.after); err != nil {
 			t.Fatalf("scan: %v", err)
 		}
 		out = append(out, r)
@@ -127,108 +140,111 @@ func jsonEqual(t *testing.T, label string, got []byte, want any) {
 	}
 }
 
-func TestIntegrationTenantMutationsWriteOneEntryEach(t *testing.T) {
+// AC-12: every app and key mutation writes its entries in the same
+// transaction, with no secret material.
+func TestIntegrationAppMutationsWriteTheirEntries(t *testing.T) {
 	f := newAuditFixture(t)
 	svc := f.service(f.audit)
 	ctx := actorCtx()
 
-	tenant, creds, err := svc.Create(ctx, service.CreateTenantInput{Name: "IT", Slug: f.slug})
+	created, err := svc.Create(ctx, service.CreateAppInput{Name: "IT", Slug: f.slug, Environment: domain.EnvTest})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, err := svc.Update(ctx, tenant.ID, service.UpdateTenantInput{Name: "IT Ünïcode", Active: true}); err != nil {
+	name := "IT Ünïcode"
+	if _, err := svc.Update(ctx, created.App.PublicID, service.UpdateAppInput{Name: &name}); err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	_, rotated, err := svc.RotateCredentials(ctx, tenant.ID)
+	rotated, err := svc.RotateKey(ctx, created.App.PublicID, created.Key.PublicID)
 	if err != nil {
 		t.Fatalf("rotate: %v", err)
 	}
-
-	rows := f.rows(t, tenant.ID)
-	if len(rows) != 3 {
-		t.Fatalf("got %d entries, want 3", len(rows))
+	if _, _, err := svc.RevokeKey(ctx, created.App.PublicID, created.Key.PublicID); err != nil {
+		t.Fatalf("revoke: %v", err)
 	}
-	for i, action := range []string{"tenant.create", "tenant.update", "tenant.rotate_credentials"} {
-		r := rows[i]
-		if r.action != action || r.actorType != "admin" || r.actorID != "admin" || r.ip != "203.0.113.7" || r.ua != "it-agent" || r.rid != "req-it" {
+
+	rows := f.rows(t, created.App)
+	want := []string{"app.create", "api_key.create", "app.update", "api_key.rotate", "api_key.revoke"}
+	if len(rows) != len(want) {
+		t.Fatalf("got %d entries, want %d: %+v", len(rows), len(want), rows)
+	}
+	for i, r := range rows {
+		if r.action != want[i] || r.actorType != "admin" || r.ip != "203.0.113.7" || r.ua != "it-agent" || r.rid != "req-it" {
 			t.Fatalf("entry %d = %+v", i, r)
 		}
-		for _, secret := range []string{creds.APISecret, rotated.APISecret, creds.APIKey, rotated.APIKey, "enc:"} {
+		for _, secret := range []string{created.APIKey, created.APISecret, created.WebhookSecret, rotated.APIKey, rotated.APISecret,
+			created.Key.Hash, rotated.Key.Hash, "enc:"} {
 			if contains(r.before, secret) || contains(r.after, secret) {
 				t.Fatalf("entry %d stores secret material", i)
 			}
 		}
 	}
-	if rows[0].before != nil {
-		t.Fatalf("create before = %s, want NULL", rows[0].before)
+	if rows[0].before != nil || rows[0].targetType != "app" || rows[1].targetType != "api_key" || rows[3].targetID != rotated.Key.PublicID {
+		t.Fatalf("entries = %+v", rows)
 	}
-	jsonEqual(t, "update after name", pick(t, rows[1].after, "name"), "IT Ünïcode")
-	jsonEqual(t, "rotate before", rows[2].before, map[string]any{"api_key_last4": creds.APIKey[len(creds.APIKey)-4:]})
-	jsonEqual(t, "rotate after", rows[2].after, map[string]any{"api_key_last4": rotated.APIKey[len(rotated.APIKey)-4:]})
+	jsonEqual(t, "update before", rows[2].before, map[string]any{"name": "IT"})
+	jsonEqual(t, "update after", rows[2].after, map[string]any{"name": "IT Ünïcode"})
+	jsonEqual(t, "revoke before", rows[4].before, map[string]any{"revoked_at": nil})
 }
 
-func TestIntegrationFailedTxRollsBackUpdateAndEntry(t *testing.T) {
+// T-30 / AC-12: a failing audit insert rolls the update back.
+func TestIntegrationFailedAuditRollsBackUpdate(t *testing.T) {
 	f := newAuditFixture(t)
-	tenant, _, err := f.service(f.audit).Create(actorCtx(), service.CreateTenantInput{Name: "Before", Slug: f.slug})
+	created, err := f.service(f.audit).Create(actorCtx(), service.CreateAppInput{Name: "Before", Slug: f.slug, Environment: domain.EnvLive})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-
-	_, err = f.service(failAfter{f.audit}).Update(actorCtx(), tenant.ID, service.UpdateTenantInput{Name: "After", Active: true})
-	if !errors.Is(err, errAfterAudit) {
+	name := "After"
+	if _, err := f.service(failAfter{f.audit}).Update(actorCtx(), created.App.PublicID, service.UpdateAppInput{Name: &name}); !errors.Is(err, errAfterAudit) {
 		t.Fatalf("err = %v, want errAfterAudit", err)
 	}
-	stored, err := f.tenants.GetByID(context.Background(), tenant.ID)
+	stored, err := f.apps.GetByPublicID(context.Background(), created.App.PublicID)
 	if err != nil || stored.Name != "Before" {
-		t.Fatalf("tenant = %+v, %v; update should have rolled back", stored, err)
+		t.Fatalf("app = %+v, %v; update should have rolled back", stored, err)
 	}
-	if rows := f.rows(t, tenant.ID); len(rows) != 1 || rows[0].action != "tenant.create" {
-		t.Fatalf("entries = %+v, want only tenant.create", rows)
+	if rows := f.rows(t, created.App); len(rows) != 2 {
+		t.Fatalf("entries = %+v, want only the create pair", rows)
 	}
 
 	// Without an actor the audit insert never happens and the update rolls back.
-	if _, err := f.service(f.audit).Update(context.Background(), tenant.ID, service.UpdateTenantInput{Name: "After"}); !errors.Is(err, service.ErrNoActor) {
+	if _, err := f.service(f.audit).Update(context.Background(), created.App.PublicID, service.UpdateAppInput{Name: &name}); !errors.Is(err, service.ErrNoActor) {
 		t.Fatalf("err = %v, want ErrNoActor", err)
 	}
-	if stored, _ := f.tenants.GetByID(context.Background(), tenant.ID); stored.Name != "Before" {
-		t.Fatalf("tenant updated without an audit entry: %+v", stored)
+	if stored, _ := f.apps.GetByPublicID(context.Background(), created.App.PublicID); stored.Name != "Before" {
+		t.Fatalf("app updated without an audit entry: %+v", stored)
 	}
 }
 
-func TestIntegrationFailedCreateLeavesNoTenant(t *testing.T) {
+func TestIntegrationFailedCreateLeavesNoApp(t *testing.T) {
 	f := newAuditFixture(t)
-	if _, _, err := f.service(failAfter{f.audit}).Create(actorCtx(), service.CreateTenantInput{Name: "X", Slug: f.slug}); !errors.Is(err, errAfterAudit) {
+	if _, err := f.service(failAfter{f.audit}).Create(actorCtx(), service.CreateAppInput{Name: "X", Slug: f.slug, Environment: domain.EnvLive}); !errors.Is(err, errAfterAudit) {
 		t.Fatalf("err = %v, want errAfterAudit", err)
 	}
-	if _, err := f.tenants.GetBySlug(context.Background(), f.slug); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("tenant persisted despite rollback: %v", err)
+	if _, err := f.apps.GetBySlug(context.Background(), domain.EnvLive, f.slug); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("app persisted despite rollback: %v", err)
 	}
 }
 
+// AC-9: a duplicate slug inside the audit transaction is a conflict; the same
+// slug in the other environment is fine.
 func TestIntegrationDuplicateSlugInsideTxIsConflict(t *testing.T) {
 	f := newAuditFixture(t)
 	svc := f.service(f.audit)
-	tenant, _, err := svc.Create(actorCtx(), service.CreateTenantInput{Name: "One", Slug: f.slug})
+	created, err := svc.Create(actorCtx(), service.CreateAppInput{Name: "One", Slug: f.slug, Environment: domain.EnvLive})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if _, _, err := svc.Create(actorCtx(), service.CreateTenantInput{Name: "Two", Slug: f.slug}); !errors.Is(err, domain.ErrConflict) {
+	if _, err := svc.Create(actorCtx(), service.CreateAppInput{Name: "Two", Slug: f.slug, Environment: domain.EnvLive}); !errors.Is(err, domain.ErrConflict) {
 		t.Fatalf("err = %v, want ErrConflict", err)
 	}
-	if rows := f.rows(t, tenant.ID); len(rows) != 1 {
-		t.Fatalf("got %d entries, want 1", len(rows))
+	if rows := f.rows(t, created.App); len(rows) != 2 {
+		t.Fatalf("got %d entries, want 2", len(rows))
+	}
+	if _, err := svc.Create(actorCtx(), service.CreateAppInput{Name: "Test", Slug: f.slug, Environment: domain.EnvTest}); err != nil {
+		t.Fatalf("other environment: %v", err)
 	}
 }
 
 func contains(b []byte, s string) bool {
 	return s != "" && strings.Contains(string(b), s)
-}
-
-func pick(t *testing.T, raw []byte, key string) []byte {
-	t.Helper()
-	var m map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &m); err != nil {
-		t.Fatalf("decode %s: %v", raw, err)
-	}
-	return m[key]
 }

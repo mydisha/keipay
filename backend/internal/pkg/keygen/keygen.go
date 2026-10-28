@@ -1,19 +1,56 @@
-// Package keygen generates random API keys and secrets.
+// Package keygen generates app API keys and secrets and hashes keys for
+// lookup.
 package keygen
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 )
+
+// KeyPrefix is the start of every API key. Keys issued before apps are
+// KeyPrefix + 32 hex; newer keys also carry the environment ("kp_test_").
+const KeyPrefix = "kp_"
 
 func random(n int) string {
 	b := make([]byte, n)
+	// crypto/rand.Read never returns an error on supported platforms.
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
 
-// APIKey returns a public tenant API key with a recognizable prefix.
-func APIKey() string { return "kp_" + random(16) }
+// KeyPrefixFor returns the key prefix of an environment, e.g. "kp_test_".
+func KeyPrefixFor(env string) string { return KeyPrefix + env + "_" }
 
-// Secret returns a tenant API secret used for HMAC signing.
-func Secret() string { return "sk_" + random(24) }
+// APIKey returns a new API key for env: "kp_<env>_" + 32 lower-case hex.
+func APIKey(env string) string { return KeyPrefixFor(env) + random(16) }
+
+// APISecret returns a new HMAC secret for env: "kps_<env>_" + 48 lower-case hex.
+func APISecret(env string) string { return "kps_" + env + "_" + random(24) }
+
+// WebhookSecret returns a new webhook signing secret: "kpwh_" + 48 lower-case hex.
+func WebhookSecret() string { return "kpwh_" + random(24) }
+
+// HashAPIKey is the stored lookup form of a key: lower-case hex SHA-256 of
+// its UTF-8 bytes. Migration 000007 computes the same value in SQL.
+func HashAPIKey(key string) string {
+	h := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(h[:])
+}
+
+// ParseKeyEnvironment returns the environment named by a key's prefix ("test"
+// or "live"), "" with ok for a legacy "kp_" key without one, and ok false for
+// anything that is not a KeiPay key.
+func ParseKeyEnvironment(key string) (env string, ok bool) {
+	rest, found := strings.CutPrefix(key, KeyPrefix)
+	if !found {
+		return "", false
+	}
+	for _, e := range []string{"test", "live"} {
+		if strings.HasPrefix(rest, e+"_") {
+			return e, true
+		}
+	}
+	return "", true
+}

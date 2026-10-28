@@ -1,5 +1,5 @@
 // Package crypto provides AES-256-GCM encryption for secrets at rest.
-// Tenant API secrets are the shared HMAC signing key, so they must be
+// App API and webhook secrets are HMAC signing keys, so they must be
 // recoverable (not one-way hashed). They are encrypted at rest instead.
 package crypto
 

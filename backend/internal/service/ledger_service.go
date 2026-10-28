@@ -6,7 +6,7 @@ import (
 	"github.com/mydisha/keipay/backend/internal/domain"
 )
 
-// LedgerService exposes per-tenant reconciliation reports.
+// LedgerService exposes per-app reconciliation reports.
 type LedgerService struct {
 	repo domain.LedgerRepository
 }
@@ -21,7 +21,7 @@ func (s *LedgerService) List(ctx context.Context, f domain.LedgerFilter) ([]doma
 	return s.repo.List(ctx, f)
 }
 
-// Summary returns aggregated totals per tenant.
+// Summary returns aggregated totals per app.
 func (s *LedgerService) Summary(ctx context.Context, f domain.LedgerFilter) ([]domain.LedgerSummary, error) {
 	return s.repo.Summary(ctx, f)
 }

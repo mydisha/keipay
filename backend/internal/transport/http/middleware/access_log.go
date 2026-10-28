@@ -6,7 +6,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
-	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/pkg/logger"
 )
 
@@ -42,9 +41,12 @@ func AccessLog(log *zap.Logger) gin.HandlerFunc {
 			zap.String("query", c.Request.URL.RawQuery),
 		}
 
-		// Attach tenant id when the request was authenticated as a tenant.
-		if t, ok := TenantFromContext(c); ok {
-			fields = append(fields, zap.Int64(logger.FieldTenantID, tenantID(t)))
+		// Attach the app and key when the request was authenticated by AppAuth.
+		if a, ok := AppFromContext(c); ok {
+			fields = append(fields, zap.String(logger.FieldAppID, a.PublicID))
+		}
+		if k, ok := APIKeyFromContext(c); ok {
+			fields = append(fields, zap.String(logger.FieldAPIKeyID, k.PublicID))
 		}
 
 		// Surface any errors gin collected during handling.
@@ -62,11 +64,4 @@ func AccessLog(log *zap.Logger) gin.HandlerFunc {
 			log.Info(msg, fields...)
 		}
 	}
-}
-
-func tenantID(t *domain.Tenant) int64 {
-	if t == nil {
-		return 0
-	}
-	return t.ID
 }

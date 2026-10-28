@@ -137,7 +137,7 @@ func TestLoginOverHTTP(t *testing.T) {
 		t.Fatalf("login: %d %s", w.Code, w.Body.String())
 	}
 	user, perms := meBody(t, w)
-	if user["id"] != u.PublicID || !slices.Equal(perms, []string{"deliveries:read", "payments:read", "tenants:read"}) {
+	if user["id"] != u.PublicID || !slices.Equal(perms, []string{"apps:read", "deliveries:read", "payments:read"}) {
 		t.Fatalf("me = %v %v", user, perms)
 	}
 	if user["last_login_at"] == nil {
@@ -331,7 +331,7 @@ func TestSessionLifecycleOverHTTP(t *testing.T) {
 	expectError(t, f.send(nil, http.MethodGet, "/admin/me", ""), http.StatusUnauthorized, domain.CodeSessionRequired)
 	expectError(t, f.send(nil, http.MethodGet, "/admin/me", "", "Authorization", "Bearer x"), http.StatusUnauthorized, domain.CodeSessionRequired)
 	garbage := &browser{cookies: map[string]string{middleware.SessionCookie: "garbage"}, remote: "192.0.2.10:5000"}
-	expectError(t, f.send(garbage, http.MethodGet, "/admin/tenants", ""), http.StatusUnauthorized, domain.CodeSessionExpired)
+	expectError(t, f.send(garbage, http.MethodGet, "/admin/apps", ""), http.StatusUnauthorized, domain.CodeSessionExpired)
 }
 
 func TestPasswordChangeEndsOtherSessions(t *testing.T) {
@@ -343,13 +343,13 @@ func TestPasswordChangeEndsOtherSessions(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("change: %d %s", w.Code, w.Body.String())
 	}
-	if w := f.send(a, http.MethodGet, "/admin/tenants", ""); w.Code != http.StatusOK {
+	if w := f.send(a, http.MethodGet, "/admin/apps", ""); w.Code != http.StatusOK {
 		t.Fatalf("the changing browser lost its session: %d", w.Code)
 	}
-	if w := f.send(a, http.MethodPost, "/admin/tenants", `{}`); w.Code == http.StatusForbidden {
+	if w := f.send(a, http.MethodPost, "/admin/apps", `{}`); w.Code == http.StatusForbidden {
 		t.Fatalf("new csrf token rejected: %s", w.Body.String())
 	}
-	expectError(t, f.send(other, http.MethodGet, "/admin/tenants", ""), http.StatusUnauthorized, domain.CodeSessionExpired)
+	expectError(t, f.send(other, http.MethodGet, "/admin/apps", ""), http.StatusUnauthorized, domain.CodeSessionExpired)
 
 	expectError(t, f.send(a, http.MethodPost, "/admin/me/password", `{"current_password":"wrong","new_password":"another-pass-12"}`),
 		http.StatusUnauthorized, domain.CodeInvalidCredentials)
@@ -390,7 +390,7 @@ func TestRoleChangeAppliesOnNextRequest(t *testing.T) {
 	}
 	expectError(t, f.send(b, http.MethodGet, "/admin/audit-logs", ""), http.StatusForbidden, domain.CodeForbidden)
 	_, perms := meBody(t, f.send(b, http.MethodGet, "/admin/me", ""))
-	if !slices.Equal(perms, []string{"deliveries:read", "payments:read", "tenants:read"}) {
+	if !slices.Equal(perms, []string{"apps:read", "deliveries:read", "payments:read"}) {
 		t.Fatalf("permissions = %v", perms)
 	}
 }
@@ -412,7 +412,7 @@ func TestMustChangePasswordGateLifts(t *testing.T) {
 	if user, _ := meBody(t, w); w.Code != http.StatusOK || user["must_change_password"] != true {
 		t.Fatalf("login: %d %s", w.Code, w.Body.String())
 	}
-	expectError(t, f.send(b, http.MethodGet, "/admin/tenants", ""), http.StatusForbidden, domain.CodePasswordChangeRequired)
+	expectError(t, f.send(b, http.MethodGet, "/admin/apps", ""), http.StatusForbidden, domain.CodePasswordChangeRequired)
 	if w := f.send(b, http.MethodGet, "/admin/me", ""); w.Code != http.StatusOK {
 		t.Fatalf("me: %d", w.Code)
 	}
@@ -420,7 +420,7 @@ func TestMustChangePasswordGateLifts(t *testing.T) {
 	if user, _ := meBody(t, w); w.Code != http.StatusOK || user["must_change_password"] != false {
 		t.Fatalf("change: %d %s", w.Code, w.Body.String())
 	}
-	if w := f.send(b, http.MethodGet, "/admin/tenants", ""); w.Code != http.StatusOK {
+	if w := f.send(b, http.MethodGet, "/admin/apps", ""); w.Code != http.StatusOK {
 		t.Fatalf("gate not lifted: %d %s", w.Code, w.Body.String())
 	}
 }

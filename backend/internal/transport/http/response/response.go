@@ -66,6 +66,9 @@ var statusByCode = map[domain.ErrorCode]int{
 	domain.CodeLastOwner:               http.StatusConflict,
 	domain.CodeCannotModifySelf:        http.StatusConflict,
 	domain.CodeRateLimited:             http.StatusTooManyRequests,
+	domain.CodeAPIKeyRevoked:           http.StatusUnauthorized,
+	domain.CodeAPIKeyExpired:           http.StatusUnauthorized,
+	domain.CodeIdempotencyKeyReused:    http.StatusConflict,
 }
 
 // Error writes the envelope for err and aborts the request. Unrecognised
@@ -102,8 +105,6 @@ func resolve(err error) (int, Body) {
 		return http.StatusConflict, body(domain.CodeConflict, "conflict", nil)
 	case errors.Is(err, domain.ErrUnauthorized):
 		return http.StatusUnauthorized, body(domain.CodeUnauthorized, "unauthorized", nil)
-	case errors.Is(err, domain.ErrInactiveTenant):
-		return http.StatusForbidden, body(domain.CodeTenantInactive, "tenant inactive", nil)
 	default:
 		return internal()
 	}

@@ -7,16 +7,16 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
+	"github.com/mydisha/keipay/backend/internal/pkg/id"
 	"github.com/mydisha/keipay/backend/internal/service"
 	"github.com/mydisha/keipay/backend/internal/transport/http/dto"
 	"github.com/mydisha/keipay/backend/internal/transport/http/response"
 )
 
-// AdminHandler exposes the tenant, reporting, delivery and audit endpoints of
-// the admin API. Sessions, CSRF and permissions are enforced by the router's
+// AdminHandler exposes the reporting, delivery and audit endpoints of the
+// admin API. Sessions, CSRF and permissions are enforced by the router's
 // middleware before these handlers run.
 type AdminHandler struct {
-	tenants    *service.TenantService
 	payments   *service.PaymentService
 	ledger     *service.LedgerService
 	deliveries *service.DeliveryService
@@ -25,130 +25,66 @@ type AdminHandler struct {
 
 // NewAdminHandler constructs an AdminHandler.
 func NewAdminHandler(
-	tenants *service.TenantService,
 	payments *service.PaymentService,
 	ledger *service.LedgerService,
 	deliveries *service.DeliveryService,
 	audit *service.AuditService,
 ) *AdminHandler {
-	return &AdminHandler{tenants: tenants, payments: payments, ledger: ledger, deliveries: deliveries, audit: audit}
+	return &AdminHandler{payments: payments, ledger: ledger, deliveries: deliveries, audit: audit}
 }
 
-// CreateTenant handles POST /admin/tenants.
-// Returns one-time API credentials that should be securely stored by the caller.
-func (h *AdminHandler) CreateTenant(c *gin.Context) {
-	var req dto.CreateTenantRequest
-	if err := bindJSON(c, &req); err != nil {
-		response.Error(c, err)
-		return
-	}
-	t, creds, err := h.tenants.Create(c.Request.Context(), service.CreateTenantInput{
-		Name:               req.Name,
-		Slug:               req.Slug,
-		WebhookURL:         req.WebhookURL,
-		RedirectSuccessURL: req.RedirectSuccessURL,
-		RedirectFailureURL: req.RedirectFailureURL,
-	})
-	if err != nil {
-		response.Error(c, err)
-		return
-	}
-	response.Created(c, dto.TenantResponse{Tenant: t, Credentials: creds})
-}
-
-// ListTenants handles GET /admin/tenants.
-func (h *AdminHandler) ListTenants(c *gin.Context) {
-	ts, err := h.tenants.List(c.Request.Context())
-	if err != nil {
-		response.Error(c, err)
-		return
-	}
-	response.Success(c, dto.TenantListResponse{Tenants: orEmpty(ts)})
-}
-
-// UpdateTenant handles PUT /admin/tenants/:id.
-func (h *AdminHandler) UpdateTenant(c *gin.Context) {
-	id, err := pathID(c)
-	if err != nil {
-		response.Error(c, err)
-		return
-	}
-	var req dto.UpdateTenantRequest
-	if err := bindJSON(c, &req); err != nil {
-		response.Error(c, err)
-		return
-	}
-	t, err := h.tenants.Update(c.Request.Context(), id, service.UpdateTenantInput{
-		Name:               req.Name,
-		WebhookURL:         req.WebhookURL,
-		RedirectSuccessURL: req.RedirectSuccessURL,
-		RedirectFailureURL: req.RedirectFailureURL,
-		Active:             req.Active,
-	})
-	if err != nil {
-		response.Error(c, err)
-		return
-	}
-	response.Success(c, dto.TenantResponse{Tenant: t})
-}
-
-// RotateTenantCredentials handles POST /admin/tenants/:id/rotate.
-// Generates new API credentials and invalidates the old ones.
-func (h *AdminHandler) RotateTenantCredentials(c *gin.Context) {
-	id, err := pathID(c)
-	if err != nil {
-		response.Error(c, err)
-		return
-	}
-	t, creds, err := h.tenants.RotateCredentials(c.Request.Context(), id)
-	if err != nil {
-		response.Error(c, err)
-		return
-	}
-	response.Success(c, dto.TenantResponse{Tenant: t, Credentials: creds})
-}
-
-// ListPayments handles GET /admin/payments with optional filters.
-// Query params: tenant_id, status, from, to, limit, offset
+// ListPayments handles GET /admin/payments (cursor-paginated, newest first).
+// Every filter is validated strictly.
 func (h *AdminHandler) ListPayments(c *gin.Context) {
-	f := domain.PaymentFilter{
-		Limit:  atoiDefault(c.Query("limit"), 50),
-		Offset: atoiDefault(c.Query("offset"), 0),
+	var f domain.PaymentFilter
+	var err error
+	if f.AppPublicID, err = queryPublicID(c, "app_id", id.App); err != nil {
+		response.Error(c, err)
+		return
 	}
-	if v := c.Query("tenant_id"); v != "" {
-		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
-			f.TenantID = &id
-		}
+	if f.Status, err = queryEnum(c, "status", validPaymentStatus); err != nil {
+		response.Error(c, err)
+		return
 	}
-	if v := c.Query("status"); v != "" {
-		s := domain.PaymentStatus(v)
-		f.Status = &s
+	if f.From, err = queryTime(c, "from"); err != nil {
+		response.Error(c, err)
+		return
 	}
-	if t, ok := parseTimeQuery(c.Query("from")); ok {
-		f.From = &t
+	if f.To, err = queryTime(c, "to"); err != nil {
+		response.Error(c, err)
+		return
 	}
-	if t, ok := parseTimeQuery(c.Query("to")); ok {
-		f.To = &t
-	}
-	items, total, err := h.payments.List(c.Request.Context(), f)
+	req, err := pageRequest(c)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
-	response.Success(c, dto.PaymentListResponse{Payments: orEmpty(items), Total: total})
+	page, err := h.payments.List(c.Request.Context(), f, req)
+	if err != nil {
+		response.Error(c, err)
+		return
+	}
+	response.Success(c, dto.PaymentListFromDomain(page))
 }
 
-// ListLedger handles GET /admin/ledger and returns entries + per-tenant summary.
-// Query params: tenant_id, from, to, limit, offset
+func validPaymentStatus(s domain.PaymentStatus) bool {
+	switch s {
+	case domain.PaymentStatusPending, domain.PaymentStatusPaid, domain.PaymentStatusSettled,
+		domain.PaymentStatusExpired, domain.PaymentStatusFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// ListLedger handles GET /admin/ledger and returns entries + per-app summary.
+// Query params: app_id, from, to, limit, offset. Unparseable filters are
+// ignored.
 func (h *AdminHandler) ListLedger(c *gin.Context) {
 	f := domain.LedgerFilter{
-		Limit:  atoiDefault(c.Query("limit"), 100),
-		Offset: atoiDefault(c.Query("offset"), 0),
-	}
-	if v := c.Query("tenant_id"); v != "" {
-		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
-			f.TenantID = &id
-		}
+		AppPublicID: lenientPublicID(c, "app_id", id.App),
+		Limit:       atoiDefault(c.Query("limit"), 100),
+		Offset:      atoiDefault(c.Query("offset"), 0),
 	}
 	if t, ok := parseTimeQuery(c.Query("from")); ok {
 		f.From = &t
@@ -166,30 +102,27 @@ func (h *AdminHandler) ListLedger(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
-	response.Success(c, dto.LedgerListResponse{Entries: orEmpty(entries), Summary: orEmpty(summary)})
+	response.Success(c, dto.LedgerListFromDomain(entries, summary))
 }
 
 // ListDeliveries handles GET /admin/webhook-deliveries.
-// Query params: tenant_id, status, limit, offset
+// Query params: app_id, status, limit, offset. An unparseable app_id is ignored.
 func (h *AdminHandler) ListDeliveries(c *gin.Context) {
-	var tenantID *int64
-	if v := c.Query("tenant_id"); v != "" {
-		if id, err := strconv.ParseInt(v, 10, 64); err == nil {
-			tenantID = &id
-		}
+	f := domain.DeliveryFilter{
+		AppPublicID: lenientPublicID(c, "app_id", id.App),
+		Limit:       atoiDefault(c.Query("limit"), 50),
+		Offset:      atoiDefault(c.Query("offset"), 0),
 	}
-	var status *domain.WebhookDeliveryStatus
 	if v := c.Query("status"); v != "" {
 		s := domain.WebhookDeliveryStatus(v)
-		status = &s
+		f.Status = &s
 	}
-	items, err := h.deliveries.List(c.Request.Context(), tenantID, status,
-		atoiDefault(c.Query("limit"), 50), atoiDefault(c.Query("offset"), 0))
+	items, err := h.deliveries.List(c.Request.Context(), f)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
-	response.Success(c, dto.DeliveryListResponse{Deliveries: orEmpty(items)})
+	response.Success(c, dto.DeliveryListFromDomain(items))
 }
 
 // ReplayDelivery handles POST /admin/webhook-deliveries/:id/replay.
@@ -242,12 +175,4 @@ func parseTimeQuery(s string) (time.Time, bool) {
 		return t, true
 	}
 	return time.Time{}, false
-}
-
-// orEmpty returns s, or an empty slice when s is nil, so lists encode as [].
-func orEmpty[T any](s []T) []T {
-	if s == nil {
-		return []T{}
-	}
-	return s
 }

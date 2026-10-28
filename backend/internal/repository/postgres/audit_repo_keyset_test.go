@@ -53,9 +53,9 @@ func TestIntegrationAuditListKeyset(t *testing.T) {
 	var want []domain.AuditLog
 	for _, at := range times {
 		l := domain.AuditLog{
-			PublicID: id.New(id.Audit), OccurredAt: at, Action: "tenant.update",
+			PublicID: id.New(id.Audit), OccurredAt: at, Action: "app.update",
 			Actor:  domain.Actor{Type: domain.ActorAdmin, ID: "admin"},
-			Target: domain.AuditTarget{Type: "tenant", ID: "1"},
+			Target: domain.AuditTarget{Type: "app", ID: "app_01JBKQ7Z8M4X2Y6V3N9T5R1W0C"},
 		}
 		if err := repo.Create(ctx, &l); err != nil {
 			t.Fatalf("create: %v", err)
@@ -147,9 +147,9 @@ func TestIntegrationAuditRoundTripsSnapshots(t *testing.T) {
 
 	repo := NewAuditRepo(pool)
 	in := domain.AuditLog{
-		PublicID: id.New(id.Audit), OccurredAt: time.Now().UTC(), Action: "tenant.update",
+		PublicID: id.New(id.Audit), OccurredAt: time.Now().UTC(), Action: "app.update",
 		Actor:  domain.Actor{Type: domain.ActorAdmin, ID: "admin", IP: "203.0.113.7", UserAgent: "ua/1", RequestID: "rid-1"},
-		Target: domain.AuditTarget{Type: "tenant", ID: "7"},
+		Target: domain.AuditTarget{Type: "app", ID: "app_01JBKQ7Z8M4X2Y6V3N9T5R1W0D"},
 		Before: []byte(`{"name":"Old"}`), After: []byte(`{"name":"Ünïcode"}`),
 	}
 	if err := repo.Create(ctx, &in); err != nil {

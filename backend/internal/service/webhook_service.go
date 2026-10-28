@@ -51,7 +51,7 @@ type XenditInvoiceCallback struct {
 	Updated        string `json:"updated"`
 }
 
-// WebhookService processes inbound Xendit callbacks and queues tenant forwards.
+// WebhookService processes inbound Xendit callbacks and queues app forwards.
 type WebhookService struct {
 	payments domain.PaymentRepository
 	ledger   domain.LedgerRepository
@@ -73,18 +73,21 @@ func NewWebhookService(
 	return &WebhookService{payments: payments, ledger: ledger, webhooks: webhooks, tx: tx, idemp: idemp, enqueuer: enqueuer}
 }
 
-// ForwardPayload is the normalized event KeiPay forwards to tenants.
+// ForwardPayload is the normalized event KeiPay forwards to apps. Fields are
+// only ever added, so existing receivers keep working.
 type ForwardPayload struct {
-	Event      string               `json:"event"`
-	PaymentID  int64                `json:"payment_id"`
-	OrderID    string               `json:"order_id"`
-	ExternalID string               `json:"external_id"`
-	Status     domain.PaymentStatus `json:"status"`
-	Amount     int64                `json:"amount"`
-	Currency   string               `json:"currency"`
-	PaidAt     *time.Time           `json:"paid_at,omitempty"`
-	SettledAt  *time.Time           `json:"settled_at,omitempty"`
-	Timestamp  time.Time            `json:"timestamp"`
+	Event           string               `json:"event"`
+	PaymentID       int64                `json:"payment_id"`
+	PaymentPublicID string               `json:"payment_public_id"`
+	OrderID         string               `json:"order_id"`
+	ExternalID      string               `json:"external_id"`
+	Metadata        domain.Metadata      `json:"metadata"`
+	Status          domain.PaymentStatus `json:"status"`
+	Amount          int64                `json:"amount"`
+	Currency        string               `json:"currency"`
+	PaidAt          *time.Time           `json:"paid_at,omitempty"`
+	SettledAt       *time.Time           `json:"settled_at,omitempty"`
+	Timestamp       time.Time            `json:"timestamp"`
 }
 
 // parseTime parses an RFC3339 timestamp, returning nil on empty/invalid input.
@@ -155,8 +158,10 @@ func (s *WebhookService) apply(ctx context.Context, cb XenditInvoiceCallback, ra
 		return applyResult{}, nil
 	}
 
-	// Locked until commit, so PAID and SETTLED for one payment apply in turn.
-	p, err := s.payments.GetByExternalIDForUpdate(ctx, cb.ExternalID)
+	// The reference is matched as stored, never parsed: it finds kp_pay_…
+	// references and legacy {slug}:{order_id} ones alike. Locked until commit,
+	// so PAID and SETTLED for one payment apply in turn.
+	p, err := s.payments.GetByReferenceForUpdate(ctx, cb.ExternalID)
 	if err != nil {
 		return applyResult{}, fmt.Errorf("lookup payment %q: %w", cb.ExternalID, err)
 	}
@@ -208,7 +213,7 @@ func (s *WebhookService) apply(ctx context.Context, cb XenditInvoiceCallback, ra
 			amount = p.Amount
 		}
 		entry := &domain.LedgerEntry{
-			TenantID:  p.TenantID,
+			AppID:     p.AppID,
 			PaymentID: p.ID,
 			Amount:    amount,
 			XenditFee: cb.FeesPaid,
@@ -229,16 +234,18 @@ func (s *WebhookService) apply(ctx context.Context, cb XenditInvoiceCallback, ra
 
 	// Build normalized forward payload + durable delivery record.
 	fp := ForwardPayload{
-		Event:      "payment." + strings.ToLower(string(status)),
-		PaymentID:  p.ID,
-		OrderID:    p.OrderID,
-		ExternalID: p.ExternalID,
-		Status:     status,
-		Amount:     p.Amount,
-		Currency:   p.Currency,
-		PaidAt:     paidAt,
-		SettledAt:  settledAt,
-		Timestamp:  time.Now().UTC(),
+		Event:           "payment." + strings.ToLower(string(status)),
+		PaymentID:       p.ID,
+		PaymentPublicID: p.PublicID,
+		OrderID:         p.OrderID,
+		ExternalID:      p.Reference(),
+		Metadata:        p.Metadata,
+		Status:          status,
+		Amount:          p.Amount,
+		Currency:        p.Currency,
+		PaidAt:          paidAt,
+		SettledAt:       settledAt,
+		Timestamp:       time.Now().UTC(),
 	}
 	payload, err := json.Marshal(fp)
 	if err != nil {
@@ -247,7 +254,7 @@ func (s *WebhookService) apply(ctx context.Context, cb XenditInvoiceCallback, ra
 
 	delivery := &domain.WebhookDelivery{
 		PaymentID: p.ID,
-		TenantID:  p.TenantID,
+		AppID:     p.AppID,
 		EventType: fp.Event,
 		Payload:   payload,
 		Status:    domain.WebhookDeliveryPending,

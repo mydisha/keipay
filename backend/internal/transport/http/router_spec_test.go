@@ -13,6 +13,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
+	"github.com/mydisha/keipay/backend/internal/service"
 )
 
 type specOperation struct {
@@ -195,7 +196,13 @@ func TestRoleRouteMatrix(t *testing.T) {
 		"admin":  f.addUser(t, "admin@example.com", domain.RoleAdmin),
 		"viewer": f.addUser(t, "viewer@example.com", domain.RoleViewer),
 	}
-	paths := strings.NewReplacer("/users/:id", "/users/"+target.PublicID, "/tenants/:id", "/tenants/1", "/webhook-deliveries/:id", "/webhook-deliveries/3")
+	app, err := f.appSvc.Create(domain.WithActor(t.Context(), domain.SystemActor("test")),
+		service.CreateAppInput{Name: "Matrix", Slug: "matrix", Environment: domain.EnvTest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := strings.NewReplacer("/users/:id", "/users/"+target.PublicID, "/apps/:id", "/apps/"+app.App.PublicID,
+		":key_id", app.Key.PublicID, "/webhook-deliveries/:id", "/webhook-deliveries/3")
 
 	for _, rt := range adminRoutes(Deps{}) {
 		path := "/admin" + paths.Replace(rt.path)

@@ -9,7 +9,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,19 +26,10 @@ import (
 	"github.com/mydisha/keipay/backend/internal/testutil/memstore"
 	"github.com/mydisha/keipay/backend/internal/transport/http/handler"
 	"github.com/mydisha/keipay/backend/internal/transport/http/middleware"
+	"github.com/mydisha/keipay/backend/internal/xendit"
 )
 
 // --- fakes: every list is empty unless a test fills it ---
-
-type emptyTenants struct{ domain.TenantRepository }
-
-func (emptyTenants) List(context.Context) ([]domain.Tenant, error) { return nil, nil }
-
-type emptyPayments struct{ domain.PaymentRepository }
-
-func (emptyPayments) List(context.Context, domain.PaymentFilter) ([]domain.Payment, int64, error) {
-	return nil, 0, nil
-}
 
 type emptyLedger struct{ domain.LedgerRepository }
 
@@ -52,7 +45,7 @@ type deliveries struct {
 	byID map[int64]domain.WebhookDelivery
 }
 
-func (deliveries) ListDeliveries(context.Context, *int64, *domain.WebhookDeliveryStatus, int, int) ([]domain.WebhookDelivery, error) {
+func (deliveries) ListDeliveries(context.Context, domain.DeliveryFilter) ([]domain.WebhookDelivery, error) {
 	return nil, nil
 }
 func (d deliveries) GetDelivery(_ context.Context, id int64) (*domain.WebhookDelivery, error) {
@@ -61,6 +54,46 @@ func (d deliveries) GetDelivery(_ context.Context, id int64) (*domain.WebhookDel
 	}
 	return nil, domain.ErrNotFound
 }
+
+type plainCipher struct{}
+
+func (plainCipher) Encrypt(s string) (string, error) { return "enc:" + s, nil }
+func (plainCipher) Decrypt(s string) (string, error) { return strings.TrimPrefix(s, "enc:"), nil }
+
+type memNonces struct {
+	mu   sync.Mutex
+	seen map[string]bool
+}
+
+func (m *memNonces) Acquire(_ context.Context, key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.seen[key] {
+		return false
+	}
+	m.seen[key] = true
+	return true
+}
+
+// stubXendit creates numbered invoices; Fail makes CreateInvoice fail.
+type stubXendit struct {
+	mu      sync.Mutex
+	created []xendit.CreateInvoiceInput
+	Fail    error
+}
+
+func (x *stubXendit) CreateInvoice(_ context.Context, in xendit.CreateInvoiceInput) (*xendit.CreateInvoiceOutput, error) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.Fail != nil {
+		return nil, x.Fail
+	}
+	x.created = append(x.created, in)
+	n := strconv.Itoa(len(x.created))
+	return &xendit.CreateInvoiceOutput{InvoiceID: "inv_" + n, InvoiceURL: "https://checkout.example/inv_" + n, Status: domain.PaymentStatusPending}, nil
+}
+
+func (x *stubXendit) ExpireInvoice(context.Context, string) error { return nil }
 
 type replayer struct{ err error }
 
@@ -112,6 +145,11 @@ type apiFixture struct {
 	auth     *service.AuthService
 	logs     *observer.ObservedLogs
 	owner    *domain.User
+	apps     *memstore.Apps
+	keys     *memstore.APIKeys
+	payments *memstore.Payments
+	xendit   *stubXendit
+	appSvc   *service.AppService
 }
 
 // apiOption adjusts the fixture before the router is built.
@@ -129,7 +167,11 @@ func newAPI(t *testing.T, frontendDir string, opts ...apiOption) *apiFixture {
 		audit:    &auditRepo{},
 		replay:   &replayer{},
 		logs:     logs,
+		apps:     memstore.NewApps(time.Now),
+		xendit:   &stubXendit{},
 	}
+	f.keys = memstore.NewAPIKeys(f.apps, time.Now)
+	f.payments = memstore.NewPayments(f.apps, time.Now)
 	cfg := service.AuthConfig{
 		IdleTimeout: 30 * time.Minute, AbsoluteTimeout: 12 * time.Hour,
 		MaxFailuresPerIP: 20, MaxFailuresPerEmail: 5, FailureWindow: 15 * time.Minute,
@@ -151,9 +193,15 @@ func newAPI(t *testing.T, frontendDir string, opts ...apiOption) *apiFixture {
 	f.deps.Sessions = auth
 	f.deps.Auth = handler.NewAuthHandler(auth, f.deps.Cookies, service.NewToken)
 	f.deps.Users = handler.NewUserHandler(service.NewUserService(f.users, directTx{}, auditSvc, hasher))
+	f.appSvc = service.NewAppService(f.apps, f.keys, plainCipher{}, memstore.NewTx(f.apps, f.keys), auditSvc)
+	paymentSvc := service.NewPaymentService(f.payments, f.xendit)
+	f.deps.Apps = handler.NewAppHandler(f.appSvc)
+	f.deps.Payment = handler.NewPaymentHandler(paymentSvc)
+	f.deps.AppResolver = f.appSvc
+	f.deps.NonceStore = &memNonces{seen: map[string]bool{}}
+	f.deps.SecretDecryptor = plainCipher{}
 	f.deps.Admin = handler.NewAdminHandler(
-		service.NewTenantService(emptyTenants{}, nil, nil, directTx{}, auditSvc),
-		service.NewPaymentService(emptyPayments{}, nil),
+		paymentSvc,
 		service.NewLedgerService(emptyLedger{}),
 		service.NewDeliveryService(deliveries{byID: map[int64]domain.WebhookDelivery{3: {ID: 3, Status: domain.WebhookDeliveryFailed, Attempts: 2}}},
 			f.replay, auditSvc),
@@ -290,8 +338,8 @@ func TestEmptyListsEncodeAsArrays(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
 	cases := map[string][]string{
-		"/admin/tenants":            {`"tenants":[]`},
-		"/admin/payments":           {`"payments":[]`},
+		"/admin/apps":               {`"data":[]`, `"next_cursor":null`},
+		"/admin/payments":           {`"data":[]`, `"next_cursor":null`},
 		"/admin/ledger":             {`"entries":[]`, `"summary":[]`},
 		"/admin/webhook-deliveries": {`"deliveries":[]`},
 		"/admin/audit-logs":         {`"data":[]`, `"next_cursor":null`},
@@ -318,9 +366,9 @@ func TestAuditLogsShapeAndPaging(t *testing.T) {
 	at := time.Date(2026, 1, 2, 3, 4, 5, 123456000, time.UTC)
 	f.audit.res = domain.PageResult[domain.AuditLog]{
 		Items: []domain.AuditLog{{
-			ID: 987654, PublicID: pub, OccurredAt: at, Action: "tenant.update",
+			ID: 987654, PublicID: pub, OccurredAt: at, Action: "app.update",
 			Actor:  domain.Actor{Type: "admin", ID: f.owner.PublicID, IP: "203.0.113.7", UserAgent: "ua", RequestID: "rid"},
-			Target: domain.AuditTarget{Type: "tenant", ID: "1"},
+			Target: domain.AuditTarget{Type: "app", ID: "app_01JBKQ7Z8M4X2Y6V3N9T5R1W0C"},
 			Before: json.RawMessage(`{"name":"Old"}`),
 		}},
 		NextCursor: domain.EncodeCursor(domain.Cursor{Time: at, ID: pub}),
@@ -409,12 +457,11 @@ func TestReplay(t *testing.T) {
 	}
 }
 
-func TestInvalidTenantPathID(t *testing.T) {
+func TestInvalidDeliveryPathID(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
-	env := expectError(t, f.send(owner, http.MethodPut, "/admin/tenants/x", `{"name":"a"}`), 400, domain.CodeInvalidRequest)
+	env := expectError(t, f.send(owner, http.MethodPost, "/admin/webhook-deliveries/x/replay", ""), 400, domain.CodeInvalidRequest)
 	expectFields(t, env, domain.FieldError{Field: "id", Rule: "int"})
-	expectError(t, f.send(owner, http.MethodPost, "/admin/tenants/x/rotate", ""), 400, domain.CodeInvalidRequest)
 }
 
 // --- unknown routes ---
@@ -433,7 +480,12 @@ func TestUnknownAPIRoutesReturnNotFoundEnvelope(t *testing.T) {
 			{http.MethodPost, "/webhooks/x"},
 			{http.MethodGet, "/healthz/x"},
 			// Wrong method on a known path is a 404, not a 405.
-			{http.MethodDelete, "/admin/tenants"},
+			{http.MethodDelete, "/admin/apps"},
+			// Tenants were replaced by apps.
+			{http.MethodGet, "/admin/tenants"},
+			{http.MethodPost, "/admin/tenants"},
+			{http.MethodPut, "/admin/tenants/1"},
+			{http.MethodPost, "/admin/tenants/1/rotate"},
 			{http.MethodGet, "/admin/login"},
 			// The bearer-era endpoint is gone.
 			{http.MethodPost, "/admin/change-password"},

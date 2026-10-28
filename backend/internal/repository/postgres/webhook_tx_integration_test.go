@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
+	"github.com/mydisha/keipay/backend/internal/pkg/id"
 	"github.com/mydisha/keipay/backend/internal/repository/postgres"
 	"github.com/mydisha/keipay/backend/internal/service"
 )
@@ -45,10 +46,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Cleanup(pool.Close)
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
-	tenant := &domain.Tenant{Name: "it", Slug: "it" + suffix, APIKey: "kp_it" + suffix, APISecretEnc: "x", Active: true}
-	if err := postgres.NewTenantRepo(pool).Create(ctx, tenant); err != nil {
-		t.Fatalf("tenant: %v", err)
-	}
+	app := newTestApp(t, pool, domain.EnvLive)
 	f := &fixture{
 		pool:     pool,
 		payments: postgres.NewPaymentRepo(pool),
@@ -56,22 +54,13 @@ func newFixture(t *testing.T) *fixture {
 		webhooks: postgres.NewWebhookRepo(pool),
 		tx:       postgres.NewTxManager(pool),
 	}
-	f.payment = &domain.Payment{TenantID: tenant.ID, OrderID: "ord", ExternalID: tenant.Slug + ":ord",
+	f.payment = &domain.Payment{PublicID: id.New(id.Payment), AppID: app.ID, OrderID: "ord", ExternalID: app.Slug + ":ord",
 		XenditInvoiceID: "inv_" + suffix, Amount: 5000, Currency: "IDR", Status: domain.PaymentStatusPending}
 	if err := f.payments.Create(ctx, f.payment); err != nil {
 		t.Fatalf("payment: %v", err)
 	}
 	t.Cleanup(func() {
-		ctx := context.Background()
-		for _, q := range []string{
-			`DELETE FROM webhook_deliveries WHERE tenant_id=$1`,
-			`DELETE FROM ledger_entries WHERE tenant_id=$1`,
-			`DELETE FROM payments WHERE tenant_id=$1`,
-			`DELETE FROM tenants WHERE id=$1`,
-		} {
-			_, _ = pool.Exec(ctx, q, tenant.ID)
-		}
-		_, _ = pool.Exec(ctx, `DELETE FROM webhook_events WHERE xendit_id=$1`, f.payment.XenditInvoiceID)
+		_, _ = pool.Exec(context.Background(), `DELETE FROM webhook_events WHERE xendit_id=$1`, f.payment.XenditInvoiceID)
 	})
 	return f
 }
@@ -124,7 +113,7 @@ func TestIntegrationWithinTxRollsBackAllWrites(t *testing.T) {
 		if err := f.payments.UpdateStatus(ctx, f.payment.ID, domain.PaymentStatusPaid, nil, nil, nil); err != nil {
 			return err
 		}
-		if err := f.ledger.Create(ctx, &domain.LedgerEntry{TenantID: f.payment.TenantID, PaymentID: f.payment.ID,
+		if err := f.ledger.Create(ctx, &domain.LedgerEntry{AppID: f.payment.AppID, PaymentID: f.payment.ID,
 			Amount: 5000, NetAmount: 5000, Type: domain.LedgerEntryTypePayment}); err != nil {
 			return err
 		}
@@ -136,7 +125,7 @@ func TestIntegrationWithinTxRollsBackAllWrites(t *testing.T) {
 	if ev, led, _ := f.counts(t); ev != 0 || led != 0 {
 		t.Fatalf("rollback left rows: events=%d ledger=%d", ev, led)
 	}
-	p, err := f.payments.GetByID(ctx, f.payment.ID)
+	p, err := f.payments.GetByID(ctx, f.payment.AppID, f.payment.ID)
 	if err != nil || p.Status != domain.PaymentStatusPending {
 		t.Fatalf("status changed despite rollback: %+v %v", p, err)
 	}
@@ -222,7 +211,7 @@ func TestIntegrationEnqueueFailureLeavesUnsentDelivery(t *testing.T) {
 
 func (f *fixture) status(t *testing.T) domain.PaymentStatus {
 	t.Helper()
-	p, err := f.payments.GetByID(context.Background(), f.payment.ID)
+	p, err := f.payments.GetByID(context.Background(), f.payment.AppID, f.payment.ID)
 	if err != nil {
 		t.Fatalf("get payment: %v", err)
 	}

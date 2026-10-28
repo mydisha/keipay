@@ -1,13 +1,11 @@
 import { screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
-import { setToken } from "@/shared/api/session";
 import { tenant } from "@/test/fixtures";
 import { errorBody, json, mockApi } from "@/test/http";
 import { setViewport } from "@/test/media";
-import { renderApp, TEST_TOKEN } from "@/test/render";
+import { renderApp } from "@/test/render";
 
 beforeEach(() => {
-  setToken(TEST_TOKEN);
   setViewport("desktop");
 });
 

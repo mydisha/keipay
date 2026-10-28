@@ -1,6 +1,7 @@
-import { FlaskConicalIcon, MonitorIcon, MoonIcon, RadioIcon, SunIcon } from "lucide-react";
+import { FlaskConicalIcon, MonitorIcon, MoonIcon, RadioIcon, SunIcon, UsersIcon } from "lucide-react";
 import { useEffect } from "react";
 import { useNavigate } from "react-router";
+import { usePermission } from "@/features/auth/components/can";
 import { useMode } from "@/shared/lib/mode";
 import { strings } from "@/shared/lib/strings";
 import { useTheme, type Theme } from "@/shared/lib/theme";
@@ -39,6 +40,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const navigate = useNavigate();
   const { setTheme } = useTheme();
   const { mode, setMode } = useMode();
+  const canManageUsers = usePermission("users:manage");
 
   function run(action: () => void) {
     onOpenChange(false);
@@ -63,6 +65,12 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               {item.label}
             </CommandItem>
           ))}
+          {canManageUsers && (
+            <CommandItem value="go users" onSelect={() => run(() => navigate("/settings/users"))}>
+              <UsersIcon aria-hidden="true" />
+              {strings.palette.users}
+            </CommandItem>
+          )}
         </CommandGroup>
         <CommandSeparator />
         <CommandGroup heading={strings.palette.theme}>

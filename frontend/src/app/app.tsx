@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { createBrowserRouter, RouterProvider } from "react-router";
 import { createQueryClient } from "@/shared/api/query-client";
-import { SESSION_EXPIRED_PATH, setSessionExpiredHandler } from "@/shared/api/session";
+import { setAuthRedirectHandler } from "@/shared/api/session";
+import { createAuthRedirectHandler } from "./auth-redirect";
 import { Providers } from "./providers";
 import { routes } from "./routes";
 
@@ -10,11 +11,8 @@ export function App() {
   const [router] = useState(() => createBrowserRouter(routes));
 
   useEffect(() => {
-    setSessionExpiredHandler(() => {
-      queryClient.clear();
-      void router.navigate(SESSION_EXPIRED_PATH, { replace: true });
-    });
-    return () => setSessionExpiredHandler(null);
+    setAuthRedirectHandler(createAuthRedirectHandler(queryClient, router));
+    return () => setAuthRedirectHandler(null);
   }, [queryClient, router]);
 
   return (

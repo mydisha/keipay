@@ -3,9 +3,10 @@ import { render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { createMemoryRouter, RouterProvider } from "react-router";
+import { createAuthRedirectHandler } from "@/app/auth-redirect";
 import { Providers } from "@/app/providers";
 import { routes } from "@/app/routes";
-import { setSessionExpiredHandler, SESSION_EXPIRED_PATH } from "@/shared/api/session";
+import { setAuthRedirectHandler } from "@/shared/api/session";
 
 export function testQueryClient() {
   return new QueryClient({
@@ -30,10 +31,7 @@ export function renderWithProviders(ui: ReactNode, { path = "/" }: { path?: stri
 export function renderApp(path: string) {
   const queryClient = testQueryClient();
   const router = createMemoryRouter(routes, { initialEntries: [path] });
-  setSessionExpiredHandler(() => {
-    queryClient.clear();
-    void router.navigate(SESSION_EXPIRED_PATH, { replace: true });
-  });
+  setAuthRedirectHandler(createAuthRedirectHandler(queryClient, router));
   const user = userEvent.setup();
   const result = render(
     <Providers queryClient={queryClient}>
@@ -42,5 +40,3 @@ export function renderApp(path: string) {
   );
   return { ...result, user, router, queryClient };
 }
-
-export const TEST_TOKEN = "header.eyJzdWIiOiJhZG1pbiJ9.signature";

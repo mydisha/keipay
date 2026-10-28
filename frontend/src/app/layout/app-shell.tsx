@@ -1,7 +1,5 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
-import { Outlet, useNavigate } from "react-router";
-import { clearToken } from "@/shared/api/session";
+import { Outlet } from "react-router";
 import { useMode } from "@/shared/lib/mode";
 import { strings } from "@/shared/lib/strings";
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/shared/ui/sheet";
@@ -14,19 +12,11 @@ import { TopBar } from "./top-bar";
 
 export function AppShell() {
   const { mode } = useMode();
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const [menuOpen, setMenuOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   const togglePalette = useCallback(() => setPaletteOpen((open) => !open), []);
   useCommandPaletteShortcut(togglePalette);
-
-  function signOut() {
-    clearToken();
-    queryClient.clear();
-    navigate("/login", { replace: true });
-  }
 
   return (
     <div className="flex min-h-dvh">
@@ -49,7 +39,7 @@ export function AppShell() {
         </SheetContent>
       </Sheet>
       <div className="flex min-w-0 flex-1 flex-col">
-        <TopBar onOpenMenu={() => setMenuOpen(true)} onOpenPalette={() => setPaletteOpen(true)} onSignOut={signOut} />
+        <TopBar onOpenMenu={() => setMenuOpen(true)} onOpenPalette={() => setPaletteOpen(true)} />
         {mode === "test" && <TestModeBanner />}
         <main id="main" tabIndex={-1} className="mx-auto grid w-full max-w-7xl min-w-0 flex-1 content-start gap-6 px-4 py-6 outline-none md:px-6 [&>*]:min-w-0">
           <Outlet />

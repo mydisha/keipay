@@ -92,6 +92,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * First-run setup status
+         * @description Public. `setup_required` is true while no user exists. Like every
+         *     `/admin/*` response it sets the `keipay_csrf` cookie when the request
+         *     has none, so the console calls it before its first `POST`.
+         */
+        get: operations["getSetupStatus"];
+        put?: never;
+        /**
+         * Create the first owner
+         * @description Works only while no user exists; afterwards it returns
+         *     `409 setup_completed`. Concurrent calls are serialized, so exactly
+         *     one succeeds. Creates an active `owner` with the given password
+         *     (`must_change_password` false), signs them in, and records
+         *     `user.setup` (actor `system:setup`).
+         *
+         *     When the server has `SETUP_TOKEN` set, `setup_token` must equal it;
+         *     otherwise the call returns `403 invalid_setup_token` and counts as a
+         *     failed attempt for the client IP. Checks run in this order: body
+         *     (`400`), IP rate limit (`429`), already set up (`409`), setup token
+         *     (`403`).
+         */
+        post: operations["completeSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/login": {
         parameters: {
             query?: never;
@@ -101,7 +137,21 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Sign in */
+        /**
+         * Sign in
+         * @description Email is matched case-insensitively. A wrong email, a wrong password
+         *     and a disabled user all return the same `401 invalid_credentials`,
+         *     in similar time. A user with `must_change_password` signs in
+         *     normally and must then call `POST /admin/me/password`.
+         *
+         *     Over the failed-attempt limit for the client IP or the email, returns
+         *     `429 rate_limited` without checking the password. A failure counts
+         *     against both limits; a success clears the email's counter.
+         *
+         *     Records `user.login` on success and `user.login_failed` (actor
+         *     `anonymous`, with the email and a reason, never the password) on
+         *     a wrong password, an unknown email or a disabled user.
+         */
         post: operations["adminLogin"];
         delete?: never;
         options?: never;
@@ -109,7 +159,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/change-password": {
+    "/admin/logout": {
         parameters: {
             query?: never;
             header?: never;
@@ -119,10 +169,186 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Change the signed-in admin's password
-         * @description Clears `must_change_password`. Recorded in the audit log as `admin_user.change_password`.
+         * Sign out
+         * @description Deletes the session (when there is a valid one), expires
+         *     `keipay_session` and sets a fresh `keipay_csrf`. Idempotent: without
+         *     a valid session it still returns `204`. Records `user.logout` only
+         *     when a session was ended. Allowed while `must_change_password` is
+         *     true.
          */
-        post: operations["adminChangePassword"];
+        post: operations["adminLogout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The signed-in user
+         * @description Returns the user and their permissions. Allowed while `must_change_password` is true.
+         */
+        get: operations["getMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/me/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Change the signed-in user's password
+         * @description Verifies `current_password`, sets the new one and clears
+         *     `must_change_password`. Ends every other session of the user and
+         *     replaces this one: the response sets a new `keipay_session` and
+         *     `keipay_csrf`. A wrong current password returns
+         *     `401 invalid_credentials` and keeps the session; a new password equal
+         *     to the current one returns `400 validation_failed`. Records
+         *     `user.change_password`. Allowed while `must_change_password` is true.
+         */
+        post: operations["changeMyPassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List users
+         * @description Cursor-paginated, newest first (`created_at` descending, then `id` descending). Includes disabled users.
+         */
+        get: operations["listUsers"];
+        put?: never;
+        /**
+         * Create a user
+         * @description Creates an active user with a generated temporary password, returned
+         *     in plaintext exactly once, and `must_change_password` true. A
+         *     duplicate email (case-insensitive) returns `409 conflict`. Records
+         *     `user.create`.
+         */
+        post: operations["createUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a user */
+        get: operations["getUser"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update a user's email, name or role
+         * @description Changes only the fields sent; at least one is required. Owners may
+         *     edit themselves, including their role, as long as another active
+         *     owner remains: a change that would leave no active owner returns
+         *     `409 last_owner`. A role change applies to the user's next request
+         *     without ending their sessions. A duplicate email returns
+         *     `409 conflict`. Records `user.update` with the changed fields
+         *     before and after; a request that changes nothing records nothing.
+         */
+        patch: operations["updateUser"];
+        trace?: never;
+    };
+    "/admin/users/{id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable a user
+         * @description Sets `disabled_at` and ends every session of the user at once; they
+         *     can no longer sign in. Disabling yourself returns
+         *     `409 cannot_modify_self`; disabling the last active owner returns
+         *     `409 last_owner`. Idempotent: an already disabled user is returned
+         *     unchanged and nothing is recorded. Records `user.disable`. Users are
+         *     never hard-deleted, so the audit trail keeps resolving.
+         */
+        post: operations["disableUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users/{id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enable a disabled user
+         * @description Clears `disabled_at`; the user signs in again with their existing
+         *     password. Idempotent: an active user is returned unchanged and
+         *     nothing is recorded. Records `user.enable`.
+         */
+        post: operations["enableUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/users/{id}/reset-password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reset a user's password
+         * @description Replaces the password with a generated temporary password, returned
+         *     in plaintext exactly once, sets `must_change_password` and ends
+         *     every session of the user. Works on disabled users too (they stay
+         *     disabled). Resetting your own password returns
+         *     `409 cannot_modify_self`; use `POST /admin/me/password`. Records
+         *     `user.reset_password`.
+         */
+        post: operations["resetUserPassword"];
         delete?: never;
         options?: never;
         head?: never;
@@ -338,9 +564,11 @@ export interface components {
          *     | `validation_failed` | 400 | The request is well-formed but breaks a business rule. |
          *     | `invalid_cursor` | 400 | The `cursor` is malformed or was not issued by this endpoint. |
          *     | `unauthorized` | 401 | Authentication failed for a reason not listed below. |
-         *     | `invalid_credentials` | 401 | Wrong username or password, or wrong current password. |
-         *     | `missing_token` | 401 | Admin request without a bearer token. |
-         *     | `invalid_token` | 401 | Admin bearer token is invalid or expired. |
+         *     | `invalid_credentials` | 401 | Wrong email or password (also returned for a disabled user), or wrong current password. |
+         *     | `missing_token` | 401 | Not returned since admin bearer tokens were replaced by session cookies; kept so the code keeps its meaning. |
+         *     | `invalid_token` | 401 | Not returned since admin bearer tokens were replaced by session cookies; kept so the code keeps its meaning. |
+         *     | `session_required` | 401 | Admin request without a `keipay_session` cookie. |
+         *     | `session_expired` | 401 | The session is unknown, idle too long, past its absolute lifetime, or was ended (logout, user disabled, password changed or reset). Sign in again. |
          *     | `missing_signature_headers` | 401 | Tenant request without `X-Api-Key`, `X-Timestamp` or `X-Signature`. |
          *     | `invalid_timestamp` | 401 | `X-Timestamp` is not unix seconds. |
          *     | `timestamp_out_of_range` | 401 | `X-Timestamp` is more than 5 minutes from server time. |
@@ -349,12 +577,20 @@ export interface components {
          *     | `replayed_request` | 401 | This signature was already used. |
          *     | `invalid_callback_token` | 401 | Gateway callback token is missing or wrong. |
          *     | `tenant_inactive` | 403 | The tenant is disabled. |
+         *     | `forbidden` | 403 | The signed-in user's role lacks the operation's permission (`x-keipay-permission`). |
+         *     | `password_change_required` | 403 | The user must change their password first (`POST /admin/me/password`). |
+         *     | `invalid_csrf_token` | 403 | `X-CSRF-Token` is missing, does not match the `keipay_csrf` cookie, or does not match the session. |
+         *     | `invalid_setup_token` | 403 | The server requires `SETUP_TOKEN` and `setup_token` is missing or wrong. |
          *     | `not_found` | 404 | The resource or route does not exist. |
-         *     | `conflict` | 409 | Duplicate, or idempotent retry with different data. |
+         *     | `conflict` | 409 | Duplicate (slug, email), or idempotent retry with different data. |
+         *     | `setup_completed` | 409 | First-run setup already happened; sign in instead. |
+         *     | `last_owner` | 409 | The change would leave no active owner. |
+         *     | `cannot_modify_self` | 409 | Owners cannot disable themselves or reset their own password through the users API. |
+         *     | `rate_limited` | 429 | Too many failed attempts. `details.retry_after_seconds` and the `Retry-After` header say when to retry. |
          *     | `internal_error` | 500 | Unexpected server error. |
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "validation_failed" | "invalid_cursor" | "unauthorized" | "invalid_credentials" | "missing_token" | "invalid_token" | "missing_signature_headers" | "invalid_timestamp" | "timestamp_out_of_range" | "unknown_api_key" | "invalid_signature" | "replayed_request" | "invalid_callback_token" | "tenant_inactive" | "not_found" | "conflict" | "internal_error";
+        ErrorCode: "invalid_request" | "validation_failed" | "invalid_cursor" | "unauthorized" | "invalid_credentials" | "missing_token" | "invalid_token" | "missing_signature_headers" | "invalid_timestamp" | "timestamp_out_of_range" | "unknown_api_key" | "invalid_signature" | "replayed_request" | "invalid_callback_token" | "tenant_inactive" | "not_found" | "conflict" | "internal_error" | "session_required" | "session_expired" | "forbidden" | "password_change_required" | "invalid_csrf_token" | "invalid_setup_token" | "setup_completed" | "last_owner" | "cannot_modify_self" | "rate_limited";
         /**
          * @example {
          *       "error": {
@@ -380,6 +616,8 @@ export interface components {
                 details: {
                     /** @description Set for `invalid_request` caused by field validation. */
                     fields?: components["schemas"]["FieldError"][];
+                    /** @description Set for `rate_limited`; same value as the `Retry-After` header. */
+                    retry_after_seconds?: number;
                 } & {
                     [key: string]: unknown;
                 };
@@ -498,24 +736,127 @@ export interface components {
             /** @constant */
             received: true;
         };
+        /**
+         * @description `owner` manages everything, including users. `admin` manages
+         *     everything except users. `viewer` is read-only and cannot read the
+         *     audit log.
+         * @enum {string}
+         */
+        UserRole: "owner" | "admin" | "viewer";
+        /**
+         * @description `disabled` exactly when `disabled_at` is set.
+         * @enum {string}
+         */
+        UserStatus: "active" | "disabled";
+        /**
+         * @description See "Roles and permissions" above. New permissions may be added.
+         * @enum {string}
+         */
+        Permission: "tenants:read" | "tenants:write" | "payments:read" | "deliveries:read" | "deliveries:replay" | "audit:read" | "users:manage";
+        /**
+         * Format: email
+         * @description One address without a display name, for example `ops@example.com`.
+         *     Unicode is allowed. KeiPay trims it, applies Unicode NFC and lower
+         *     case, and stores that form, so emails are unique and matched
+         *     case-insensitively. Invalid: `400 invalid_request` with rule `email`.
+         * @example ops@example.com
+         */
+        Email: string;
+        /**
+         * @description Display name, trimmed; blank after trimming is rejected (`required`).
+         * @example Ops Lead
+         */
+        UserName: string;
+        /**
+         * Format: password
+         * @description At least 12 characters (Unicode code points) and at most 72 bytes as
+         *     UTF-8, the bcrypt limit. Hashed exactly as sent, without trimming or
+         *     normalization. Violations: `400 invalid_request` with rule `min` or
+         *     `max`.
+         */
+        NewPassword: string;
+        User: {
+            /** @example usr_01JBKQ7Z8M4X2Y6V3N9T5R1W0C */
+            id: string;
+            /** @description Stored (trimmed, NFC, lower-case) form. */
+            email: string;
+            name: string;
+            role: components["schemas"]["UserRole"];
+            status: components["schemas"]["UserStatus"];
+            /** @description True after an owner creates the user or resets their password, until the user changes it. */
+            must_change_password: boolean;
+            /** Format: date-time */
+            disabled_at: string | null;
+            /** Format: date-time */
+            last_login_at: string | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        MeResponse: {
+            user: components["schemas"]["User"];
+            /** @description Everything the user's role allows, sorted. Hide what is not listed; the server enforces it anyway. */
+            permissions: components["schemas"]["Permission"][];
+        };
+        SetupStatusResponse: {
+            /** @description True while no user exists. */
+            setup_required: boolean;
+            /** @description True when the server has `SETUP_TOKEN` set; then `POST /admin/setup` needs `setup_token`. */
+            setup_token_required: boolean;
+        };
+        SetupRequest: {
+            email: components["schemas"]["Email"];
+            name: components["schemas"]["UserName"];
+            password: components["schemas"]["NewPassword"];
+            /**
+             * Format: password
+             * @description Required when `setup_token_required` is true; ignored otherwise.
+             */
+            setup_token?: string;
+        };
         LoginRequest: {
-            username: string;
+            /** @description Not format-checked here; a malformed email simply does not match (`401 invalid_credentials`). */
+            email: string;
             /** Format: password */
             password: string;
-        };
-        LoginResponse: {
-            /** @description Bearer token, valid for 12 hours. */
-            token: string;
-            must_change_password: boolean;
         };
         ChangePasswordRequest: {
             /** Format: password */
             current_password: string;
-            /** Format: password */
-            new_password: string;
+            new_password: components["schemas"]["NewPassword"];
         };
-        MessageResponse: {
-            message: string;
+        CreateUserRequest: {
+            email: components["schemas"]["Email"];
+            name: components["schemas"]["UserName"];
+            role: components["schemas"]["UserRole"];
+        };
+        /**
+         * @description Send only the fields to change; unknown fields are ignored. A body
+         *     with none of these fields returns `400 invalid_request` with
+         *     `details.fields` `[{"field": "body", "rule": "required"}]`.
+         */
+        UpdateUserRequest: {
+            email?: components["schemas"]["Email"];
+            name?: components["schemas"]["UserName"];
+            role?: components["schemas"]["UserRole"];
+        };
+        UserResponse: {
+            user: components["schemas"]["User"];
+        };
+        UserWithTemporaryPasswordResponse: {
+            user: components["schemas"]["User"];
+            /**
+             * @description 20 random characters from an alphabet without look-alikes
+             *     (no `0 O 1 l I`). Shown once and never stored in plaintext; the
+             *     user must change it at first sign-in.
+             */
+            temporary_password: string;
+        };
+        UserListResponse: {
+            data: components["schemas"]["User"][];
+            /** @description Pass as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
         };
         Tenant: {
             /** Format: int64 */
@@ -682,22 +1023,29 @@ export interface components {
         };
         AuditActor: {
             /**
-             * @description `admin` (a signed-in console user) or `system` (seed, CLI, background job).
+             * @description `admin` (a signed-in console user of any role), `system` (seed,
+             *     CLI, setup, background job) or `anonymous` (a failed sign-in).
              * @example admin
              * @example system
+             * @example anonymous
              */
             type: string;
-            /** @description Admin username today (a `usr_` id once users exist), or the system component name such as `seed`. */
+            /**
+             * @description The user's `usr_…` id for `admin`; the component name (`seed`,
+             *     `cli`, `setup`) for `system`; `anonymous` for `anonymous`.
+             *     Entries written before users existed carry the admin username.
+             */
             id: string;
         };
         AuditTarget: {
             /**
+             * @description Entries written before users existed use `admin_user` for the console admin.
              * @example tenant
-             * @example admin_user
+             * @example user
              * @example webhook_delivery
              */
             type: string;
-            /** @description The target's identifier as a string. */
+            /** @description The target's identifier as a string (`usr_…` for users). Empty for a failed sign-in with an unknown email. */
             id: string;
         };
         AuditLog: {
@@ -709,8 +1057,11 @@ export interface components {
             /**
              * @description `{target_type}.{verb}`. Current values: `tenant.create`,
              *     `tenant.update`, `tenant.rotate_credentials`,
-             *     `admin_user.change_password`, `webhook_delivery.replay`.
-             *     New actions may be added.
+             *     `webhook_delivery.replay`, `user.setup`, `user.create`,
+             *     `user.update`, `user.disable`, `user.enable`,
+             *     `user.reset_password`, `user.change_password`, `user.login`,
+             *     `user.login_failed`, `user.logout`. Older entries may carry
+             *     `admin_user.change_password`. New actions may be added.
              * @example tenant.update
              */
             action: string;
@@ -750,7 +1101,12 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description Authentication failed. The `code` says why. */
+        /**
+         * @description Authentication failed. The `code` says why: `session_required` or
+         *     `session_expired` on admin routes, `invalid_credentials` on sign-in
+         *     and password change, the tenant signature codes on `/v1`, and
+         *     `invalid_callback_token` on gateway callbacks.
+         */
         Unauthorized: {
             headers: {
                 [name: string]: unknown;
@@ -759,7 +1115,11 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description `tenant_inactive`: the tenant exists but is disabled. */
+        /**
+         * @description `forbidden` (the role lacks the operation's `x-keipay-permission`),
+         *     `password_change_required`, `invalid_csrf_token`,
+         *     `invalid_setup_token`, or on `/v1` `tenant_inactive`.
+         */
         Forbidden: {
             headers: {
                 [name: string]: unknown;
@@ -777,9 +1137,23 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description `conflict`: duplicate slug, or an `order_id` reused with a different amount or currency. */
+        /**
+         * @description `conflict` (duplicate slug or email, or an `order_id` reused with a
+         *     different amount or currency), `setup_completed`, `last_owner`, or
+         *     `cannot_modify_self`.
+         */
         Conflict: {
             headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /** @description `rate_limited`: too many failed attempts. Retry after `Retry-After` seconds (also in `details.retry_after_seconds`). */
+        TooManyRequests: {
+            headers: {
+                "Retry-After": components["headers"]["RetryAfter"];
                 [name: string]: unknown;
             };
             content: {
@@ -797,6 +1171,11 @@ export interface components {
         };
     };
     parameters: {
+        /**
+         * @description User id (`usr_…`; lower case is accepted). Any other format returns
+         *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+         */
+        UserIdPath: string;
         /** @description Payment id. A non-integer returns `400 invalid_request`; an integer below 1 matches nothing and returns `404 not_found`. */
         PaymentIdPath: number;
         /** @description Tenant id. A non-integer returns `400 invalid_request`; an integer below 1 matches nothing and returns `404 not_found`. */
@@ -813,7 +1192,17 @@ export interface components {
         Cursor: string;
     };
     requestBodies: never;
-    headers: never;
+    headers: {
+        /**
+         * @description `keipay_session` (session id, `HttpOnly`) and `keipay_csrf` (CSRF
+         *     token, readable by scripts), both `SameSite=Lax; Path=/` and `Secure`
+         *     unless `COOKIE_SECURE` resolves to false. On logout `keipay_session`
+         *     is expired (`Max-Age=0`).
+         */
+        SessionCookies: string;
+        /** @description Seconds until the rate limit window ends. */
+        RetryAfter: number;
+    };
     pathItems: never;
 }
 export type $defs = Record<string, never>;
@@ -922,6 +1311,57 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    getSetupStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Setup status. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SetupStatusResponse"];
+                };
+            };
+            500: components["responses"]["InternalError"];
+        };
+    };
+    completeSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetupRequest"];
+            };
+        };
+        responses: {
+            /** @description The owner exists and is signed in. */
+            201: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SessionCookies"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     adminLogin: {
         parameters: {
             query?: never;
@@ -935,21 +1375,67 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Signed in. */
+            /** @description Signed in; a new session replaces any previous one in this browser. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SessionCookies"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    adminLogout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed out. */
+            204: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SessionCookies"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The signed-in user. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LoginResponse"];
+                    "application/json": components["schemas"]["MeResponse"];
                 };
             };
-            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             500: components["responses"]["InternalError"];
         };
     };
-    adminChangePassword: {
+    changeMyPassword: {
         parameters: {
             query?: never;
             header?: never;
@@ -962,17 +1448,239 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Password changed. */
+            /** @description Password changed; the session was replaced. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SessionCookies"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MeResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listUsers: {
+        parameters: {
+            query?: {
+                /** @description Page size. Outside 1-200 returns `400 invalid_request`. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Opaque `next_cursor` from the previous page. A malformed cursor returns `400 invalid_cursor`. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of users. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["MessageResponse"];
+                    "application/json": components["schemas"]["UserListResponse"];
                 };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateUserRequest"];
+            };
+        };
+        responses: {
+            /** @description The user and their one-time temporary password. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserWithTemporaryPasswordResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description User id (`usr_…`; lower case is accepted). Any other format returns
+                 *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["UserIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description User id (`usr_…`; lower case is accepted). Any other format returns
+                 *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["UserIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateUserRequest"];
+            };
+        };
+        responses: {
+            /** @description The updated user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    disableUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description User id (`usr_…`; lower case is accepted). Any other format returns
+                 *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["UserIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The disabled user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    enableUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description User id (`usr_…`; lower case is accepted). Any other format returns
+                 *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["UserIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The enabled user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    resetUserPassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description User id (`usr_…`; lower case is accepted). Any other format returns
+                 *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["UserIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The user and their one-time temporary password. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserWithTemporaryPasswordResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -995,6 +1703,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -1022,6 +1731,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
@@ -1053,6 +1763,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             500: components["responses"]["InternalError"];
         };
@@ -1080,6 +1791,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             500: components["responses"]["InternalError"];
         };
@@ -1113,6 +1825,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -1144,6 +1857,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -1172,6 +1886,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -1198,6 +1913,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             500: components["responses"]["InternalError"];
         };
@@ -1227,6 +1943,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
         };
     };

@@ -84,7 +84,7 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 | Component | Use it for |
 |---|---|
 | `Button` | Every action. Variants: `default` (one per view), `outline`, `ghost`, `secondary`, `destructive`, `link`. Sizes reach 44px below 768px. |
-| `Input`, `Select`, `Checkbox`, `Switch`, `Label` | Form controls. Always with a visible label. |
+| `Input`, `Select`, `Checkbox`, `Switch`, `Label` | Form controls. Always with a visible label. `SelectItem` takes an optional one-line `description` (shown in the list, not in the trigger), used for the role picker. |
 | `Form` (`FormField`, `FormItem`, `FormLabel`, `FormControl`, `FormDescription`, `FormMessage`) | Every form: react-hook-form + a zod schema that mirrors the contract. Server field errors go on their field; other failures in an `Alert` above the form. |
 | `DataTable` | Every list. See the table pattern. |
 | `StatusBadge` | Any status. Always text; the tone only reinforces it. |
@@ -92,16 +92,17 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 | `IdText` | Every id, key, order id or reference. Mono, truncated, full value in `title`, copy button. |
 | `DateTimeText` | Every timestamp. Relative text, absolute WIB time in a tooltip. |
 | `EmptyState` | No data yet, or a coming-soon feature. Says what goes here and offers the next action. |
-| `ErrorState` | A failed load, with a retry button. |
+| `ErrorState` | A failed load, with a retry button. An API `403 forbidden` renders `ForbiddenState` instead, since retrying can't help. |
+| `ForbiddenState` | A page or tab the signed-in user's role can't open: "You don't have access to this page" plus who to ask. Shown in place of the content, never as a redirect. |
 | `Skeleton` | Loading placeholders that match the final layout. |
 | `Dialog` | Short focused tasks: forms, details. |
 | `ConfirmDialog` | Any mutation the user might regret. Pass `confirmText` (the app slug or resource name) for destructive actions: rotate, revoke, delete. |
-| `SecretRevealDialog` | Showing a secret once. Copy buttons, warning, and a required "I have saved this" checkbox before it closes. Escape and outside clicks do not dismiss it. |
+| `SecretRevealDialog` | Showing a secret once (app credentials, a user's temporary password). Copy buttons, a warning (overridable per use), and a required "I have saved this" checkbox before it closes. Escape and outside clicks do not dismiss it. |
 | `JsonViewer` | Raw payloads and before/after snapshots. Collapsible, pretty-printed, copyable; long payloads are cut in the view but copied in full. |
 | `Timeline` | Ordered events (payment lifecycle, delivery attempts) with time, title, a text status and an optional body. |
 | `PageHeader` | The `h1`, one sentence of context, and page actions. |
 | `Alert` | Inline messages inside forms and sections. |
-| `Tabs` | Sibling views of one resource (Webhooks: Outbound, Inbound). |
+| `Tabs` | Sibling views of one resource (Webhooks: Outbound, Inbound). When each view has its own URL (Settings: Account, Users, Audit log), use links styled as tabs inside a labelled `nav`, with `aria-current="page"` on the active one. |
 | toasts (`sonner`) | Outcome of an action the user just took: "Delivery 7 queued", "Couldn't replay". Never for load errors (use `ErrorState`). |
 
 ## Dense table pattern
@@ -149,9 +150,62 @@ Dialogs (such as an audit entry) follow the same order on a smaller scale.
 - Error: `ErrorState` with "Try again". Messages come from the error envelope
   `code`; `internal_error`, `network_error` and `unknown_error` get friendly
   copy and never show internal text.
-- Session: a 401 `missing_token` or `invalid_token` sends the user to
+- Session: the session is an `HttpOnly` cookie the console never reads; nothing
+  about it goes in `localStorage` or `sessionStorage`. A `401 session_expired`
+  from any console call clears every cached query and sends the user to
   `/login?reason=session_expired`, which says "Your session has expired. Sign
-  in again."
+  in again." A `401 session_required` goes to `/login` without the message. A
+  `403 password_change_required` goes to `/change-password`.
+- Boot: protected pages show a full-page skeleton of the shell until the
+  signed-in user (`GET /admin/me`) has loaded, so the console never flashes
+  for a signed-out visitor. A failure other than 401 shows a full-page
+  `ErrorState` with retry.
+
+## Roles and permissions
+
+- The UI reads what the signed-in user may do from `me.permissions`
+  (`usePermission`, `<Can>`, `<RequirePermission>`), never from the role
+  name. The server enforces every permission anyway.
+- Actions the role can't perform are hidden, not disabled: no Create app or
+  row actions without `tenants:write`, no Replay without
+  `deliveries:replay`. Pages stay readable.
+- Pages and tabs the role can't open are hidden from navigation; opening
+  their URL shows `ForbiddenState` in place of the content (no redirect).
+- The role is shown as a text label: Owner, Admin, Viewer. Role pickers give
+  each role a one-line description of what it allows.
+
+## Auth pages
+
+Setup, sign-in and change password share `AuthLayout`: the brand, an `h1`,
+one sentence, and a single card with the form. A skeleton of that layout
+shows while the page's guard decides where the visitor belongs.
+
+| Page | Fields | States |
+|---|---|---|
+| First-run setup `/setup` | Name, Email, Password, Confirm password; Setup token only when the server requires one | Submit spinner with inputs disabled; field errors on their fields (wrong setup token on the token field); "already set up" toast and go to sign-in; rate limit alert in minutes |
+| Sign in `/login` | Email, Password | "Incorrect email or password." for any credential failure; "Too many failed attempts. Try again in N minutes."; warning banner when `?reason=session_expired` |
+| Change password | Current password, New password, Confirm new password | Wrong current password on its field; a reused password on New password; success toast and back to the console |
+
+- `/login` and `/setup` send a signed-in user to the console and send each
+  other's visitors across: `/login` goes to `/setup` while setup is
+  required, `/setup` goes to `/login` once it is done.
+- New passwords: at least 12 characters and at most 72 bytes, shown as a
+  hint under the field; never trimmed.
+- Forced password change: after an owner creates a user or resets their
+  password, the console is locked until the user sets their own. The page
+  says "Set a new password" and that an owner set a temporary password,
+  offers "Sign out" instead of "Back to the console", and every other URL
+  leads back to it.
+
+## Users
+
+`/settings/users` (owners, `users:manage`) follows the dense table pattern:
+name and email (your own row marked "You"), role as text, status badge
+(Active or Disabled) with "Password change pending" as secondary text, last
+sign-in ("Never" when empty) and created. Add user and Reset password reveal
+the temporary password once in `SecretRevealDialog`. Disable and Reset
+password are destructive confirms that need the user's email typed exactly;
+Enable is a plain confirm. Your own row has no Disable or Reset password.
 
 ## Mobile
 
@@ -166,12 +220,16 @@ Dialogs (such as an audit entry) follow the same order on a smaller scale.
 - Collapsible sidebar (remembered per browser): Dashboard, Apps, Connections,
   Webhooks, Payments, Reconciliation, Settings.
 - Top bar: command palette button (⌘K / Ctrl+K), Test/Live switch, theme menu
-  (light, dark, system), account menu (change password, sign out).
+  (light, dark, system), account menu (name, email and role label at the top;
+  account settings, change password, sign out). Sign out calls
+  `POST /admin/logout`, clears every cached query and goes to `/login`; if it
+  fails the user stays signed in and sees a toast.
 - Test mode shows an amber banner on every page. Until environments exist, the
   switch only changes the console; the banner must not claim that data is
   filtered.
-- The palette navigates to every page, switches theme and mode, and says that
-  searching by id or order arrives later.
+- The palette navigates to every page (plus Users with `users:manage`),
+  switches theme and mode, and says that searching by id or order arrives
+  later.
 
 ## Dark mode
 

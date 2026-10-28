@@ -1,9 +1,6 @@
 import { screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it } from "vitest";
-import { setToken } from "@/shared/api/session";
-import { renderApp, TEST_TOKEN } from "@/test/render";
-
-beforeEach(() => setToken(TEST_TOKEN));
+import { describe, expect, it } from "vitest";
+import { renderApp } from "@/test/render";
 
 describe("Coming-soon pages", () => {
   it("dashboard points to payments", async () => {

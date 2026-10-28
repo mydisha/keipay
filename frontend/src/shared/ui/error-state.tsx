@@ -1,8 +1,10 @@
 import { AlertTriangleIcon, RotateCwIcon } from "lucide-react";
 import { errorMessage } from "@/shared/api/error-message";
+import { isApiError } from "@/shared/api/errors";
 import { strings } from "@/shared/lib/strings";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "./button";
+import { ForbiddenState } from "./forbidden-state";
 
 interface ErrorStateProps {
   error: unknown;
@@ -12,6 +14,8 @@ interface ErrorStateProps {
 }
 
 export function ErrorState({ error, onRetry, title = strings.errors.title, className }: ErrorStateProps) {
+  // Retrying won't help when the role lacks the permission.
+  if (isApiError(error) && error.code === "forbidden") return <ForbiddenState className={className} />;
   return (
     <div
       role="alert"

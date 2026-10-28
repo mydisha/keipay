@@ -2,9 +2,9 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { CircleAlertIcon, Loader2Icon } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { useNavigate, useSearchParams } from "react-router";
+import { errorMessage, retryAfterMinutes } from "@/shared/api/error-message";
 import { isApiError } from "@/shared/api/errors";
-import { errorMessage } from "@/shared/api/error-message";
-import { setToken } from "@/shared/api/session";
+import { CHANGE_PASSWORD_PATH } from "@/shared/api/session";
 import { strings } from "@/shared/lib/strings";
 import { Alert, AlertDescription } from "@/shared/ui/alert";
 import { Button } from "@/shared/ui/button";
@@ -16,7 +16,10 @@ import { PasswordInput } from "../components/password-input";
 import { loginSchema, type LoginValues } from "../schemas/auth";
 
 function loginErrorMessage(error: unknown): string {
-  if (isApiError(error) && error.code === "invalid_credentials") return strings.auth.invalidCredentials;
+  if (isApiError(error)) {
+    if (error.code === "invalid_credentials") return strings.auth.invalidCredentials;
+    if (error.code === "rate_limited") return strings.auth.rateLimited(retryAfterMinutes(error));
+  }
   return errorMessage(error, strings.auth.signInFailed);
 }
 
@@ -26,7 +29,7 @@ export function LoginPage() {
   const login = useLogin();
   const form = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
-    defaultValues: { username: "", password: "" },
+    defaultValues: { email: "", password: "" },
   });
 
   const sessionExpired = params.get("reason") === "session_expired";
@@ -34,10 +37,7 @@ export function LoginPage() {
 
   function onSubmit(values: LoginValues) {
     login.mutate(values, {
-      onSuccess: (result) => {
-        setToken(result.token);
-        navigate(result.must_change_password ? "/change-password" : "/", { replace: true });
-      },
+      onSuccess: (me) => navigate(me.user.must_change_password ? CHANGE_PASSWORD_PATH : "/", { replace: true }),
     });
   }
 
@@ -61,12 +61,20 @@ export function LoginPage() {
           <fieldset disabled={pending} className="grid gap-4">
             <FormField
               control={form.control}
-              name="username"
+              name="email"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{strings.auth.username}</FormLabel>
+                  <FormLabel>{strings.auth.email}</FormLabel>
                   <FormControl>
-                    <Input autoComplete="username" autoCapitalize="off" autoFocus {...field} />
+                    <Input
+                      type="email"
+                      inputMode="email"
+                      autoComplete="username"
+                      autoCapitalize="off"
+                      spellCheck={false}
+                      autoFocus
+                      {...field}
+                    />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

@@ -16,7 +16,7 @@ import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, For
 import { Input } from "@/shared/ui/input";
 import { setupStatusKey, useSetup, useSetupStatus } from "../api/auth";
 import { AuthLayout } from "../components/auth-layout";
-import { PasswordInput } from "../components/password-input";
+import { PasswordInput } from "@/shared/ui/password-input";
 import { setupSchema, type SetupValues } from "../schemas/auth";
 
 const FIELD_NAMES = ["name", "email", "password", "setup_token"] as const;

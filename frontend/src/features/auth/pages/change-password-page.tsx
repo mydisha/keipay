@@ -13,7 +13,7 @@ import { Button } from "@/shared/ui/button";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/shared/ui/form";
 import { useChangePassword, useMe, useSignOut } from "../api/auth";
 import { AuthLayout } from "../components/auth-layout";
-import { PasswordInput } from "../components/password-input";
+import { PasswordInput } from "@/shared/ui/password-input";
 import { changePasswordSchema, type ChangePasswordValues } from "../schemas/auth";
 
 const FIELD_NAMES = ["current_password", "new_password"] as const;

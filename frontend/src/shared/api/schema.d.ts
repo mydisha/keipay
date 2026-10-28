@@ -50,6 +50,18 @@ export interface paths {
          *     `metadata`, returns `400 invalid_request` with `details.fields`
          *     (for example `items.0.quantity` or `metadata.note`).
          *     `400 validation_failed` is for business rules.
+         *
+         *     The checkout is created on the app's default connection (see
+         *     Connections and providers). Idempotent replays are answered before
+         *     the connection is looked at, so they succeed even if the
+         *     connection was changed since. Without a usable default connection
+         *     the request returns `422 no_eligible_connection` with
+         *     `details.reasons` (`["no_default_connection"]` or
+         *     `["connection_disabled"]`). When the gateway refuses the request
+         *     (validation, amount limits, credentials) it returns
+         *     `422 provider_rejected`; when the gateway cannot be reached or
+         *     answers with a server error it returns `503 provider_unavailable`.
+         *     Neither creates a payment, so the same `order_id` may be retried.
          */
         post: operations["createPayment"];
         delete?: never;
@@ -78,6 +90,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/webhooks/{provider}/{connection_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Receive a gateway callback for one connection
+         * @description Paste this URL (shown as `webhook_url` on the connection) into the
+         *     gateway dashboard. KeiPay resolves the connection by id, requires
+         *     `provider` to equal the connection's provider, then verifies the
+         *     callback with that connection's credentials before reading the
+         *     body. For `xendit`, the `x-callback-token` header must equal the
+         *     connection's `callback_token` (constant-time comparison).
+         *
+         *     - Unknown connection id, malformed id, or a provider that differs
+         *       from the connection's: `404 not_found`.
+         *     - Verification fails: `401 invalid_callback_token`, logged as a
+         *       security event. A token valid for another connection is still
+         *       rejected.
+         *     - Body is not valid JSON for the provider: `400 invalid_request`.
+         *     - Duplicate and stale callbacks, callbacks whose amount or
+         *       currency does not match the payment, and callbacks for a payment
+         *       created through a different connection are acknowledged with
+         *       `200` (the last two are recorded, not applied, and logged as
+         *       security events) so the gateway stops retrying.
+         *     - Real processing failures, including an unknown payment
+         *       reference, return `500` so the gateway retries.
+         *
+         *     Disabled connections still accept callbacks, so payments created
+         *     before disabling keep updating.
+         */
+        post: operations["receiveConnectionCallback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/webhooks/xendit": {
         parameters: {
             query?: never;
@@ -88,11 +142,16 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Receive a Xendit invoice callback
-         * @description Configure this URL in the Xendit dashboard. Duplicate and stale
-         *     callbacks, and callbacks whose amount or currency does not match the
-         *     payment, are acknowledged with `200` so Xendit stops retrying; real
-         *     processing failures return `500` so Xendit retries.
+         * Receive a Xendit invoice callback (legacy alias)
+         * @deprecated
+         * @description Alias of `/webhooks/xendit/{connection_id}` for the connection
+         *     imported from the deprecated `XENDIT_SECRET_KEY` and
+         *     `XENDIT_CALLBACK_TOKEN` settings (its `legacy_webhook_alias` is
+         *     `true`), so a Xendit dashboard that still points here keeps
+         *     working. Behaves exactly like the per-connection URL, including
+         *     verification with that connection's `callback_token`. Returns
+         *     `404 not_found` when no connection was imported. Point the Xendit
+         *     dashboard at the connection's own `webhook_url` instead.
          */
         post: operations["receiveXenditInvoiceCallback"];
         delete?: never;
@@ -421,6 +480,13 @@ export interface paths {
          *     unknown fields are ignored. A request that changes nothing returns
          *     the app and records nothing; otherwise it records `app.update`
          *     with only the changed fields.
+         *
+         *     `default_connection_id` sets (`con_…`) or clears (`null`) the
+         *     connection `POST /v1/payments` uses. It returns
+         *     `400 invalid_request` with field `default_connection_id` and rule
+         *     `public_id` (malformed), `exists` (no such connection),
+         *     `environment` (the connection's environment differs from the
+         *     app's) or `status` (the connection is disabled).
          */
         patch: operations["updateApp"];
         trace?: never;
@@ -541,6 +607,228 @@ export interface paths {
          *     returns `404 not_found`.
          */
         post: operations["revokeAppApiKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List gateway providers
+         * @description Every provider adapter built into this server, sorted by `name`,
+         *     with the schemas the console renders forms from. Not paginated:
+         *     the list is small and fixed per server version.
+         */
+        get: operations["listProviders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List connections
+         * @description Cursor-paginated, newest first (`created_at` descending, then `id`
+         *     descending). Includes disabled connections unless filtered. An
+         *     unknown `environment`, `status` or `provider` returns
+         *     `400 invalid_request` with rule `oneof`.
+         */
+        get: operations["listConnections"];
+        put?: never;
+        /**
+         * Create a connection
+         * @description Creates an active, untested connection. `credentials` and
+         *     `settings` are validated against the provider's `ConfigSchema`:
+         *     errors use field `credentials.<key>` or `settings.<key>` with rule
+         *     `required`, `type`, `min_length`, `max_length`, `pattern`,
+         *     `minimum`, `maximum`, `oneof` or `unknown` (a key the schema does
+         *     not define), and the provider's own cross-field rules (Xendit:
+         *     `credentials.secret_key` rule `environment` when a
+         *     `xnd_development_` key is used for `live` or a `xnd_production_`
+         *     key for `test`). Credential values are trimmed. Missing settings
+         *     take their schema default. An unknown `provider` returns rule
+         *     `oneof`. `name` must be unused (`409 conflict`). Does not contact
+         *     the gateway; call `/test` next. Records `connection.create`
+         *     (without credentials).
+         */
+        post: operations["createConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/connections/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a connection */
+        get: operations["getConnection"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Update a connection's name or settings
+         * @description Send only the fields to change; `settings` replaces the whole
+         *     object (missing keys take their default) and is validated like on
+         *     create. `provider` and `environment` never change: a body
+         *     containing either returns `400 invalid_request` with rule
+         *     `immutable`. `credentials` in the body returns rule `immutable`
+         *     too; use `PATCH /admin/connections/{id}/credentials`. A body with
+         *     none of the updatable fields returns `400 invalid_request` with
+         *     field `body` and rule `required`. A request that changes nothing
+         *     returns the connection and records nothing; otherwise it records
+         *     `connection.update` with only the changed fields.
+         */
+        patch: operations["updateConnection"];
+        trace?: never;
+    };
+    "/admin/connections/{id}/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Replace some or all credentials
+         * @description Keys present in `credentials` replace the stored values; keys left
+         *     out keep theirs. The merged result is validated like on create
+         *     (an empty string fails `required`). An empty `credentials` object
+         *     returns `400 invalid_request` with field `credentials` and rule
+         *     `required`. The connection's test result is reset
+         *     (`last_test_status` and `last_tested_at` become `null`). Records
+         *     `connection.update_credentials` with the names of the replaced
+         *     keys only.
+         */
+        patch: operations["updateConnectionCredentials"];
+        trace?: never;
+    };
+    "/admin/connections/{id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable a connection
+         * @description A disabled connection cannot be chosen as an app's default and
+         *     creates no new checkouts; its callback URL keeps working for
+         *     payments made earlier. Returns `409 connection_in_use` while any
+         *     app (active or disabled) uses it as its default connection;
+         *     `details.apps` lists up to 10 of them (`AppSummary`) and
+         *     `details.app_count` their number. Disabling a disabled connection
+         *     returns it unchanged and records nothing; otherwise records
+         *     `connection.disable`.
+         */
+        post: operations["disableConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/connections/{id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enable a connection
+         * @description Enabling an active connection returns it unchanged and records
+         *     nothing; otherwise records `connection.enable`.
+         */
+        post: operations["enableConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/connections/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Test a connection's credentials
+         * @description Calls the gateway with the stored credentials (Xendit: list one
+         *     invoice, which needs the invoice read permission KeiPay uses
+         *     anyway) with a 10-second timeout. The outcome is a result, not an
+         *     error: `200` with `result` `ok` or `failed` and a short `message`
+         *     that never contains credentials or raw gateway responses. Stores
+         *     `last_tested_at`, `last_test_status` and `last_test_error` and
+         *     records `connection.test`. Works on disabled connections too.
+         */
+        post: operations["testConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/connections/{id}/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Choose the channels a connection offers
+         * @description Replaces the connection's channel list. Every `channel` must be
+         *     one of the provider's `capabilities.channels` (rule `oneof` on
+         *     `channels.<i>.channel`) and appear once (rule `duplicate`). A
+         *     non-empty list must enable at least one channel (field `channels`,
+         *     rule `min_enabled`). An empty list resets to the default: every
+         *     channel of the provider enabled. When the enabled channels are a
+         *     strict subset of the provider's channels, checkouts are limited to
+         *     them (Xendit `payment_methods`); otherwise the checkout offers
+         *     everything the gateway account has activated. Records
+         *     `connection.update_channels` with before and after lists; a
+         *     request that changes nothing records nothing.
+         */
+        put: operations["replaceConnectionChannels"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -722,11 +1010,15 @@ export interface components {
          *     | `setup_completed` | 409 | First-run setup already happened; sign in instead. |
          *     | `last_owner` | 409 | The change would leave no active owner. |
          *     | `cannot_modify_self` | 409 | Owners cannot disable themselves or reset their own password through the users API. |
+         *     | `connection_in_use` | 409 | The connection is some app's default connection. `details.apps` lists up to 10 (`AppSummary`), `details.app_count` counts them. |
+         *     | `no_eligible_connection` | 422 | No connection can take the payment. `details.reasons` is a list of strings: `no_default_connection`, `connection_disabled`. More reasons may be added. |
+         *     | `provider_rejected` | 422 | The gateway refused the request (validation, limits, credentials). `details.provider` names the provider. The message is generic; the gateway's own text is only logged. |
          *     | `rate_limited` | 429 | Too many failed attempts. `details.retry_after_seconds` and the `Retry-After` header say when to retry. |
          *     | `internal_error` | 500 | Unexpected server error. |
+         *     | `provider_unavailable` | 503 | The gateway could not be reached, timed out, or answered with a server error. Retry with the same `order_id`. |
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "validation_failed" | "invalid_cursor" | "unauthorized" | "invalid_credentials" | "missing_token" | "invalid_token" | "missing_signature_headers" | "invalid_timestamp" | "timestamp_out_of_range" | "unknown_api_key" | "invalid_signature" | "replayed_request" | "invalid_callback_token" | "tenant_inactive" | "not_found" | "conflict" | "internal_error" | "session_required" | "session_expired" | "forbidden" | "password_change_required" | "invalid_csrf_token" | "invalid_setup_token" | "setup_completed" | "last_owner" | "cannot_modify_self" | "rate_limited" | "api_key_revoked" | "api_key_expired" | "idempotency_key_reused";
+        ErrorCode: "invalid_request" | "validation_failed" | "invalid_cursor" | "unauthorized" | "invalid_credentials" | "missing_token" | "invalid_token" | "missing_signature_headers" | "invalid_timestamp" | "timestamp_out_of_range" | "unknown_api_key" | "invalid_signature" | "replayed_request" | "invalid_callback_token" | "tenant_inactive" | "not_found" | "conflict" | "internal_error" | "session_required" | "session_expired" | "forbidden" | "password_change_required" | "invalid_csrf_token" | "invalid_setup_token" | "setup_completed" | "last_owner" | "cannot_modify_self" | "rate_limited" | "api_key_revoked" | "api_key_expired" | "idempotency_key_reused" | "connection_in_use" | "no_eligible_connection" | "provider_rejected" | "provider_unavailable";
         /**
          * @example {
          *       "error": {
@@ -858,6 +1150,10 @@ export interface components {
             /** Format: date-time */
             expected_settlement_at?: string;
         };
+        /** @description The provider's own callback body, stored raw. For `xendit` see `XenditInvoiceCallback`. */
+        GatewayCallback: {
+            [key: string]: unknown;
+        };
         /** @description The subset of the Xendit invoice callback KeiPay reads. Other fields are stored raw and ignored. */
         XenditInvoiceCallback: {
             id: string;
@@ -902,7 +1198,7 @@ export interface components {
          * @description See "Roles and permissions" above. New permissions may be added.
          * @enum {string}
          */
-        Permission: "apps:read" | "apps:write" | "payments:read" | "deliveries:read" | "deliveries:replay" | "audit:read" | "users:manage";
+        Permission: "apps:read" | "apps:write" | "connections:read" | "connections:write" | "payments:read" | "deliveries:read" | "deliveries:replay" | "audit:read" | "users:manage";
         /**
          * Format: email
          * @description One address without a display name, for example `ops@example.com`.
@@ -1061,6 +1357,8 @@ export interface components {
             [key: string]: string | number | boolean | null;
         };
         App: {
+            /** @description The connection `POST /v1/payments` uses; `null` when none is set. Always the app's environment. */
+            default_connection: components["schemas"]["ConnectionSummary"] | null;
             /** @example app_01JBKQ7Z8M4X2Y6V3N9T5R1W0C */
             id: string;
             /** @description See `AppSlug`. Never changes. */
@@ -1099,6 +1397,8 @@ export interface components {
          *     returns `400 invalid_request` with rule `immutable`.
          */
         UpdateAppRequest: {
+            /** @description An active connection with the app's environment, or `null` to clear. */
+            default_connection_id?: string | null;
             name?: components["schemas"]["AppName"];
             webhook_url?: components["schemas"]["HttpUrl"];
             redirect_success_url?: components["schemas"]["HttpUrl"];
@@ -1192,6 +1492,234 @@ export interface components {
              * @description The HMAC secret for `X-Signature`. Shown once; store it now.
              */
             api_secret: string;
+        };
+        /**
+         * @description A provider adapter built into the server, e.g. `xendit`. The set
+         *     is whatever `GET /admin/providers` returns; an unknown name is
+         *     rejected with rule `oneof`.
+         * @example xendit
+         */
+        ProviderName: string;
+        /**
+         * @description Normalized payment method code, e.g. `QRIS`, `VA_BCA`,
+         *     `EWALLET_OVO`, `CARD`. The set a provider supports is in its
+         *     `capabilities.channels`; new codes may be added.
+         * @example QRIS
+         * @example VA_BCA
+         */
+        Channel: string;
+        ChannelInfo: {
+            code: components["schemas"]["Channel"];
+            /** @description Display name, e.g. `BCA Virtual Account`. */
+            label: string;
+        };
+        /**
+         * @description `string` (text; credentials are always strings), `integer`,
+         *     `boolean`, or `enum` (one of `options[].value`, a string). New
+         *     types may be added; a client that does not know a type should not
+         *     offer the form.
+         * @enum {string}
+         */
+        SchemaFieldType: "string" | "integer" | "boolean" | "enum";
+        SchemaFieldOption: {
+            value: string;
+            label: string;
+        };
+        /**
+         * @description One form field, in display order. Validation keywords mirror JSON
+         *     Schema; the server enforces the same rules and reports violations
+         *     as `credentials.<key>` or `settings.<key>` with the rule named
+         *     after the keyword (`required`, `type`, `min_length`,
+         *     `max_length`, `pattern`, `minimum`, `maximum`, `oneof`).
+         */
+        SchemaField: {
+            /** @example secret_key */
+            key: string;
+            type: components["schemas"]["SchemaFieldType"];
+            /** @example Secret API key */
+            label: string;
+            /** @description Help text shown under the field; may be empty. */
+            description: string;
+            /** @description Example input; never a real value. */
+            placeholder?: string;
+            /** @description Masked in forms, never returned, redacted from logs and audit entries. */
+            secret: boolean;
+            required: boolean;
+            /** @description Used when the value is omitted; `null` when there is none. Secret fields never have one. */
+            default: string | number | boolean | null;
+            /** @description Set for `enum` fields only. */
+            options?: components["schemas"]["SchemaFieldOption"][];
+            min_length?: number;
+            max_length?: number;
+            /** @description An RE2 regular expression the whole value must match (anchored). */
+            pattern?: string;
+            /** @description Human-readable form of `pattern` for error messages, e.g. "Starts with xnd_development_ or xnd_production_". */
+            pattern_hint?: string;
+            /** Format: int64 */
+            minimum?: number;
+            /** Format: int64 */
+            maximum?: number;
+        };
+        ConfigSchema: {
+            fields: components["schemas"]["SchemaField"][];
+        };
+        ProviderCapabilities: {
+            /** @description Channels the provider can offer, in display order. */
+            channels: components["schemas"]["ChannelInfo"][];
+            /** @description ISO 4217 codes. Informational until routing uses it. */
+            currencies: string[];
+            /** @description A checkout can be limited to chosen channels. */
+            can_restrict_channels: boolean;
+            /** @description An unpaid checkout can be cancelled (expired). */
+            can_cancel: boolean;
+            /** @description Callbacks carry the gateway fee. */
+            reports_fee: boolean;
+        };
+        ProviderWebhookSetup: {
+            /** @description Plain-text steps, in order, for pasting the connection's `webhook_url` into the gateway dashboard. */
+            instructions: string[];
+            /** @description Where those settings live in the gateway dashboard. */
+            dashboard_url?: string;
+        };
+        Provider: {
+            name: components["schemas"]["ProviderName"];
+            /** @example Xendit */
+            display_name: string;
+            description: string;
+            docs_url?: string;
+            credential_schema: components["schemas"]["ConfigSchema"];
+            settings_schema: components["schemas"]["ConfigSchema"];
+            capabilities: components["schemas"]["ProviderCapabilities"];
+            webhook_setup: components["schemas"]["ProviderWebhookSetup"];
+        };
+        ProviderListResponse: {
+            data: components["schemas"]["Provider"][];
+        };
+        /**
+         * @description `disabled` connections create no new checkouts and cannot be an app default; their callbacks still work.
+         * @enum {string}
+         */
+        ConnectionStatus: "active" | "disabled";
+        /**
+         * @description Outcome of the last `POST /admin/connections/{id}/test`.
+         * @enum {string}
+         */
+        ConnectionTestStatus: "ok" | "failed";
+        /**
+         * @description 3-64 characters of `a-z`, `0-9` and `-`, starting and ending with
+         *     a letter or digit (surrounding spaces are trimmed and upper case is
+         *     lowered before checking). Unique across connections
+         *     (`409 conflict`). Invalid: rule `slug`.
+         * @example xendit-live
+         */
+        ConnectionName: string;
+        /** @description The connection a row refers to. */
+        ConnectionSummary: {
+            /** @example con_01JBKQ7Z8M4X2Y6V3N9T5R1W0C */
+            id: string;
+            name: string;
+            provider: components["schemas"]["ProviderName"];
+            environment: components["schemas"]["AppEnvironment"];
+            status: components["schemas"]["ConnectionStatus"];
+        };
+        ConnectionListItem: {
+            /** @example con_01JBKQ7Z8M4X2Y6V3N9T5R1W0C */
+            id: string;
+            name: string;
+            provider: components["schemas"]["ProviderName"];
+            environment: components["schemas"]["AppEnvironment"];
+            status: components["schemas"]["ConnectionStatus"];
+            /** @description `true` for the connection imported from `XENDIT_*` settings; `POST /webhooks/xendit` also reaches it. */
+            legacy_webhook_alias: boolean;
+            /** Format: date-time */
+            last_tested_at: string | null;
+            /** @description `null` when never tested or since the credentials changed. */
+            last_test_status: components["schemas"]["ConnectionTestStatus"] | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        CredentialHint: {
+            /** @description A `credential_schema` field key. */
+            key: string;
+            /** @description The last 4 characters of the stored value; `null` when the value is shorter than 12 characters. */
+            last4: string | null;
+        };
+        ConnectionChannel: {
+            channel: components["schemas"]["Channel"];
+            label: string;
+            enabled: boolean;
+        };
+        /** @description A connection with everything except credential values. */
+        Connection: components["schemas"]["ConnectionListItem"] & {
+            /** @description One hint per `credential_schema` field, in schema order. Values are never returned. */
+            credentials: components["schemas"]["CredentialHint"][];
+            /** @description Current settings, defaults filled in, keyed by `settings_schema` field. */
+            settings: {
+                [key: string]: unknown;
+            };
+            /** @description Every channel of the provider, in capability order, with whether this connection offers it. */
+            channels: components["schemas"]["ConnectionChannel"][];
+            /**
+             * @description `{HTTP_BASE_URL}/webhooks/{provider}/{id}`. Paste it into the gateway dashboard.
+             * @example https://pay.example.com/webhooks/xendit/con_01JBKQ7Z8M4X2Y6V3N9T5R1W0C
+             */
+            webhook_url: string;
+            /** @description Sanitized reason of the last failed test; `null` otherwise. */
+            last_test_error: string | null;
+        };
+        CreateConnectionRequest: {
+            provider: components["schemas"]["ProviderName"];
+            name: components["schemas"]["ConnectionName"];
+            environment: components["schemas"]["AppEnvironment"];
+            /** @description Values keyed by `credential_schema` field. */
+            credentials: {
+                [key: string]: string;
+            };
+            /** @description Values keyed by `settings_schema` field; omitted means all defaults. */
+            settings?: {
+                [key: string]: unknown;
+            };
+        };
+        /**
+         * @description Send only the fields to change. `provider`, `environment` or
+         *     `credentials` in the body returns `400 invalid_request` with rule
+         *     `immutable`.
+         */
+        UpdateConnectionRequest: {
+            name?: components["schemas"]["ConnectionName"];
+            settings?: {
+                [key: string]: unknown;
+            };
+        };
+        UpdateConnectionCredentialsRequest: {
+            /** @description The values to replace, keyed by `credential_schema` field. */
+            credentials: {
+                [key: string]: string;
+            };
+        };
+        ReplaceConnectionChannelsRequest: {
+            channels: {
+                channel: components["schemas"]["Channel"];
+                enabled: boolean;
+            }[];
+        };
+        ConnectionResponse: {
+            connection: components["schemas"]["Connection"];
+        };
+        ConnectionListResponse: {
+            data: components["schemas"]["ConnectionListItem"][];
+            /** @description Pass as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        ConnectionTestResponse: {
+            result: components["schemas"]["ConnectionTestStatus"];
+            /** @description Short, sanitized outcome, e.g. "Credentials accepted." or "The provider rejected the credentials (HTTP 401)." */
+            message: string;
+            /** Format: date-time */
+            tested_at: string;
+            connection: components["schemas"]["Connection"];
         };
         Payment: {
             /** @example pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C */
@@ -1333,6 +1861,7 @@ export interface components {
              * @description Entries written before users existed use `admin_user` for the console admin; entries written before apps existed use `tenant` with the integer tenant id.
              * @example app
              * @example api_key
+             * @example connection
              * @example user
              * @example webhook_delivery
              */
@@ -1349,7 +1878,10 @@ export interface components {
             /**
              * @description `{target_type}.{verb}`. Current values: `app.create`,
              *     `app.update`, `app.disable`, `app.enable`, `api_key.create`,
-             *     `api_key.rotate`, `api_key.revoke`, `webhook_delivery.replay`,
+             *     `api_key.rotate`, `api_key.revoke`, `connection.create`,
+             *     `connection.update`, `connection.update_credentials`,
+             *     `connection.update_channels`, `connection.disable`,
+             *     `connection.enable`, `connection.test`, `webhook_delivery.replay`,
              *     `user.setup`, `user.create`, `user.update`, `user.disable`,
              *     `user.enable`, `user.reset_password`, `user.change_password`,
              *     `user.login`, `user.login_failed`, `user.logout`. Older entries
@@ -1434,12 +1966,38 @@ export interface components {
             };
         };
         /**
-         * @description `conflict` (duplicate slug within an environment or duplicate
-         *     email, or an `order_id` reused with a different amount or
-         *     currency), `idempotency_key_reused`, `setup_completed`,
-         *     `last_owner`, or `cannot_modify_self`.
+         * @description `conflict` (duplicate slug within an environment, duplicate
+         *     connection name or email, or an `order_id` reused with a different
+         *     amount or currency), `idempotency_key_reused`, `setup_completed`,
+         *     `last_owner`, `cannot_modify_self`, or `connection_in_use`.
          */
         Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /**
+         * @description `no_eligible_connection` (the app has no usable default
+         *     connection; `details.reasons`) or `provider_rejected` (the gateway
+         *     refused the request; `details.provider` names it).
+         */
+        UnprocessableEntity: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
+        /**
+         * @description `provider_unavailable`: the gateway could not be reached, timed
+         *     out, or answered with a server error. No payment was stored; retry
+         *     with the same `order_id`.
+         */
+        ServiceUnavailable: {
             headers: {
                 [name: string]: unknown;
             };
@@ -1491,6 +2049,12 @@ export interface components {
          *     `[{"field": "key_id", "rule": "public_id"}]`.
          */
         ApiKeyIdPath: string;
+        /**
+         * @description Connection id (`con_…`; lower case is accepted). Any other format
+         *     returns `400 invalid_request` with `details.fields`
+         *     `[{"field": "id", "rule": "public_id"}]`.
+         */
+        ConnectionIdPath: string;
         /** @description Only rows of this app (`app_…`). On these legacy offset lists an unparseable value is ignored; a well-formed id that matches no app still filters, so no rows are returned. */
         AppIdFilter: string;
         /**
@@ -1583,7 +2147,9 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["UnprocessableEntity"];
             500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     getPayment: {
@@ -1619,6 +2185,39 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    receiveConnectionCallback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The connection's provider. */
+                provider: components["schemas"]["ProviderName"];
+                /** @description The connection's `con_…` id (lower case is accepted). Any other format returns `404 not_found`. */
+                connection_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GatewayCallback"];
+            };
+        };
+        responses: {
+            /** @description Accepted (applied, duplicate, stale or recorded mismatch). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReceivedResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     receiveXenditInvoiceCallback: {
         parameters: {
             query?: never;
@@ -1643,6 +2242,7 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -2343,6 +2943,328 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApiKeyResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listProviders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The providers. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listConnections: {
+        parameters: {
+            query?: {
+                environment?: components["schemas"]["AppEnvironment"];
+                status?: components["schemas"]["ConnectionStatus"];
+                provider?: components["schemas"]["ProviderName"];
+                /** @description Page size. Outside 1-200 returns `400 invalid_request`. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Opaque `next_cursor` from the previous page. A malformed cursor returns `400 invalid_cursor`. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of connections. Credentials are never returned here. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionListResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description The connection. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Connection id (`con_…`; lower case is accepted). Any other format
+                 *     returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["ConnectionIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection, with credential hints, settings and channels. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Connection id (`con_…`; lower case is accepted). Any other format
+                 *     returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["ConnectionIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description The connection. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateConnectionCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Connection id (`con_…`; lower case is accepted). Any other format
+                 *     returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["ConnectionIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateConnectionCredentialsRequest"];
+            };
+        };
+        responses: {
+            /** @description The connection. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    disableConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Connection id (`con_…`; lower case is accepted). Any other format
+                 *     returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["ConnectionIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    enableConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Connection id (`con_…`; lower case is accepted). Any other format
+                 *     returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["ConnectionIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The connection. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    testConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Connection id (`con_…`; lower case is accepted). Any other format
+                 *     returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["ConnectionIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The test outcome and the updated connection. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionTestResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    replaceConnectionChannels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Connection id (`con_…`; lower case is accepted). Any other format
+                 *     returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["ConnectionIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReplaceConnectionChannelsRequest"];
+            };
+        };
+        responses: {
+            /** @description The connection. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectionResponse"];
                 };
             };
             400: components["responses"]["BadRequest"];

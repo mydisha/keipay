@@ -16,6 +16,10 @@ const TONES: Record<string, StatusTone> = {
   // API key states (lowercase, unlike the payment status EXPIRED).
   expired: "warning",
   revoked: "danger",
+  // Connection test results (lowercase, unlike the payment status FAILED).
+  ok: "success",
+  failed: "danger",
+  not_tested: "neutral",
 };
 
 export const toneClasses: Record<StatusTone, string> = {

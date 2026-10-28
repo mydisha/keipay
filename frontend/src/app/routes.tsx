@@ -87,6 +87,18 @@ export const routes: RouteObject[] = [
         }),
       },
       {
+        path: "connections/new",
+        lazy: async () => ({
+          Component: (await import("@/features/connections/pages/new-connection-page")).NewConnectionPage,
+        }),
+      },
+      {
+        path: "connections/:id",
+        lazy: async () => ({
+          Component: (await import("@/features/connections/pages/connection-detail-page")).ConnectionDetailPage,
+        }),
+      },
+      {
         path: "webhooks",
         lazy: async () => ({ Component: (await import("@/features/webhooks/pages/webhooks-page")).WebhooksPage }),
       },

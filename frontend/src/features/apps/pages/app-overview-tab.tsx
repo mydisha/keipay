@@ -4,6 +4,7 @@ import { Card } from "@/shared/ui/card";
 import { DateTimeText } from "@/shared/ui/date-time-text";
 import { JsonViewer } from "@/shared/ui/json-viewer";
 import { StatusBadge } from "@/shared/ui/status-badge";
+import { DefaultConnection } from "../components/default-connection";
 import { EnvironmentBadge } from "../components/environment-badge";
 import { useDetailApp } from "./app-detail-page";
 
@@ -65,6 +66,17 @@ export function AppOverviewTab() {
               <UrlValue value={app.redirect_failure_url} />
             </Fact>
           </dl>
+        </Card>
+      </section>
+      <section className="grid gap-3" aria-labelledby="app-connection-heading">
+        <div className="grid gap-1">
+          <h2 id="app-connection-heading" className="text-base font-semibold">
+            {strings.apps.defaultConnection}
+          </h2>
+          <p className="text-sm text-muted-foreground">{strings.apps.defaultConnectionBody}</p>
+        </div>
+        <Card className="p-4 text-sm">
+          <DefaultConnection app={app} />
         </Card>
       </section>
       <section className="grid gap-3" aria-labelledby="app-metadata-heading">

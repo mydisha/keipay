@@ -40,8 +40,10 @@ that use.
 - At-least-once forwarding to each app's `webhook_url` with retries, a sweeper
   for stuck deliveries and admin replay.
 - Per-app reporting of gross, fee and net amounts.
-- Admin console (React) served by the same process, with an audit log of
-  every admin change.
+- Admin console (React) served by the same process: console users with
+  `owner`, `admin` and `viewer` roles, cookie sessions stored in Redis, CSRF
+  protection, rate-limited sign-in, and an audit log of every admin change
+  and sign-in.
 - Tenant secrets encrypted at rest with AES-256-GCM.
 
 ## Repository layout
@@ -72,16 +74,18 @@ Requirements: Go 1.26+, Node.js 22+, Docker, `openssl`.
 make setup   # .env with generated secrets, deps, postgres + redis, migrate + seed
 ```
 
-`make setup` prints the **admin password** and the **demo tenant
-credentials** once. Then set `XENDIT_SECRET_KEY` and `XENDIT_CALLBACK_TOKEN`
-in `.env` (Xendit dashboard → API keys / Webhooks) and run:
+`make setup` prints the **demo tenant credentials** once. Then set
+`XENDIT_SECRET_KEY` and `XENDIT_CALLBACK_TOKEN` in `.env` (Xendit dashboard →
+API keys / Webhooks) and run:
 
 ```bash
 make dev     # API on :8080, console on :5173 (hot reload)
 ```
 
+Open the console and follow [First sign-in](#first-sign-in).
+
 Other targets: `make backend`, `make frontend`, `make test`, `make check`,
-`make ci`, `make gen`, `make reset-admin PW=...`, `make help`.
+`make ci`, `make gen`, `make reset-admin EMAIL=... PW=...`, `make help`.
 
 ### Ports
 
@@ -105,20 +109,64 @@ In the Xendit dashboard, set the invoice webhook URL to
 
 ```bash
 cp .env.example .env    # or: make env
-# set JWT_SECRET, ENCRYPTION_KEY, XENDIT_SECRET_KEY, XENDIT_CALLBACK_TOKEN
+# set ENCRYPTION_KEY, XENDIT_SECRET_KEY, XENDIT_CALLBACK_TOKEN (and SETUP_TOKEN, see below)
 docker compose up -d --build
 ```
 
 This starts Postgres, Redis, a one-shot migration, and a single `keipay`
 container serving the API, the webhook worker and the admin console on
-`http://localhost:8080`. Create the admin user and a demo tenant once
-(credentials are printed once):
+`http://localhost:8080`. Optionally create a demo tenant (its credentials are
+printed once):
 
 ```bash
 docker compose run --rm --entrypoint /app/keipay-migrate keipay -seed
 ```
 
+Then open `http://localhost:8080` and follow [First sign-in](#first-sign-in).
+
 Optional queue UI: `docker compose --profile tools up -d asynqmon` (`:8081`).
+
+## First sign-in
+
+While no console user exists, the console opens a **first-run setup** page
+that creates the first **owner** (email, name, password of at least 12
+characters) and signs you in. Setup works exactly once; after that the page
+redirects to sign-in.
+
+Anyone who reaches the console before you can run setup. If the console is
+reachable by others before you create the owner, set `SETUP_TOKEN` in `.env`
+first: setup then asks for that value.
+
+Owners add more users in **Settings → Users** and pick a role:
+
+| Role | Can |
+|---|---|
+| `owner` | everything, including users |
+| `admin` | everything except users |
+| `viewer` | read apps, payments, ledger and webhook deliveries; no changes, no audit log |
+
+New users and password resets get a temporary password, shown once, that
+must be changed at first sign-in.
+
+**Locked out?** On the server, set a password for a user by email (a random
+one is generated and printed if `PW` is empty, and must then be changed at
+sign-in). It also re-enables that user and ends their sessions. With no users
+at all, it creates the owner instead of running setup:
+
+```bash
+make reset-admin EMAIL=you@example.com PW='a long passphrase'
+# Docker:
+docker compose run --rm --entrypoint /app/keipay-migrate keipay -reset-admin -email you@example.com
+```
+
+**Upgrading from a version with the single `admin` login:** that account
+becomes an owner with the email `admin@keipay.invalid` and keeps its
+password. Sign in with that email, then change it in Settings → Users.
+
+Behind a reverse proxy, list the proxy in `TRUSTED_PROXIES` so sign-in rate
+limits and the audit log see the real client IP. Session cookies are
+`Secure` unless `APP_ENV=development`; serve the console over HTTPS, or set
+`COOKIE_SECURE=false` for plain HTTP on a host other than `localhost`.
 
 ## API contract
 
@@ -216,16 +264,29 @@ the stale one is dropped, so you may get `payment.settled` without
 
 ## Admin API
 
-`POST /admin/login` returns a JWT; send it as `Authorization: Bearer <token>`:
+The admin API is for the console. `POST /admin/login` (or `POST /admin/setup`
+on first run) sets an `HttpOnly` session cookie, `keipay_session`, and a
+CSRF cookie, `keipay_csrf`. Every `POST`/`PUT`/`PATCH`/`DELETE` under
+`/admin/` must echo the `keipay_csrf` value in the `X-CSRF-Token` header.
+Sessions expire after 30 minutes idle or 12 hours in total
+(`SESSION_IDLE_TIMEOUT`, `SESSION_ABSOLUTE_TIMEOUT`).
 
+- `GET/POST /admin/setup`, `POST /admin/login`, `POST /admin/logout`
+- `GET /admin/me`, `POST /admin/me/password`
+- `GET/POST /admin/users`, `GET/PATCH /admin/users/:id`,
+  `POST /admin/users/:id/disable|enable|reset-password` (owner only)
 - `POST/GET /admin/tenants`, `PUT /admin/tenants/:id`, `POST /admin/tenants/:id/rotate`
 - `GET /admin/payments`, `GET /admin/ledger`
 - `GET /admin/webhook-deliveries`, `POST /admin/webhook-deliveries/:id/replay`
 - `GET /admin/audit-logs` (cursor-paginated: `limit`, `cursor`, `next_cursor`)
 
-Every admin change (tenant create/update/rotate, password change, replay) is
-recorded in the audit log with who, what, when and before/after values,
-never secrets.
+The server checks each operation's permission against the caller's role
+(`403 forbidden` otherwise); the table is in the spec and `GET /admin/me`
+returns the caller's permissions.
+
+Every admin change (users, tenants, password changes, replays) and every
+sign-in, failed sign-in and sign-out is recorded in the audit log with who,
+what, when and before/after values, never secrets or passwords.
 
 ## Tests
 
@@ -248,6 +309,11 @@ migrated database:
 KEI_TEST_POSTGRES_DSN='postgres://keipay:keipay@localhost:5432/keipay?sslmode=disable' \
   go test ./backend/internal/repository/postgres/ -run Integration
 ```
+
+Tests that need an empty `users` table (migrations, the first-run setup race,
+the `keipay-migrate` CLI) create a throwaway database on that server and drop
+it afterwards, so the DSN's role needs the `CREATEDB` privilege
+(`ALTER ROLE keipay CREATEDB`). The `make ci` stack already uses a superuser.
 
 ## Contributing and security
 

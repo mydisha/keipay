@@ -664,7 +664,7 @@ Diputuskan di fase 0 dan berlaku untuk semua fase berikutnya.
 - Format `<prefix>_<ULID>`, misalnya `pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C`: ULID 26 karakter Crockford base32 huruf besar, sehingga ID terurut menurut waktu pembuatan. Parse menerima huruf kecil dan menormalkannya.
 - Prefix: `app_`, `pay_`, `con_`, `whe_`, `evt_`, `usr_`, `key_`, `rec_`, `aud_`. Paket `internal/pkg/id` membuat, mem-parse, dan memvalidasi ID; prefix yang salah ditolak.
 - Kolom `public_id TEXT NOT NULL UNIQUE` disimpan di samping `id BIGSERIAL` internal. ID bigint tidak pernah keluar lewat API baru.
-- Pengecualian sementara: endpoint lama (`/v1/payments`, `/admin/tenants`, `/admin/payments`, `/admin/ledger`, `/admin/webhook-deliveries`) masih memakai ID bigint sampai entitasnya dipindah (user di fase 1, app dan payment di fase 2, delivery di fase 4).
+- Pengecualian sementara: endpoint lama (`/v1/payments`, `/admin/tenants`, `/admin/payments`, `/admin/ledger`, `/admin/webhook-deliveries`) masih memakai ID bigint sampai entitasnya dipindah (app dan payment di fase 2, delivery di fase 4). User sudah memakai `usr_` sejak fase 1.
 
 ### Error
 
@@ -689,8 +689,42 @@ Diputuskan di fase 0 dan berlaku untuk semua fase berikutnya.
 - Setiap mutasi admin mencatat satu baris di transaksi yang sama dengan perubahannya, lewat `AuditService`. Aktor dibawa lewat `context` (diisi middleware admin; `system` untuk seed, CLI, dan job). Pencatatan tanpa aktor ditolak.
 - Snapshot `before`/`after` dibentuk eksplisit per jenis target dan tidak pernah memuat secret: field rahasia dihilangkan, API key hanya 4 karakter terakhir. Sebagai pengaman kedua, key yang namanya (huruf kecil) mengandung `password`, `secret`, atau `token`, atau berakhiran `_enc`, disamarkan menjadi `"[REDACTED]"` di kedalaman mana pun sebelum disimpan.
 - Pengecualian redaksi: key seperti secret yang nilainya boolean atau `null` disimpan apa adanya, karena nilai itu tidak bisa membawa secret. Contohnya `must_change_password` di snapshot `admin_user.change_password`. Nilai string, angka, objek, dan array tetap disamarkan. Dipilih daripada allowlist nama key supaya flag baru tidak perlu didaftarkan satu per satu.
-- Sampai fase 1, `actor_id` berisi username admin; setelah tabel `users` ada, berisi `usr_…`.
+- Sejak fase 1, `actor_type` = `admin` untuk user konsol apa pun role-nya dengan `actor_id` = `usr_…`; `system` untuk seed, CLI, dan setup (`seed`, `cli`, `setup`); `anonymous` (id `anonymous`) untuk login gagal. Entri sebelum fase 1 tetap berisi username admin dan target `admin_user`.
 - `GET /admin/audit-logs` (cursor) adalah konsumen pertama cursor pagination dan ditampilkan di Settings.
+
+### Auth, sesi, dan otorisasi
+
+Diputuskan di fase 1.
+
+**User.** Tabel `users`: `public_id` (`usr_`), `email` (disimpan sudah di-trim, Unicode NFC, dan huruf kecil; unik lewat index biasa di kolom itu, jadi pencocokan case-insensitive tidak bergantung pada collation Postgres), `name`, `role` (`owner` | `admin` | `viewer`, CHECK), `password_hash` (bcrypt cost 12), `must_change_password`, `disabled_at`, `last_login_at`, `session_version`, `created_at`, `updated_at`. Tidak ada hard delete; "hapus" = disable, supaya `actor_id` di audit log tetap bisa ditelusuri. Password 12 karakter sampai 72 byte (batas bcrypt), di-hash apa adanya tanpa normalisasi.
+
+**Expand/contract `admin_users` → `users`.** Migrasi `000006` membuat `users` dan menyalin setiap baris `admin_users` menjadi `owner` dengan email `<username>@keipay.invalid` (TLD `.invalid` dicadangkan RFC 2606, jadi tidak pernah menjadi alamat orang lain), password dan `must_change_password` dipertahankan. Kode berhenti membaca `admin_users` di fase ini; tabelnya dibiarkan (read-only) dan di-drop di migrasi contract setelah satu rilis. `down` hanya men-drop `users`.
+
+**Sesi.** Cookie `keipay_session` berisi 32 byte acak (base64url), disimpan di Redis dengan key berupa SHA-256 dari nilai cookie, sehingga dump Redis tidak berisi token yang bisa dipakai. Cookie `HttpOnly`, `SameSite=Lax`, `Path=/`, tanpa `Expires`, `Secure` kecuali `COOKIE_SECURE` (default `auto`) mati di `APP_ENV=development`. Batas idle `SESSION_IDLE_TIMEOUT` (30m) dan absolut `SESSION_ABSOLUTE_TIMEOUT` (12h) dicek dari isi sesi, dan TTL Redis mengikuti yang lebih dulu habis. `last_seen_at` diperbarui paling sering sekali per 60 detik. Setiap request terautentikasi tetap memuat user dari Postgres (satu query PK), sehingga disable dan perubahan role langsung berlaku tanpa daftar sesi per user.
+
+**Pencabutan lewat `session_version`.** Sesi menyimpan `session_version` user saat dibuat. Disable, reset password oleh owner, dan ganti password sendiri menaikkan versi itu, sehingga semua sesi lain langsung ditolak (`401 session_expired`) dan habis sendiri oleh TTL. Ganti password sendiri menerbitkan sesi baru untuk browser yang dipakai. Logout menghapus key sesinya. Kalau Redis atau Postgres gagal saat memuat sesi, request admin mendapat `500 internal_error`, bukan `401`: `401` membuat konsol mengarahkan user yang sebenarnya masih login ke `/login` selama gangguan, sedangkan `500` membiarkannya mencoba lagi. Hanya sesi yang memang tidak valid (tidak ditemukan, kedaluwarsa, versi lama, user disabled) yang berujung `401 session_expired`. Dipilih daripada set sesi per user di Redis karena tetap benar walaupun penghapusan di Redis gagal.
+
+**CSRF.** Double-submit yang diikat ke sesi: cookie `keipay_csrf` (bisa dibaca JS) diterbitkan di respons `/admin/*` mana pun yang request-nya belum membawanya, dan diganti saat login, setup, ganti password, dan logout. Setiap `POST`/`PUT`/`PATCH`/`DELETE` di `/admin/` wajib mengirim header `X-CSRF-Token` yang sama dengan cookie itu, dan kalau ada sesi valid, sama dengan token yang disimpan di sesi (perbandingan constant-time). Ini juga berlaku untuk login dan setup, supaya tidak ada login CSRF. Gagal → `403 invalid_csrf_token`. Konsol memanggil `GET /admin/setup` dulu kalau cookie belum ada.
+
+**Rate limit login.** Counter fixed window di Redis untuk login yang gagal: per IP (default 20) dan per email kanonik (default 5) dalam `LOGIN_FAILURE_WINDOW` (15m). Dicek sebelum password diperiksa, jadi respons `429 rate_limited` + `Retry-After` tidak membocorkan apakah password benar. Login sukses menghapus counter email, tidak counter IP. Hanya kegagalan yang dihitung, supaya banyak admin di balik satu NAT tidak saling mengunci; burst paralel bisa sedikit melewati batas, dan itu diterima. Redis tidak tersedia → login gagal 500 (sesi juga butuh Redis). Setup memakai counter IP yang sama: token setup yang salah dihitung sebagai kegagalan, dan setup yang ditolak batas IP dicatat sebagai security event `auth.setup_rate_limited` (login: `auth.login_rate_limited`). IP klien = peer TCP kecuali proxy terdaftar di `TRUSTED_PROXIES`. Email yang tidak dikenal tetap menjalankan bcrypt terhadap hash dummy supaya waktu respons tidak membocorkan keberadaan akun. User disabled mendapat `401 invalid_credentials` yang sama.
+
+**First-run setup.** `POST /admin/setup` membuat owner pertama hanya kalau tabel `users` kosong, di transaksi dengan `pg_advisory_xact_lock` supaya dua request bersamaan hanya menghasilkan satu owner; berikutnya `409 setup_completed`. `SETUP_TOKEN` opsional: kalau di-set, setup wajib menyertakannya. `make seed` tidak lagi membuat admin. `-reset-admin -email <email> [-password <pw>]` adalah jalur pemulihan dari shell server: set password user itu (acak kalau kosong, dan saat itu `must_change_password` = true), enable kembali, naikkan `session_version`; kalau belum ada user sama sekali, membuat owner.
+
+**Otorisasi.** Permission per role adalah data di `internal/domain` (`RolePermissions`), bukan `if role == ...` yang tersebar. Setiap route admin di `router.go` mendeklarasikan satu permission atau "cukup login"; `GET /admin/me` mengembalikan daftar permission sehingga UI tidak menghardcode matriks. Spec mencatat permission per operasi di `x-keipay-permission`, dan test backend membandingkan route, permission, dan spec supaya tidak drift.
+
+| Permission | owner | admin | viewer |
+|---|---|---|---|
+| `tenants:read`, `payments:read`, `deliveries:read` | ya | ya | ya |
+| `tenants:write`, `deliveries:replay`, `audit:read` | ya | ya | tidak |
+| `users:manage` | ya | tidak | tidak |
+
+Viewer tidak membaca audit log karena isinya (email, IP, perubahan user) setara dengan manajemen user. Fase berikutnya menambah permission per resource (`apps:*`, `connections:*`, dst.) dengan pola yang sama.
+
+Aturan user: selalu minimal satu owner aktif (`409 last_owner` untuk demote atau disable owner aktif terakhir); owner tidak bisa men-disable dirinya sendiri atau me-reset password sendiri lewat API users (`409 cannot_modify_self`). Validasi `role` di `POST`/`PATCH /admin/users`: kosong → rule `required`, nilai di luar `owner`/`admin`/`viewer` → rule `oneof` (keduanya `400 invalid_request`). Semua mutasi user dijalankan di transaksi dengan advisory lock yang sama dengan setup, supaya cek owner terakhir tidak bisa di-race. User dengan `must_change_password` hanya boleh memanggil `GET /admin/me`, `POST /admin/me/password`, dan `POST /admin/logout` (`403 password_change_required`), dicek di server.
+
+Audit: `user.setup`, `user.create`, `user.update`, `user.disable`, `user.enable`, `user.reset_password`, `user.change_password`, `user.login`, `user.login_failed` (actor `anonymous`, `after` berisi email kanonik dan alasan: `invalid_credentials` atau `user_disabled`), `user.logout`. Login yang ditolak rate limit tidak diaudit (hanya security log), supaya audit log tidak bisa dibanjiri.
+
+Dependensi: `golang-jwt` dihapus (JWT tidak dipakai lagi), `golang.org/x/text` dipakai langsung untuk normalisasi NFC email. Frontend tidak menambah library.
 
 ### Penyajian konsol
 

@@ -1,6 +1,6 @@
 import { CheckIcon, ChevronDownIcon } from "lucide-react";
 import { Select as SelectPrimitive } from "radix-ui";
-import type { ComponentProps } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import { cn } from "@/shared/lib/utils";
 
 export const Select = SelectPrimitive.Root;
@@ -48,7 +48,12 @@ export function SelectContent({
   );
 }
 
-export function SelectItem({ className, children, ...props }: ComponentProps<typeof SelectPrimitive.Item>) {
+interface SelectItemProps extends ComponentProps<typeof SelectPrimitive.Item> {
+  /** A one-line explanation under the label; not repeated in the trigger. */
+  description?: ReactNode;
+}
+
+export function SelectItem({ className, children, description, ...props }: SelectItemProps) {
   return (
     <SelectPrimitive.Item
       className={cn(
@@ -62,7 +67,14 @@ export function SelectItem({ className, children, ...props }: ComponentProps<typ
           <CheckIcon className="size-4" aria-hidden="true" />
         </SelectPrimitive.ItemIndicator>
       </span>
-      <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      {description ? (
+        <span className="grid gap-0.5">
+          <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+          <span className="text-xs text-muted-foreground">{description}</span>
+        </span>
+      ) : (
+        <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
+      )}
     </SelectPrimitive.Item>
   );
 }

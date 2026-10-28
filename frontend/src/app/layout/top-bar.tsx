@@ -1,7 +1,17 @@
-import { KeyRoundIcon, LogOutIcon, MenuIcon, MonitorIcon, MoonIcon, SearchIcon, SunIcon, UserIcon } from "lucide-react";
+import {
+  KeyRoundIcon,
+  LogOutIcon,
+  MenuIcon,
+  MonitorIcon,
+  MoonIcon,
+  SearchIcon,
+  SettingsIcon,
+  SunIcon,
+  UserIcon,
+} from "lucide-react";
 import { useId } from "react";
 import { Link } from "react-router";
-import { getTokenSubject } from "@/shared/api/session";
+import { useMe, useSignOut } from "@/features/auth/api/auth";
 import { useMode } from "@/shared/lib/mode";
 import { strings } from "@/shared/lib/strings";
 import { useTheme, type Theme } from "@/shared/lib/theme";
@@ -22,10 +32,9 @@ import { Switch } from "@/shared/ui/switch";
 interface TopBarProps {
   onOpenMenu: () => void;
   onOpenPalette: () => void;
-  onSignOut: () => void;
 }
 
-export function TopBar({ onOpenMenu, onOpenPalette, onSignOut }: TopBarProps) {
+export function TopBar({ onOpenMenu, onOpenPalette }: TopBarProps) {
   return (
     <header className="sticky top-0 z-40 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur md:px-6">
       <Button variant="ghost" size="icon" className="md:hidden" onClick={onOpenMenu} aria-label={strings.nav.openMenu}>
@@ -45,7 +54,7 @@ export function TopBar({ onOpenMenu, onOpenPalette, onSignOut }: TopBarProps) {
       <div className="ml-auto flex items-center gap-1 sm:gap-2">
         <ModeSwitch />
         <ThemeMenu />
-        <UserMenu onSignOut={onSignOut} />
+        <UserMenu />
       </div>
     </header>
   );
@@ -88,8 +97,9 @@ function ThemeMenu() {
   );
 }
 
-function UserMenu({ onSignOut }: { onSignOut: () => void }) {
-  const name = getTokenSubject() ?? strings.shell.admin;
+function UserMenu() {
+  const { data: me } = useMe();
+  const signOut = useSignOut();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -97,16 +107,32 @@ function UserMenu({ onSignOut }: { onSignOut: () => void }) {
           <UserIcon aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuLabel className="font-normal">{strings.shell.signedInAs(name)}</DropdownMenuLabel>
+      <DropdownMenuContent align="end" className="w-64 max-w-[calc(100vw-2rem)]">
+        {me && (
+          <DropdownMenuLabel className="grid gap-0.5 font-normal" data-testid="user-menu-identity">
+            <span className="truncate font-medium" title={me.user.name}>
+              {me.user.name}
+            </span>
+            <span className="truncate text-xs text-muted-foreground" title={me.user.email}>
+              {me.user.email}
+            </span>
+            <span className="text-xs text-muted-foreground">{strings.shell.roleLabel(strings.roles[me.user.role] ?? me.user.role)}</span>
+          </DropdownMenuLabel>
+        )}
         <DropdownMenuSeparator />
+        <DropdownMenuItem asChild>
+          <Link to="/settings">
+            <SettingsIcon aria-hidden="true" />
+            {strings.shell.accountSettings}
+          </Link>
+        </DropdownMenuItem>
         <DropdownMenuItem asChild>
           <Link to="/change-password">
             <KeyRoundIcon aria-hidden="true" />
             {strings.shell.changePassword}
           </Link>
         </DropdownMenuItem>
-        <DropdownMenuItem onSelect={onSignOut}>
+        <DropdownMenuItem onSelect={() => signOut.mutate()} disabled={signOut.isPending}>
           <LogOutIcon aria-hidden="true" />
           {strings.shell.signOut}
         </DropdownMenuItem>

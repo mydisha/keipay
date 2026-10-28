@@ -1,6 +1,7 @@
 import { BoxesIcon, PlusIcon } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { usePermission } from "@/features/auth/components/can";
 import { errorMessage } from "@/shared/api/error-message";
 import type { components } from "@/shared/api/schema";
 import { strings } from "@/shared/lib/strings";
@@ -28,6 +29,7 @@ function credentialSecrets(credentials: Credentials): RevealedSecret[] {
 }
 
 export function AppsPage() {
+  const canWrite = usePermission("tenants:write");
   const tenants = useTenants();
   const update = useUpdateTenant();
   const rotate = useRotateTenant();
@@ -63,7 +65,7 @@ export function AppsPage() {
     });
   }
 
-  const columns: DataColumn<Tenant>[] = [
+  const allColumns: DataColumn<Tenant>[] = [
     {
       id: "name",
       header: strings.apps.name,
@@ -115,13 +117,15 @@ export function AppsPage() {
       ),
     },
   ];
+  // Viewers read the list; every row action needs `tenants:write`.
+  const columns = canWrite ? allColumns : allColumns.filter((column) => column.id !== "actions");
 
-  const createButton = (
+  const createButton = canWrite ? (
     <Button onClick={() => setCreateOpen(true)}>
       <PlusIcon aria-hidden="true" />
       {strings.apps.create}
     </Button>
-  );
+  ) : undefined;
 
   return (
     <>
@@ -138,7 +142,7 @@ export function AppsPage() {
           <EmptyState
             icon={BoxesIcon}
             title={strings.apps.emptyTitle}
-            description={strings.apps.emptyBody}
+            description={canWrite ? strings.apps.emptyBody : strings.apps.emptyBodyReadOnly}
             action={createButton}
           />
         }

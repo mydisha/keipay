@@ -1,46 +1,63 @@
 import createClient, { type Middleware } from "openapi-fetch";
+import { CSRF_BOOTSTRAP_PATH, CSRF_HEADER, isUnsafeMethod, readCsrfToken } from "./csrf";
 import { ApiError, errorFromBody, networkError, unknownError } from "./errors";
 import type { paths } from "./schema";
-import { expireSession, getToken } from "./session";
+import { isAuthRedirectReason, redirectForAuth, type AuthRedirectReason } from "./session";
 
-const SESSION_CODES = new Set(["missing_token", "invalid_token"]);
-const LOGIN_PATH = "/admin/login";
+// Sign-in and setup report their own failures on the form; `/admin/me` is
+// read by the route guards, which know whether the current page is public.
+const NO_REDIRECT_PATHS = new Set(["/admin/login", "/admin/setup", "/admin/me"]);
+const REDIRECT_STATUSES = new Set([401, 403]);
 
 export interface ApiClientOptions {
   baseUrl?: string;
   fetch?: typeof globalThis.fetch;
-  getToken?: () => string | null;
-  onSessionExpired?: () => void;
+  onAuthRedirect?: (reason: AuthRedirectReason) => void;
 }
 
 /**
- * Builds the typed client. Every admin call carries the bearer token; a 401
- * `missing_token`/`invalid_token` from anything but login ends the session.
+ * Builds the typed client. The session travels in a same-origin cookie; unsafe
+ * methods add the CSRF header from the `keipay_csrf` cookie, and an ended
+ * session or a pending password change moves the user to the right page.
  */
 export function createApiClient(options: ApiClientOptions = {}) {
-  const readToken = options.getToken ?? getToken;
-  const sessionExpired = options.onSessionExpired ?? expireSession;
+  const baseUrl = options.baseUrl ?? window.location.origin;
+  const onAuthRedirect = options.onAuthRedirect ?? redirectForAuth;
   const doFetch = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
 
-  const client = createClient<paths>({
-    baseUrl: options.baseUrl ?? window.location.origin,
-    fetch: doFetch,
-  });
+  // Concurrent writes share one bootstrap request.
+  let bootstrapping: Promise<void> | null = null;
+  async function ensureCsrfCookie(): Promise<string | null> {
+    const token = readCsrfToken();
+    if (token) return token;
+    bootstrapping ??= doFetch(new Request(new URL(CSRF_BOOTSTRAP_PATH, baseUrl), { credentials: "same-origin" }))
+      .then(() => undefined)
+      .catch(() => undefined)
+      .finally(() => {
+        bootstrapping = null;
+      });
+    await bootstrapping;
+    // Still missing: send without it and let the server answer 403.
+    return readCsrfToken();
+  }
+
+  const client = createClient<paths>({ baseUrl, fetch: doFetch, credentials: "same-origin" });
 
   const middleware: Middleware = {
-    onRequest({ request }) {
-      const token = readToken();
-      if (token) request.headers.set("Authorization", `Bearer ${token}`);
+    async onRequest({ request }) {
+      if (!isUnsafeMethod(request.method)) return request;
+      const token = await ensureCsrfCookie();
+      if (token) request.headers.set(CSRF_HEADER, token);
       return request;
     },
     async onResponse({ response, schemaPath }) {
-      if (response.status !== 401 || schemaPath === LOGIN_PATH) return undefined;
+      if (!REDIRECT_STATUSES.has(response.status) || NO_REDIRECT_PATHS.has(schemaPath)) return undefined;
       const body: unknown = await response
         .clone()
         .json()
         .catch(() => null);
-      const error = errorFromBody(401, body);
-      if (SESSION_CODES.has(error.code)) sessionExpired();
+      const { code } = errorFromBody(response.status, body);
+      if (isAuthRedirectReason(code)) onAuthRedirect(code);
       return undefined;
     },
     onError({ error }) {
@@ -80,4 +97,16 @@ export async function unwrap<R extends FetchResult>(call: Promise<R>): Promise<N
     throw errorFromBody(response.status, result.error);
   }
   return result.data as NonNullable<R["data"]>;
+}
+
+/** Like `unwrap` for operations that answer 204 with no body. */
+export async function unwrapEmpty<R extends FetchResult>(call: Promise<R>): Promise<void> {
+  let result: R;
+  try {
+    result = await call;
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    throw networkError(error);
+  }
+  if (!result.response.ok) throw errorFromBody(result.response.status, result.error);
 }

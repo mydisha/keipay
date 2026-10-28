@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { AppFilterSelect } from "@/features/apps/components/app-filter-select";
 import { AppName } from "@/features/apps/components/app-name";
 import { useTenantNames } from "@/features/apps/api/tenants";
+import { usePermission } from "@/features/auth/components/can";
 import { errorMessage } from "@/shared/api/error-message";
 import { strings } from "@/shared/lib/strings";
 import { Button } from "@/shared/ui/button";
@@ -27,6 +28,7 @@ const NO_FILTERS: DeliveryFilters = { status: null, tenantId: null };
 export function OutboundDeliveries() {
   const [filters, setFilters] = useState<DeliveryFilters>(NO_FILTERS);
   const deliveries = useDeliveries(filters);
+  const canReplay = usePermission("deliveries:replay");
   const replay = useReplayDelivery();
   const names = useTenantNames();
   const filtered = filters.status !== null || filters.tenantId !== null;
@@ -39,7 +41,7 @@ export function OutboundDeliveries() {
     });
   }
 
-  const columns: DataColumn<WebhookDelivery>[] = [
+  const allColumns: DataColumn<WebhookDelivery>[] = [
     {
       id: "id",
       header: strings.webhooks.delivery,
@@ -96,6 +98,7 @@ export function OutboundDeliveries() {
       },
     },
   ];
+  const columns = canReplay ? allColumns : allColumns.filter((column) => column.id !== "replay");
 
   return (
     <DataTable

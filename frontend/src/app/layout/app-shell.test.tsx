@@ -1,15 +1,15 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
-import { getToken, setToken } from "@/shared/api/session";
 import { storageKeys } from "@/shared/lib/storage";
-import { errorBody, json, mockApi } from "@/test/http";
+import { setTestCookie } from "@/test/cookies";
+import { me } from "@/test/fixtures";
+import { errorBody, json, mockApi, signedOut } from "@/test/http";
 import { setViewport } from "@/test/media";
-import { renderApp, TEST_TOKEN } from "@/test/render";
+import { renderApp } from "@/test/render";
 
 const NAV = ["Dashboard", "Apps", "Connections", "Webhooks", "Payments", "Reconciliation", "Settings"];
 
 beforeEach(() => {
-  setToken(TEST_TOKEN);
   setViewport("desktop");
 });
 
@@ -95,13 +95,65 @@ describe("App shell (T-29)", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
-  it("signs out from the user menu", async () => {
+  it("shows the user's name, email and role in the user menu (T-50)", async () => {
+    mockApi({ "GET /admin/me": me({ name: "Vera Viewer", email: "vera@example.com", role: "viewer" }) });
+    const { user } = renderApp("/");
+    await user.click(await screen.findByRole("button", { name: "Account menu" }));
+    const identity = await screen.findByTestId("user-menu-identity");
+    expect(identity).toHaveTextContent("Vera Viewer");
+    expect(identity).toHaveTextContent("vera@example.com");
+    expect(identity).toHaveTextContent("Role: Viewer");
+  });
+
+  it("signs out through POST /admin/logout, clears the cache and goes to sign-in (T-50)", async () => {
+    setTestCookie("keipay_csrf", "csrf-1");
+    let signedIn = true;
+    const api = mockApi({
+      "GET /admin/me": () => (signedIn ? json(200, me()) : signedOut()),
+      "POST /admin/logout": () => {
+        signedIn = false;
+        return new Response(null, { status: 204 });
+      },
+    });
+    const { user, router, queryClient } = renderApp("/");
+    await user.click(await screen.findByRole("button", { name: "Account menu" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Sign out" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
+    expect(router.state.location.search).toBe("");
+    expect(api.to("POST", "/admin/logout")).toHaveLength(1);
+    expect(api.to("POST", "/admin/logout")[0]!.headers.get("X-CSRF-Token")).toBe("csrf-1");
+    expect(await screen.findByRole("button", { name: "Sign in" })).toBeInTheDocument();
+    expect(queryClient.getQueryData(["me"])).toBeUndefined();
+  });
+
+  it("stays signed in with a toast when sign-out fails (T-50)", async () => {
+    setTestCookie("keipay_csrf", "csrf-1");
+    mockApi({
+      "POST /admin/logout": () => {
+        throw new TypeError("Failed to fetch");
+      },
+    });
     const { user, router } = renderApp("/");
     await user.click(await screen.findByRole("button", { name: "Account menu" }));
-    expect(await screen.findByText("Signed in as admin")).toBeInTheDocument();
-    await user.click(screen.getByRole("menuitem", { name: "Sign out" }));
-    await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
-    expect(getToken()).toBeNull();
+    await user.click(await screen.findByRole("menuitem", { name: "Sign out" }));
+    expect(await screen.findByText("Couldn't sign out. Check your connection and try again.")).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/");
+    expect(screen.getByRole("heading", { level: 1, name: "Dashboard" })).toBeInTheDocument();
+  });
+
+  it("offers Users in the palette only with users:manage", async () => {
+    const { user, unmount } = renderApp("/");
+    await screen.findByRole("heading", { level: 1, name: "Dashboard" });
+    await user.keyboard("{Control>}k{/Control}");
+    expect(await screen.findByRole("option", { name: "Users" })).toBeInTheDocument();
+    unmount();
+
+    mockApi({ "GET /admin/me": me({ role: "admin" }) });
+    const second = renderApp("/");
+    await screen.findByRole("heading", { level: 1, name: "Dashboard" });
+    await second.user.keyboard("{Control>}k{/Control}");
+    await screen.findByRole("dialog", { name: "Command palette" });
+    expect(screen.queryByRole("option", { name: "Users" })).not.toBeInTheDocument();
   });
 });
 
@@ -122,18 +174,56 @@ describe("Routing", () => {
   });
 
   it("sends signed-out users to the login page", async () => {
-    window.localStorage.clear();
+    mockApi({ "GET /admin/me": signedOut });
     const { router } = renderApp("/payments");
     await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
     expect(screen.queryByText("Your session has expired. Sign in again.")).not.toBeInTheDocument();
   });
 
-  it("ends an expired session with the session-expired message (AC-26)", async () => {
-    mockApi({ "GET /admin/tenants": () => json(401, errorBody("invalid_token", "invalid or expired token")) });
-    const { router } = renderApp("/apps");
+  it("ends an expired session with the session-expired message and a cleared cache (T-41)", async () => {
+    let expired = false;
+    mockApi({
+      "GET /admin/me": () => (expired ? signedOut() : json(200, me())),
+      "GET /admin/tenants": () => {
+        expired = true;
+        return json(401, errorBody("session_expired", "session expired"));
+      },
+    });
+    const { router, queryClient } = renderApp("/apps");
     await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
     expect(router.state.location.search).toBe("?reason=session_expired");
     expect(await screen.findByText("Your session has expired. Sign in again.")).toBeInTheDocument();
-    expect(getToken()).toBeNull();
+    expect(queryClient.getQueryData(["tenants"])).toBeUndefined();
   });
+
+  it("sends a missing session to sign-in without the message (T-41)", async () => {
+    let gone = false;
+    mockApi({
+      "GET /admin/me": () => (gone ? signedOut() : json(200, me())),
+      "GET /admin/tenants": () => {
+        gone = true;
+        return json(401, errorBody("session_required", "session required"));
+      },
+    });
+    const { router } = renderApp("/apps");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
+    expect(router.state.location.search).toBe("");
+    expect(await screen.findByRole("button", { name: "Sign in" })).toBeInTheDocument();
+    expect(screen.queryByText("Your session has expired. Sign in again.")).not.toBeInTheDocument();
+  });
+
+  it("sends a pending password change to the change-password page (T-41)", async () => {
+    let pending = false;
+    mockApi({
+      "GET /admin/me": () => json(200, me({ must_change_password: pending })),
+      "GET /admin/tenants": () => {
+        pending = true;
+        return json(403, errorBody("password_change_required", "password change required"));
+      },
+    });
+    const { router } = renderApp("/apps");
+    await waitFor(() => expect(router.state.location.pathname).toBe("/change-password"));
+    expect(await screen.findByRole("heading", { level: 1, name: "Set a new password" })).toBeInTheDocument();
+  });
+
 });

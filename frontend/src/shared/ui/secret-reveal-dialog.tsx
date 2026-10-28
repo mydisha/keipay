@@ -17,6 +17,8 @@ interface SecretRevealDialogProps {
   title: string;
   description: string;
   secrets: RevealedSecret[];
+  /** Overrides the default "shown only once" warning. */
+  warning?: string;
   /** Called once the user confirms they saved the secrets. */
   onClose: () => void;
 }
@@ -25,7 +27,7 @@ export function SecretRevealDialog(props: SecretRevealDialogProps) {
   return <Dialog open={props.open}>{props.open && <SecretRevealBody {...props} />}</Dialog>;
 }
 
-function SecretRevealBody({ title, description, secrets, onClose }: SecretRevealDialogProps) {
+function SecretRevealBody({ title, description, secrets, warning = strings.secret.warning, onClose }: SecretRevealDialogProps) {
   const [saved, setSaved] = useState(false);
   const checkboxId = useId();
 
@@ -49,7 +51,7 @@ function SecretRevealBody({ title, description, secrets, onClose }: SecretReveal
         className="flex items-start gap-2 rounded-md border border-warning-border bg-warning px-3 py-2 text-sm text-warning-foreground"
       >
         <TriangleAlertIcon className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-        <span>{strings.secret.warning}</span>
+        <span>{warning}</span>
       </div>
       <dl className="grid gap-3">
         {secrets.map((secret) => (

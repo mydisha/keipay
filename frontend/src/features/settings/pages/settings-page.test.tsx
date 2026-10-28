@@ -1,13 +1,11 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
-import { setToken } from "@/shared/api/session";
-import { auditLog } from "@/test/fixtures";
+import { auditLog, me } from "@/test/fixtures";
 import { errorBody, json, mockApi } from "@/test/http";
 import { setViewport } from "@/test/media";
-import { renderApp, TEST_TOKEN } from "@/test/render";
+import { renderApp } from "@/test/render";
 
 beforeEach(() => {
-  setToken(TEST_TOKEN);
   setViewport("desktop");
 });
 
@@ -20,7 +18,7 @@ const second = auditLog({
   after: { api_key_last4: "0002" },
 });
 
-describe("Settings page (AC-25)", () => {
+describe("Settings audit log tab", () => {
   it("pages through the audit log with cursors", async () => {
     const api = mockApi({
       "GET /admin/audit-logs": (request: Request) => {
@@ -28,7 +26,7 @@ describe("Settings page (AC-25)", () => {
         return json(200, cursor === "c2" ? { data: [second], next_cursor: null } : { data: [first], next_cursor: "c2" });
       },
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/audit-log");
     expect(await screen.findByText("tenant.create")).toBeInTheDocument();
     expect(screen.getByText("system:seed")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
@@ -46,7 +44,7 @@ describe("Settings page (AC-25)", () => {
 
   it("opens an entry with before and after JSON", async () => {
     mockApi({ "GET /admin/audit-logs": { data: [second], next_cursor: null } });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/audit-log");
     await user.click(await screen.findByRole("button", { name: "View tenant.rotate_credentials" }));
     const dialog = await screen.findByRole("dialog", { name: "tenant.rotate_credentials" });
     expect(within(dialog).getByRole("button", { name: "Before" })).toHaveAttribute("aria-expanded", "true");
@@ -54,12 +52,10 @@ describe("Settings page (AC-25)", () => {
     expect(within(dialog).getByText(/"api_key_last4": "0002"/)).toBeInTheDocument();
   });
 
-  it("shows the empty audit state, account link and users placeholder", async () => {
+  it("shows the empty audit state", async () => {
     mockApi({ "GET /admin/audit-logs": { data: [], next_cursor: null } });
-    renderApp("/settings");
+    renderApp("/settings/audit-log");
     expect(await screen.findByText("No admin changes recorded yet")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Change password" })).toHaveAttribute("href", "/change-password");
-    expect(screen.getByText("User management is coming soon")).toBeInTheDocument();
   });
 
   it("goes back to the first page when the cursor is rejected", async () => {
@@ -70,7 +66,7 @@ describe("Settings page (AC-25)", () => {
         return json(200, { data: [first], next_cursor: "stale" });
       },
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/audit-log");
     await user.click(await screen.findByRole("button", { name: "Next" }));
     expect(await screen.findByText(/That page is no longer available/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("Page 1")).toBeInTheDocument());
@@ -80,8 +76,22 @@ describe("Settings page (AC-25)", () => {
 
   it("shows an error state with retry", async () => {
     mockApi({ "GET /admin/audit-logs": () => json(500, errorBody("internal_error", "internal server error")) });
-    renderApp("/settings");
+    renderApp("/settings/audit-log");
     const error = await screen.findByTestId("error-state");
     expect(within(error).getByRole("button", { name: "Try again" })).toBeInTheDocument();
+  });
+});
+
+describe("Settings account tab", () => {
+  it("shows the signed-in user's name, email and role with a change-password link", async () => {
+    mockApi({ "GET /admin/me": me({ name: "Ada Admin", email: "ada@example.com", role: "admin" }) });
+    renderApp("/settings");
+    const section = await screen.findByRole("region", { name: "Account" });
+    expect(within(section).getByText("Ada Admin")).toBeInTheDocument();
+    expect(within(section).getByText("ada@example.com")).toBeInTheDocument();
+    expect(within(section).getByText("Admin")).toBeInTheDocument();
+    expect(within(section).getByRole("link", { name: "Change password" })).toHaveAttribute("href", "/change-password");
+    const tabs = screen.getByRole("navigation", { name: "Settings sections" });
+    expect(within(tabs).getByRole("link", { name: "Account" })).toHaveAttribute("aria-current", "page");
   });
 });

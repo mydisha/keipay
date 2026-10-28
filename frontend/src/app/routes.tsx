@@ -1,12 +1,35 @@
 import { Navigate, type RouteObject } from "react-router";
+import { AuthSkeleton } from "@/features/auth/components/auth-layout";
 import { DashboardPage } from "@/features/dashboard/pages/dashboard-page";
 import { AppShell } from "./layout/app-shell";
-import { RequireAuth } from "./require-auth";
+import { PublicOnly, RequireAuth } from "./require-auth";
 
 export const routes: RouteObject[] = [
   {
     path: "/login",
-    lazy: async () => ({ Component: (await import("@/features/auth/pages/login-page")).LoginPage }),
+    lazy: async () => {
+      const { LoginPage } = await import("@/features/auth/pages/login-page");
+      return {
+        Component: () => (
+          <PublicOnly page="login">
+            <LoginPage />
+          </PublicOnly>
+        ),
+      };
+    },
+  },
+  {
+    path: "/setup",
+    lazy: async () => {
+      const { SetupPage } = await import("@/features/auth/pages/setup-page");
+      return {
+        Component: () => (
+          <PublicOnly page="setup">
+            <SetupPage />
+          </PublicOnly>
+        ),
+      };
+    },
   },
   {
     path: "/change-password",
@@ -14,7 +37,7 @@ export const routes: RouteObject[] = [
       const { ChangePasswordPage } = await import("@/features/auth/pages/change-password-page");
       return {
         Component: () => (
-          <RequireAuth>
+          <RequireAuth allowPasswordChange fallback={<AuthSkeleton />}>
             <ChangePasswordPage />
           </RequireAuth>
         ),
@@ -58,6 +81,20 @@ export const routes: RouteObject[] = [
       {
         path: "settings",
         lazy: async () => ({ Component: (await import("@/features/settings/pages/settings-page")).SettingsPage }),
+        children: [
+          {
+            index: true,
+            lazy: async () => ({ Component: (await import("@/features/settings/pages/account-tab")).AccountTab }),
+          },
+          {
+            path: "users",
+            lazy: async () => ({ Component: (await import("@/features/users/pages/users-page")).UsersTab }),
+          },
+          {
+            path: "audit-log",
+            lazy: async () => ({ Component: (await import("@/features/settings/pages/audit-log-tab")).AuditLogTab }),
+          },
+        ],
       },
       // URLs from the previous console.
       { path: "tenants", element: <Navigate to="/apps" replace /> },

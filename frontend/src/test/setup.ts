@@ -1,6 +1,8 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, configure } from "@testing-library/react";
-import { afterEach, vi } from "vitest";
+import { afterEach, beforeEach, vi } from "vitest";
+import { clearCookies } from "./cookies";
+import { mockApi } from "./http";
 
 // Feature pages are lazy routes. On a cold Vite transform cache (the gate runs
 // `npm ci` first) the first import of a page can take more than the default
@@ -8,9 +10,16 @@ import { afterEach, vi } from "vitest";
 configure({ asyncUtilTimeout: 5_000 });
 vi.setConfig({ testTimeout: 20_000 });
 
+// Every test starts with a signed-in owner; tests call mockApi again to change that.
+beforeEach(() => {
+  mockApi();
+});
+
 afterEach(() => {
   cleanup();
   window.localStorage.clear();
+  window.sessionStorage.clear();
+  clearCookies();
   document.documentElement.className = "";
 });
 

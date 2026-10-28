@@ -2,7 +2,6 @@
 // access is guarded and falls back to "not stored".
 
 export const storageKeys = {
-  token: "kei_admin_token",
   theme: "keipay.theme",
   mode: "keipay.mode",
   sidebarCollapsed: "keipay.sidebar.collapsed",

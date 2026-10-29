@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -18,6 +19,10 @@ import (
 
 func withSetupToken(token string) apiOption {
 	return func(cfg *service.AuthConfig, _ *Deps) { cfg.SetupToken = token }
+}
+
+func withRequireSetupToken() apiOption {
+	return func(cfg *service.AuthConfig, _ *Deps) { cfg.RequireSetupToken = true }
 }
 
 func withSecureCookies() apiOption {
@@ -123,6 +128,21 @@ func TestSetupValidationAndToken(t *testing.T) {
 	body = strings.Replace(body, `"nope"`, `"let-me-in"`, 1)
 	if w := f.send(newBrowser(), http.MethodPost, "/admin/setup", body); w.Code != http.StatusCreated {
 		t.Fatalf("right token: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// A production server without SETUP_TOKEN answers setup with a 503 that
+// says what to configure, and creates nobody.
+func TestSetupWithoutConfiguredTokenOverHTTP(t *testing.T) {
+	f := newAPI(t, "", withRequireSetupToken())
+	f.users.Remove(f.owner.PublicID)
+	body := `{"email":"owner@example.com","name":"Owner","password":"` + testPassword + `"}`
+	env := expectError(t, f.send(newBrowser(), http.MethodPost, "/admin/setup", body), http.StatusServiceUnavailable, domain.CodeSetupTokenNotConfigured)
+	if !strings.Contains(env.Error.Message, "SETUP_TOKEN") {
+		t.Fatalf("message = %q", env.Error.Message)
+	}
+	if n, _ := f.users.Count(context.Background()); n != 0 {
+		t.Fatal("a user was created")
 	}
 }
 

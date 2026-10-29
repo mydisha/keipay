@@ -258,6 +258,36 @@ func TestSetupToken(t *testing.T) {
 	}
 }
 
+// A production server without SETUP_TOKEN refuses setup instead of letting
+// the first visitor become the owner. The refusal is not a failed attempt,
+// and an install that is already set up is unaffected.
+func TestSetupRequiresConfiguredTokenInProduction(t *testing.T) {
+	cfg := testAuthConfig()
+	cfg.RequireSetupToken = true
+	f := newAuthFixture(t, cfg)
+	ctx := context.Background()
+	in := SetupInput{Email: "owner@example.com", Name: "Owner", Password: ownerPassword, SetupToken: "anything"}
+	if _, err := f.svc.Setup(ctx, in, testMeta); !errors.Is(err, domain.ErrSetupTokenNotConfigured) {
+		t.Fatalf("err = %v, want setup_token_not_configured", err)
+	}
+	if n, _ := f.users.Count(ctx); n != 0 || len(f.audit.Logs()) != 0 || f.failures.Value(ipFailureKey(testMeta.IP)) != 0 {
+		t.Fatalf("refused setup left users=%d audit=%d failures=%d", n, len(f.audit.Logs()), f.failures.Value(ipFailureKey(testMeta.IP)))
+	}
+	if st, _ := f.svc.SetupStatus(ctx); st.TokenRequired {
+		t.Fatal("status claims a token is required while none is configured")
+	}
+
+	cfg.SetupToken = "s3tup-token"
+	f = newAuthFixture(t, cfg)
+	if _, err := f.svc.Setup(ctx, SetupInput{Email: "owner@example.com", Name: "Owner", Password: ownerPassword, SetupToken: "s3tup-token"}, testMeta); err != nil {
+		t.Fatalf("with a token: %v", err)
+	}
+	f.svc.cfg.SetupToken = ""
+	if _, err := f.svc.Setup(ctx, in, testMeta); !errors.Is(err, domain.ErrSetupCompleted) {
+		t.Fatalf("after setup err = %v, want setup_completed", err)
+	}
+}
+
 func TestSetupRateLimitedByIP(t *testing.T) {
 	cfg := testAuthConfig()
 	cfg.SetupToken = "right"

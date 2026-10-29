@@ -32,6 +32,10 @@ make dev     # API on :8080, console on :5173
 
 ## Project structure
 
+[docs/architecture.md](docs/architecture.md) maps the backend and the
+console in detail, with the request flow and where to start for common
+changes. In short:
+
 - `backend/` is a Go module using a service-layer (ports-and-adapters) layout:
   thin HTTP handlers in `internal/transport/http`, business rules in
   `internal/service`, entities and interfaces in `internal/domain` (standard

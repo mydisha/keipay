@@ -254,7 +254,7 @@ func (s *Reconciliations) SaveItems(_ context.Context, runID int64, items []doma
 			delete(s.items, id)
 			continue
 		}
-		if it.Resolvable() {
+		if it.Result != domain.ResultMatched && it.Resolution == nil {
 			unresolved++
 		}
 	}

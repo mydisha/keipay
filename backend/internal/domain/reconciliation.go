@@ -179,12 +179,6 @@ type ReconciliationItem struct {
 	UpdatedAt  time.Time
 }
 
-// Resolvable reports whether the item can still be resolved: it is a
-// difference and nobody resolved it yet.
-func (i *ReconciliationItem) Resolvable() bool {
-	return i.Result != ResultMatched && i.Resolution == nil
-}
-
 // GatewayTransaction is one transaction as a gateway reports it, normalized.
 type GatewayTransaction struct {
 	Reference         string

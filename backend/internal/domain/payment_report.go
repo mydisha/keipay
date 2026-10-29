@@ -59,6 +59,14 @@ const (
 	ReportIntervalMonth ReportInterval = "month"
 )
 
+// OrTotal is i, or the total interval when i is unset.
+func (i ReportInterval) OrTotal() ReportInterval {
+	if i == "" {
+		return ReportIntervalTotal
+	}
+	return i
+}
+
 // Valid reports whether i is a known interval.
 func (i ReportInterval) Valid() bool {
 	return i == ReportIntervalTotal || i == ReportIntervalDay || i == ReportIntervalMonth

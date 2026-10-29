@@ -19,6 +19,17 @@ describe("App shell", () => {
     const nav = await screen.findByRole("navigation", { name: "Main" });
     expect(within(nav).getAllByRole("link").map((a) => a.textContent)).toEqual(NAV);
     expect(within(nav).getByRole("link", { name: "Dashboard" })).toHaveAttribute("aria-current", "page");
+    expect(nav).toHaveTextContent(/Overview.*Operate.*Control/);
+  });
+
+  it("shows who is signed in beside the navigation, without a second account menu", async () => {
+    mockApi({ "GET /admin/me": me({ name: "Vera Viewer", role: "viewer" }) });
+    renderApp("/");
+    const identity = await screen.findByTestId("sidebar-identity");
+    expect(identity).toHaveTextContent("Vera Viewer");
+    expect(identity).toHaveTextContent("Viewer");
+    expect(identity).toHaveTextContent("VV");
+    expect(screen.getAllByRole("button", { name: "Account menu" })).toHaveLength(1);
   });
 
   it("collapses the sidebar and remembers it", async () => {

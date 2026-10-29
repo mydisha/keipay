@@ -83,6 +83,9 @@ export const strings = {
     closeMenu: "Close navigation",
     collapse: "Collapse sidebar",
     expand: "Expand sidebar",
+    groupOverview: "Overview",
+    groupOperate: "Operate",
+    groupControl: "Control",
   },
   shell: {
     testMode: "Test mode",
@@ -90,7 +93,7 @@ export const strings = {
     modeSwitchLabel: "Test mode",
     testBannerTitle: "Test mode",
     testBannerBody:
-      "The Apps, Connections and Webhooks lists, Reconciliation, new apps and new connections follow this switch. Payments still show every environment until a later release.",
+      "The Dashboard, the Apps, Connections and Webhooks lists, Reconciliation, new apps and new connections follow this switch. Payments still show every environment until a later release.",
     theme: "Theme",
     themeLight: "Light",
     themeDark: "Dark",

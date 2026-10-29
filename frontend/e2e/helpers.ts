@@ -104,7 +104,6 @@ export interface CreatedApp {
   slug: string;
   apiKey: string;
   apiSecret: string;
-  webhookSecret: string;
 }
 
 /** Creates an app through the console's dialog and returns the one-time credentials. Ends on its detail page. */
@@ -121,11 +120,7 @@ export async function createAppInConsole(
   await dialog.getByRole("radio", { name: environment }).click();
   if (metadata) await dialog.getByLabel("Metadata (optional)").fill(metadata);
   await dialog.getByRole("button", { name: "Create app" }).click();
-  const secrets = await acknowledgeSecrets(page, "Save these credentials", [
-    "API key",
-    "API secret",
-    "Webhook signing secret",
-  ]);
+  const secrets = await acknowledgeSecrets(page, "Save these credentials", ["API key", "API secret"]);
   await expect(page).toHaveURL(/\/apps\/app_[0-9A-Z]{26}$/);
   await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
   const id = new URL(page.url()).pathname.split("/").pop()!;
@@ -134,7 +129,6 @@ export async function createAppInConsole(
     slug,
     apiKey: secrets["API key"]!,
     apiSecret: secrets["API secret"]!,
-    webhookSecret: secrets["Webhook signing secret"]!,
   };
 }
 

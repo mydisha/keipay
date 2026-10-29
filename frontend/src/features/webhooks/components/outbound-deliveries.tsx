@@ -1,131 +1,166 @@
-import { RotateCwIcon, WebhookIcon } from "lucide-react";
-import { useState } from "react";
+import { PanelRightOpenIcon, WebhookIcon } from "lucide-react";
 import { Link } from "react-router";
-import { toast } from "sonner";
 import { AppFilterSelect } from "@/features/apps/components/app-filter-select";
 import { AppLabel } from "@/features/apps/components/app-label";
-import { usePermission } from "@/features/auth/components/can";
-import { errorMessage } from "@/shared/api/error-message";
 import { strings } from "@/shared/lib/strings";
+import { loadMoreList } from "@/shared/lib/use-cursor-pages";
 import { Button } from "@/shared/ui/button";
-import { DataTable, type DataColumn } from "@/shared/ui/data-table";
+import { DataTable, type DataColumn, type FilterChipGroup } from "@/shared/ui/data-table";
 import { DateTimeText } from "@/shared/ui/date-time-text";
 import { EmptyState } from "@/shared/ui/empty-state";
-import { IdText } from "@/shared/ui/id-text";
 import { StatusBadge } from "@/shared/ui/status-badge";
 import {
   DELIVERY_STATUSES,
   isDeliveryStatus,
   useDeliveries,
-  useReplayDelivery,
   type DeliveryFilters,
   type WebhookDelivery,
 } from "../api/deliveries";
+import { useEventTypes, type EventType } from "../api/event-types";
+import type { WebhooksSearch } from "../lib/webhooks-search";
+import { TagBadge } from "./endpoint-badges";
+import { environmentChips, RemovableChip } from "./filter-chips";
 
-const NO_FILTERS: DeliveryFilters = { status: null, appId: null };
+const FILTER_KEYS = ["status", "event_type", "app_id", "endpoint_id", "event_id"] as const;
 
-export function OutboundDeliveries() {
-  const [filters, setFilters] = useState<DeliveryFilters>(NO_FILTERS);
+function deliveryFilters(search: WebhooksSearch): DeliveryFilters {
+  const status = search.get("status");
+  return {
+    status: isDeliveryStatus(status) ? status : null,
+    // The server checks the value against the catalog (rule `oneof`).
+    eventType: (search.get("event_type") as EventType | null) ?? null,
+    appId: search.get("app_id"),
+    endpointId: search.get("endpoint_id"),
+    eventId: search.get("event_id"),
+    environment: search.environment,
+  };
+}
+
+export function EndpointCell({ delivery }: { delivery: WebhookDelivery }) {
+  if (!delivery.endpoint) return <span className="text-muted-foreground">{strings.webhooks.noEndpoint}</span>;
+  return (
+    <span className="grid min-w-0 justify-items-end gap-0.5 md:justify-items-start">
+      <span className="block max-w-full truncate font-mono text-[0.8125rem]" title={delivery.endpoint.url}>
+        {delivery.endpoint.url}
+      </span>
+      {delivery.endpoint.deleted && <span className="text-xs text-muted-foreground">{strings.webhooks.endpointDeleted}</span>}
+    </span>
+  );
+}
+
+export function OutboundDeliveries({ search }: { search: WebhooksSearch }) {
+  const filters = deliveryFilters(search);
   const deliveries = useDeliveries(filters);
-  const canReplay = usePermission("deliveries:replay");
-  const replay = useReplayDelivery();
-  const filtered = filters.status !== null || filters.appId !== null;
-  const clearFilters = () => setFilters(NO_FILTERS);
+  const list = loadMoreList(deliveries);
+  const catalog = useEventTypes();
 
-  function onReplay(id: number) {
-    replay.mutate(id, {
-      onSuccess: () => toast.success(strings.webhooks.replayed(id)),
-      onError: (error) => toast.error(errorMessage(error, strings.webhooks.replayFailed)),
-    });
-  }
+  const otherFilters = FILTER_KEYS.some((key) => search.get(key) !== null);
+  const clearFilters = () => search.clearFilters(FILTER_KEYS);
 
-  const allColumns: DataColumn<WebhookDelivery>[] = [
+  const columns: DataColumn<WebhookDelivery>[] = [
     {
-      id: "id",
-      header: strings.webhooks.delivery,
+      id: "event",
+      header: strings.webhooks.eventType,
       card: "title",
-      cell: (d) => <IdText value={d.id} prefix="#" label={strings.webhooks.delivery} />,
+      cell: (d) => (
+        <span className="inline-flex flex-wrap items-center gap-2">
+          <span className="font-mono text-[0.8125rem]">{d.event_type}</span>
+          {d.event?.test && <TagBadge>{strings.webhooks.testEvent}</TagBadge>}
+        </span>
+      ),
     },
-    { id: "event", header: strings.webhooks.event, cell: (d) => <span className="font-mono text-xs">{d.event_type}</span> },
-    {
-      id: "payment",
-      header: strings.webhooks.payment,
-      className: "max-w-60",
-      cell: (d) => <IdText value={d.payment_id} label={strings.webhooks.payment} />,
-    },
-    { id: "app", header: strings.common.app, className: "max-w-56", cell: (d) => <AppLabel app={d.app} /> },
+    { id: "app", header: strings.webhooks.app, className: "max-w-56", cell: (d) => <AppLabel app={d.app} /> },
+    { id: "endpoint", header: strings.webhooks.endpoint, className: "max-w-64", cell: (d) => <EndpointCell delivery={d} /> },
     { id: "status", header: strings.webhooks.status, cell: (d) => <StatusBadge status={d.status} /> },
     {
       id: "attempts",
       header: strings.webhooks.attempts,
       align: "right",
-      cell: (d) => <span className="tabular-nums">{d.attempts}</span>,
+      cell: (d) => <span className="tabular-nums">{strings.webhooks.attemptsOf(d.attempts, d.max_attempts)}</span>,
     },
     {
-      id: "last_error",
-      header: strings.webhooks.lastError,
-      className: "max-w-56",
+      id: "response",
+      header: strings.webhooks.lastResponse,
+      align: "right",
       cell: (d) =>
-        d.last_error ? (
-          <span className="block truncate text-danger-foreground" title={d.last_error}>
-            {d.last_error}
-          </span>
-        ) : (
+        d.last_response_status === null ? (
           <span className="text-muted-foreground">{strings.common.none}</span>
+        ) : (
+          <span className="font-mono tabular-nums">{d.last_response_status}</span>
         ),
+    },
+    {
+      id: "next",
+      header: strings.webhooks.nextAttempt,
+      cell: (d) => <DateTimeText value={d.status === "PENDING" ? d.next_attempt_at : null} />,
     },
     { id: "created", header: strings.webhooks.created, cell: (d) => <DateTimeText value={d.created_at} /> },
     {
-      id: "replay",
-      header: strings.common.actions,
+      id: "view",
+      header: strings.webhooks.details,
       card: "actions",
       align: "right",
-      cell: (d) => {
-        const busy = replay.isPending && replay.variables === d.id;
-        return (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => onReplay(d.id)}
-            disabled={busy}
-            aria-label={strings.webhooks.replayLabel(d.id)}
-          >
-            <RotateCwIcon aria-hidden="true" className={busy ? "animate-spin" : undefined} />
-            {busy ? strings.webhooks.replaying : strings.webhooks.replay}
-          </Button>
-        );
-      },
+      cell: (d) => (
+        <Button variant="outline" size="sm" onClick={() => search.openDetail(d.id)} aria-label={strings.webhooks.viewDelivery(d.id)}>
+          <PanelRightOpenIcon aria-hidden="true" />
+          {strings.webhooks.details}
+        </Button>
+      ),
     },
   ];
-  const columns = canReplay ? allColumns : allColumns.filter((column) => column.id !== "replay");
+
+  const chips: FilterChipGroup[] = [
+    environmentChips(filters.environment, search.setEnvironment),
+    {
+      id: "status",
+      label: strings.webhooks.statusFilter,
+      options: DELIVERY_STATUSES.map((s) => ({ value: s, label: strings.status[s] ?? s })),
+      value: filters.status,
+      onChange: (value) => search.setFilter("status", value),
+    },
+  ];
+  if (catalog.data) {
+    chips.push({
+      id: "event_type",
+      label: strings.webhooks.eventTypeFilter,
+      options: catalog.data.data.map((t) => ({ value: t.type, label: t.type })),
+      value: filters.eventType,
+      onChange: (value) => search.setFilter("event_type", value),
+    });
+  }
+
+  const endpointId = filters.endpointId;
+  const eventId = filters.eventId;
 
   return (
     <DataTable
       caption={strings.webhooks.outbound}
       columns={columns}
-      data={deliveries.data}
-      getRowId={(d) => String(d.id)}
+      data={list.rows}
+      getRowId={(d) => d.id}
       isLoading={deliveries.isPending}
-      error={deliveries.error}
+      error={list.error}
       onRetry={() => void deliveries.refetch()}
-      filters={[
-        {
-          id: "status",
-          label: strings.webhooks.statusFilter,
-          options: DELIVERY_STATUSES.map((s) => ({ value: s, label: strings.status[s] ?? s })),
-          value: filters.status,
-          onChange: (value) => setFilters((f) => ({ ...f, status: isDeliveryStatus(value) ? value : null })),
-        },
-      ]}
-      toolbar={<AppFilterSelect value={filters.appId} onChange={(appId) => setFilters((f) => ({ ...f, appId }))} />}
-      hasActiveFilters={filtered}
+      loadMore={list.loadMore}
+      onRowClick={(d) => search.openDetail(d.id)}
+      filters={chips}
+      toolbar={
+        <>
+          <AppFilterSelect value={filters.appId} onChange={(appId) => search.setFilter("app_id", appId)} />
+          {endpointId && (
+            <RemovableChip label={strings.webhooks.endpointChip(endpointId)} onRemove={() => search.setFilter("endpoint_id", null)} />
+          )}
+          {eventId && <RemovableChip label={strings.webhooks.eventChip(eventId)} onRemove={() => search.setFilter("event_id", null)} />}
+        </>
+      }
+      hasActiveFilters={otherFilters || filters.environment !== null}
       onClearFilters={clearFilters}
       emptyState={
-        filtered ? (
+        otherFilters ? (
           <EmptyState
             icon={WebhookIcon}
-            title={strings.webhooks.emptyFilteredTitle}
-            description={strings.webhooks.emptyFilteredBody}
+            title={strings.webhooks.outboundFilteredTitle}
+            description={strings.webhooks.outboundFilteredBody}
             action={
               <Button variant="outline" onClick={clearFilters}>
                 {strings.common.clearFilters}
@@ -135,12 +170,23 @@ export function OutboundDeliveries() {
         ) : (
           <EmptyState
             icon={WebhookIcon}
-            title={strings.webhooks.emptyTitle}
-            description={strings.webhooks.emptyBody}
+            title={strings.webhooks.outboundEmptyTitle}
+            description={
+              filters.environment
+                ? strings.webhooks.outboundEmptyEnvironmentBody(strings.environments[filters.environment]?.toLowerCase() ?? filters.environment)
+                : strings.webhooks.outboundEmptyBody
+            }
             action={
-              <Button asChild variant="outline">
-                <Link to="/payments">{strings.webhooks.emptyAction}</Link>
-              </Button>
+              <>
+                {filters.environment && (
+                  <Button variant="outline" onClick={() => search.setEnvironment(null)}>
+                    {strings.webhooks.showAllEnvironments}
+                  </Button>
+                )}
+                <Button asChild variant="outline">
+                  <Link to="/apps">{strings.webhooks.viewApps}</Link>
+                </Button>
+              </>
             }
           />
         )

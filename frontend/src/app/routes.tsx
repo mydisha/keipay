@@ -72,7 +72,9 @@ export const routes: RouteObject[] = [
           },
           {
             path: "webhooks",
-            lazy: async () => ({ Component: (await import("@/features/apps/pages/app-coming-tabs")).AppWebhooksTab }),
+            lazy: async () => ({
+              Component: (await import("@/features/webhooks/pages/app-webhooks-tab")).AppWebhooksTab,
+            }),
           },
           {
             path: "routing",

@@ -59,12 +59,11 @@ test.describe("apps lifecycle (T-61)", () => {
     await expect(create.getByText("Enter a name.")).toBeVisible();
     await create.getByRole("button", { name: "Cancel" }).click();
 
-    // Create a test app: three secrets once, then its detail page.
+    // Create a test app: two secrets once, then its detail page.
     const created = await createAppInConsole(page, { name, metadata: '{"team": "qa"}' });
     expect(created.slug).toBe(`qa-flow-${suffix}`);
     expect(created.apiKey).toMatch(/^kp_test_[0-9a-f]{32}$/);
     expect(created.apiSecret).toMatch(/^kps_test_[0-9a-f]{48}$/);
-    expect(created.webhookSecret).toMatch(/^kpwh_[0-9a-f]{48}$/);
     await expect(page.getByText(created.apiSecret)).toHaveCount(0);
     await expect(page.getByRole("region", { name: "Metadata" })).toContainText('"team": "qa"');
 
@@ -160,7 +159,7 @@ test.describe("shell", () => {
 
   test("test mode, theme and sidebar state persist; the palette navigates", async ({ page }) => {
     await signInToDashboard(page);
-    const banner = page.getByText(/The Apps and Connections lists, new apps and new connections follow this switch/);
+    const banner = page.getByText(/The Apps, Connections and Webhooks lists, new apps and new connections follow this switch/);
     await expect(banner).toHaveCount(0);
 
     await page.getByRole("switch", { name: "Test mode" }).click();

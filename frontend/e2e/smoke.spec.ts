@@ -35,7 +35,7 @@ async function expectPageReady(page: Page, item: (typeof pages)[number]) {
 const appTabs = [
   { name: "Overview", suffix: "", expectText: "Details" },
   { name: "API keys", suffix: "/keys", expectText: "kp_test_" },
-  { name: "Webhooks", suffix: "/webhooks", expectText: "Webhook endpoints are coming soon" },
+  { name: "Webhooks", suffix: "/webhooks", expectText: "Webhook endpoints" },
   { name: "Routing", suffix: "/routing", expectText: "Routing is coming soon" },
 ];
 

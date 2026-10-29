@@ -18,6 +18,10 @@ interface ConfirmDialogProps {
   destructive?: boolean;
   pending?: boolean;
   pendingLabel?: string;
+  /** Extra inputs shown above the type-to-confirm field. */
+  children?: ReactNode;
+  /** False keeps confirm disabled, e.g. while an extra input is invalid. */
+  canConfirm?: boolean;
 }
 
 export function ConfirmDialog(props: ConfirmDialogProps) {
@@ -39,10 +43,12 @@ function ConfirmDialogBody({
   destructive = false,
   pending = false,
   pendingLabel,
+  children,
+  canConfirm = true,
 }: ConfirmDialogProps) {
   const [typed, setTyped] = useState("");
   const inputId = useId();
-  const matches = confirmText === undefined || typed === confirmText;
+  const matches = (confirmText === undefined || typed === confirmText) && canConfirm;
 
   return (
     <DialogContent showCloseButton={!pending}>
@@ -57,6 +63,7 @@ function ConfirmDialogBody({
           if (matches && !pending) onConfirm();
         }}
       >
+        {children}
         {confirmText !== undefined && (
           <div className="grid gap-2">
             <Label htmlFor={inputId}>

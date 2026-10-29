@@ -2,7 +2,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { CircleAlertIcon, Loader2Icon } from "lucide-react";
 import { useId, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
-import { errorMessage } from "@/shared/api/error-message";
 import { useMode } from "@/shared/lib/mode";
 import { strings } from "@/shared/lib/strings";
 import { Alert, AlertDescription } from "@/shared/ui/alert";
@@ -15,7 +14,7 @@ import { RadioGroup, RadioGroupItem } from "@/shared/ui/radio-group";
 import { APP_ENVIRONMENTS, useCreateApp, type AppCreated, type CreateAppRequest } from "../api/apps";
 import { createAppSchema, suggestSlug, type CreateAppValues } from "../schemas/app-form";
 import { parseMetadataText } from "../schemas/metadata";
-import { applyServerErrors } from "./apply-server-errors";
+import { applyServerErrors, unplacedErrorMessage } from "./apply-server-errors";
 import { MetadataEditor } from "./metadata-editor";
 import { UrlFields } from "./url-fields";
 
@@ -23,7 +22,6 @@ const FIELD_NAMES = [
   "name",
   "slug",
   "environment",
-  "webhook_url",
   "redirect_success_url",
   "redirect_failure_url",
   "metadata",
@@ -49,7 +47,6 @@ function toRequest(values: CreateAppValues): { body: CreateAppRequest; metadataT
     name: values.name,
     slug: values.slug,
     environment: values.environment,
-    webhook_url: values.webhook_url,
     redirect_success_url: values.redirect_success_url,
     redirect_failure_url: values.redirect_failure_url,
   };
@@ -78,7 +75,6 @@ function CreateAppForm({
       name: "",
       slug: "",
       environment: mode,
-      webhook_url: "",
       redirect_success_url: "",
       redirect_failure_url: "",
       metadata: "",
@@ -94,7 +90,7 @@ function CreateAppForm({
         const placed = applyServerErrors(error, form.setError, FIELD_NAMES, {
           slugConflict: strings.apps.slugTaken(values.environment),
         });
-        if (!placed) setFormError(errorMessage(error, strings.apps.createFailed));
+        if (!placed) setFormError(unplacedErrorMessage(error, strings.apps.createFailed));
       },
     });
   }

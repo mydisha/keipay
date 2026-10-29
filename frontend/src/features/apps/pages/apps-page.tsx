@@ -35,7 +35,6 @@ function createdSecrets(result: AppCreated) {
   return [
     { label: strings.apps.apiKey, value: result.api_key },
     { label: strings.apps.apiSecret, value: result.api_secret },
-    { label: strings.apps.webhookSecret, value: result.webhook_secret },
   ];
 }
 

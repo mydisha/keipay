@@ -101,6 +101,15 @@ export function useConnectionOptions(environment: ConnectionEnvironment, enabled
   });
 }
 
+/** Every connection, newest first, for filter selects (one page of `CONNECTION_OPTIONS_LIMIT`). */
+export function useConnectionFilterOptions() {
+  return useQuery({
+    queryKey: [...connectionKeys.all, "filter-options"] as const,
+    queryFn: async () =>
+      (await unwrap(api.GET("/admin/connections", { params: { query: { limit: CONNECTION_OPTIONS_LIMIT } } }))).data,
+  });
+}
+
 export function useConnection(id: string | null) {
   return useQuery({
     queryKey: connectionKeys.detail(id ?? ""),

@@ -40,17 +40,17 @@ describe("App detail (T-43)", () => {
     expect(within(tabs).getByRole("link", { name: "Overview" })).toHaveAttribute("aria-current", "page");
 
     const details = await screen.findByRole("region", { name: "Details" });
-    expect(within(details).getByText("https://demo.example.com/webhooks/kei")).toBeInTheDocument();
+    expect(within(details).queryByText("Webhook URL")).not.toBeInTheDocument();
     expect(within(details).getByText("https://demo.example.com/thanks")).toBeInTheDocument();
     expect(within(details).getAllByText("Not set")).toHaveLength(1);
     expect(screen.getByRole("region", { name: "Metadata" })).toHaveTextContent('"team": "growth"');
   });
 
   it("says No metadata and Not set for an empty app", async () => {
-    mockApi({ [DETAIL]: { app: app({ webhook_url: "" }) } });
+    mockApi({ [DETAIL]: { app: app() } });
     renderApp(`/apps/${APP_ID}`);
     const details = await screen.findByRole("region", { name: "Details" });
-    expect(within(details).getAllByText("Not set")).toHaveLength(3);
+    expect(within(details).getAllByText("Not set")).toHaveLength(2);
     expect(screen.getByText("No metadata")).toBeInTheDocument();
   });
 
@@ -189,26 +189,14 @@ describe("App detail (T-43)", () => {
   });
 });
 
-describe("Webhooks and Routing tabs (T-45)", () => {
-  it.each([
-    ["webhooks", "Webhook endpoints are coming soon"],
-    ["routing", "Routing is coming soon"],
-  ])("/%s shows its empty state without API calls beyond the app", async (tab, title) => {
+describe("Routing tab (T-45)", () => {
+  it("shows its empty state without API calls beyond the app", async () => {
     const api = mockApi({ [DETAIL]: { app: app() } });
-    renderApp(`/apps/${APP_ID}/${tab}`);
-    expect(await screen.findByText(title)).toBeInTheDocument();
+    renderApp(`/apps/${APP_ID}/routing`);
+    expect(await screen.findByText("Routing is coming soon")).toBeInTheDocument();
     const adminCalls = api.requests
       .map((r) => `${r.method} ${new URL(r.url).pathname}`)
       .filter((call) => call !== "GET /admin/me" && call !== "GET /admin/setup");
     expect(adminCalls).toEqual([DETAIL]);
-  });
-
-  it("links the webhooks tab to the webhook URL in Overview", async () => {
-    mockApi({ [DETAIL]: { app: app() } });
-    renderApp(`/apps/${APP_ID}/webhooks`);
-    expect(await screen.findByRole("link", { name: "View webhook URL" })).toHaveAttribute(
-      "href",
-      `/apps/${APP_ID}#webhook-url`,
-    );
   });
 });

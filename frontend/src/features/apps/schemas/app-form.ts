@@ -7,7 +7,8 @@ import { metadataText } from "./metadata";
 export const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{1,30}[a-z0-9]$/;
 const URL_MAX_BYTES = 2048;
 
-function isHttpUrl(value: string): boolean {
+/** An absolute http(s) URL with a host, at most 2048 bytes, no whitespace or control characters. */
+export function isHttpUrl(value: string): boolean {
   if (/\s/.test(value) || hasControlChars(value)) return false;
   if (utf8Length(value) > URL_MAX_BYTES) return false;
   try {
@@ -41,7 +42,6 @@ export const createAppSchema = z.object({
   name,
   slug: z.string().trim().toLowerCase().regex(SLUG_PATTERN, strings.apps.slugInvalid),
   environment: z.enum(["test", "live"]),
-  webhook_url: optionalUrl,
   redirect_success_url: optionalUrl,
   redirect_failure_url: optionalUrl,
   metadata: metadataText,
@@ -51,7 +51,6 @@ export type CreateAppValues = z.infer<typeof createAppSchema>;
 
 export const editAppSchema = z.object({
   name,
-  webhook_url: optionalUrl,
   redirect_success_url: optionalUrl,
   redirect_failure_url: optionalUrl,
   metadata: metadataText,

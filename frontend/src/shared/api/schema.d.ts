@@ -109,18 +109,24 @@ export interface paths {
          *     connection's `callback_token` (constant-time comparison).
          *
          *     - Unknown connection id, malformed id, or a provider that differs
-         *       from the connection's: `404 not_found`.
+         *       from the connection's: `404 not_found`. Not recorded.
          *     - Verification fails: `401 invalid_callback_token`, logged as a
-         *       security event. A token valid for another connection is still
-         *       rejected.
-         *     - Body is not valid JSON for the provider: `400 invalid_request`.
-         *     - Duplicate and stale callbacks, callbacks whose amount or
-         *       currency does not match the payment, and callbacks for a payment
-         *       created through a different connection are acknowledged with
-         *       `200` (the last two are recorded, not applied, and logged as
-         *       security events) so the gateway stops retrying.
+         *       security event and recorded as an inbound webhook with result
+         *       `invalid_signature` (body cut to 4096 bytes). A token valid for
+         *       another connection is still rejected.
+         *     - Body is not valid JSON for the provider: `400 invalid_request`,
+         *       recorded with result `invalid_payload`.
+         *     - Duplicate (`duplicate`) and stale (`stale`) callbacks, callbacks
+         *       with a gateway status KeiPay does not know (`unmapped`), callbacks
+         *       whose amount or currency does not match the payment, and
+         *       callbacks for a payment created through a different connection
+         *       (both `mismatch`, logged as security events) are acknowledged
+         *       with `200` and not applied, so the gateway stops retrying.
+         *       Duplicates are detected per connection on the gateway's event
+         *       key and status.
          *     - Real processing failures, including an unknown payment
-         *       reference, return `500` so the gateway retries.
+         *       reference, return `500` (recorded as `error`) so the gateway
+         *       retries.
          *
          *     Disabled connections still accept callbacks, so payments created
          *     before disabling keep updating.
@@ -442,10 +448,11 @@ export interface paths {
         /**
          * Create an app
          * @description Creates an active app with its first API key (label `Default`, no
-         *     expiry) and its webhook signing secret. The API key, API secret
-         *     and webhook signing secret are returned in plaintext exactly once.
-         *     `slug` must be unused within the environment (`409 conflict`);
-         *     `slug` and `environment` never change. Records `app.create` and
+         *     expiry). The API key and API secret are returned in plaintext
+         *     exactly once. `slug` must be unused within the environment
+         *     (`409 conflict`); `slug` and `environment` never change. Webhook
+         *     URLs are webhook endpoints now: a body with `webhook_url` returns
+         *     `400 invalid_request` with rule `moved`. Records `app.create` and
          *     `api_key.create`.
          */
         post: operations["createApp"];
@@ -474,7 +481,9 @@ export interface paths {
          * @description Send only the fields to change; `metadata` replaces the whole
          *     object. `slug` and `environment` cannot change: a body containing
          *     either returns `400 invalid_request` with rule `immutable` for that
-         *     field, even with the current value. A body with none of the
+         *     field, even with the current value. `webhook_url` returns
+         *     `400 invalid_request` with rule `moved` (use webhook endpoints).
+         *     A body with none of the
          *     updatable fields returns `400 invalid_request` with
          *     `details.fields` `[{"field": "body", "rule": "required"}]`. Other
          *     unknown fields are ignored. A request that changes nothing returns
@@ -607,6 +616,204 @@ export interface paths {
          *     returns `404 not_found`.
          */
         post: operations["revokeAppApiKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/apps/{id}/webhook-endpoints": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List an app's webhook endpoints
+         * @description Cursor-paginated, newest first (`created_at` descending, then `id`
+         *     descending). Includes disabled endpoints; deleted endpoints are
+         *     never listed. Secrets and custom header values are never returned.
+         */
+        get: operations["listWebhookEndpoints"];
+        put?: never;
+        /**
+         * Create a webhook endpoint
+         * @description Creates an active endpoint with a new signing secret, returned in
+         *     plaintext exactly once. Field rules are on
+         *     `CreateWebhookEndpointRequest`; every failing field is reported in
+         *     one `400 invalid_request`. An app may have at most 10 endpoints
+         *     (deleted ones do not count); one more returns
+         *     `400 validation_failed`. Works on disabled apps too. Records
+         *     `webhook_endpoint.create`.
+         */
+        post: operations["createWebhookEndpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/webhook-endpoints/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a webhook endpoint
+         * @description A deleted endpoint returns `404 not_found`.
+         */
+        get: operations["getWebhookEndpoint"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a webhook endpoint
+         * @description Soft-deletes the endpoint: it stops receiving events at once and
+         *     disappears from lists, while its past deliveries stay readable.
+         *     Pending deliveries to it end `FAILED` without another attempt.
+         *     Deleting a deleted endpoint returns `404 not_found`. Records
+         *     `webhook_endpoint.delete`.
+         */
+        delete: operations["deleteWebhookEndpoint"];
+        options?: never;
+        head?: never;
+        /**
+         * Update a webhook endpoint
+         * @description Send only the fields to change; `events`, `headers` and
+         *     `retry_policy` replace the whole value (`headers: []` removes all
+         *     custom headers; omitted keeps them). Field rules are the same as on
+         *     create. `status`, `secret` or `app_id` in the body returns
+         *     `400 invalid_request` with rule `immutable` (use disable, enable or
+         *     rotate-secret). A body with none of the updatable fields returns
+         *     `400 invalid_request` with `details.fields`
+         *     `[{"field": "body", "rule": "required"}]`. A request that changes
+         *     nothing returns the endpoint and records nothing; otherwise it
+         *     records `webhook_endpoint.update` with only the changed fields
+         *     (header names only, never values). Changes apply to deliveries
+         *     created afterwards; a delivery keeps the body it was created with.
+         */
+        patch: operations["updateWebhookEndpoint"];
+        trace?: never;
+    };
+    "/admin/webhook-endpoints/{id}/rotate-secret": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Rotate a webhook endpoint's signing secret
+         * @description Issues a new signing secret, returned in plaintext exactly once.
+         *     The current secret becomes the previous secret and keeps signing
+         *     (as a second `v1=` in `X-KeiPay-Signature`) for `overlap_hours`
+         *     (default 24, `0` ends it at once); any older previous secret is
+         *     dropped. `X-Kei-Signature` uses only the new secret. Works on
+         *     disabled endpoints. Records `webhook_endpoint.rotate_secret`
+         *     (`after`: `{secret_last4, previous_secret_expires_at}`).
+         */
+        post: operations["rotateWebhookEndpointSecret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/webhook-endpoints/{id}/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Disable a webhook endpoint
+         * @description Stops new deliveries to the endpoint (`disabled_reason` `manual`).
+         *     Pending deliveries end `FAILED` without another attempt when their
+         *     turn comes. Disabling a disabled endpoint returns it unchanged and
+         *     records nothing; otherwise records `webhook_endpoint.disable`.
+         */
+        post: operations["disableWebhookEndpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/webhook-endpoints/{id}/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Enable a webhook endpoint
+         * @description Re-activates the endpoint, whatever disabled it, and resets
+         *     `consecutive_failures` to 0. Deliveries that failed meanwhile are
+         *     not resent; replay them. Enabling an active endpoint returns it
+         *     unchanged and records nothing; otherwise records
+         *     `webhook_endpoint.enable`.
+         */
+        post: operations["enableWebhookEndpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/webhook-endpoints/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a test event to one endpoint
+         * @description Creates a test event of `event_type` whose `data` is the catalog
+         *     example and queues one delivery to this endpoint only, whatever
+         *     its subscriptions and status (a disabled endpoint can be tested
+         *     before enabling it). The request carries `X-KeiPay-Test: true`, is
+         *     signed like any other, is attempted once (no retries) and never
+         *     counts toward automatic disabling. Watch the returned delivery for
+         *     the outcome. `event_type` must be a catalog type, not a wildcard
+         *     (rule `oneof`). Records `webhook_endpoint.test`.
+         */
+        post: operations["sendWebhookEndpointTest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/event-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the event catalog
+         * @description Every event type KeiPay can send, in display order, with a
+         *     description and an example `v2` envelope, plus the accepted
+         *     wildcard subscriptions. Clients build event pickers from this list
+         *     and never hard-code it. New types may be added.
+         */
+        get: operations["listEventTypes"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -891,11 +1098,37 @@ export interface paths {
         };
         /**
          * List outbound webhook deliveries
-         * @description Offset-paginated, newest first. An unparseable `app_id` is
-         *     ignored; a well-formed `app_id` that matches no app returns an
-         *     empty list. An out-of-range `limit` falls back to the default.
+         * @description Cursor-paginated, newest first (`created_at` descending, then `id`
+         *     descending). Every filter is optional and they combine with AND.
+         *     An invalid value returns `400 invalid_request`: `app_id`,
+         *     `endpoint_id` or `event_id` rule `public_id`; `status`,
+         *     `event_type` or `environment` rule `oneof`; `from` or `to` rule
+         *     `datetime`. A well-formed id that matches nothing returns an empty
+         *     page. Rows do not carry the body; get one delivery for it.
          */
         get: operations["listWebhookDeliveries"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/webhook-deliveries/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a webhook delivery with its attempts
+         * @description The delivery, the body as sent, and every attempt (request headers,
+         *     response status and the first 4096 bytes of the response body),
+         *     oldest first. Custom header values are shown as `[REDACTED]`.
+         */
+        get: operations["getWebhookDelivery"];
         put?: never;
         post?: never;
         delete?: never;
@@ -915,10 +1148,60 @@ export interface paths {
         put?: never;
         /**
          * Replay a webhook delivery
-         * @description Re-enqueues the delivery. Delivery is at-least-once, so apps must
-         *     already dedupe. Recorded in the audit log as `webhook_delivery.replay`.
+         * @description Sends the same event (same `X-KeiPay-Event-Id`, same body, a fresh
+         *     signature) to the same endpoint once more: one attempt, not
+         *     retried, which never counts toward automatic disabling. No new
+         *     event or delivery is created, so receivers that dedupe on the
+         *     event id see a duplicate. Only `DELIVERED` and `FAILED` deliveries
+         *     can be replayed; otherwise `409 delivery_not_replayable` with
+         *     `details.reason` `in_progress` (still `PENDING`), `no_endpoint`
+         *     (a delivery from before webhook endpoints whose app had no webhook
+         *     URL), `endpoint_deleted` or `endpoint_disabled`. Records
+         *     `webhook_delivery.replay` (`before`: `{status, attempts}`).
          */
         post: operations["replayWebhookDelivery"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/inbound-webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List inbound gateway webhooks
+         * @description Every callback that reached a known connection, newest first
+         *     (`received_at` descending, then `id` descending), cursor-paginated.
+         *     An invalid filter returns `400 invalid_request`: `connection_id`
+         *     rule `public_id`; `result` or `environment` rule `oneof`; `from`
+         *     or `to` rule `datetime` (bounds on `received_at`). Rows do not
+         *     carry the body; get one inbound webhook for it.
+         */
+        get: operations["listInboundWebhooks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/inbound-webhooks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get an inbound gateway webhook with its raw body */
+        get: operations["getInboundWebhook"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -947,7 +1230,7 @@ export interface paths {
     };
 }
 export interface webhooks {
-    paymentEvent: {
+    event: {
         parameters: {
             query?: never;
             header?: never;
@@ -957,15 +1240,43 @@ export interface webhooks {
         get?: never;
         put?: never;
         /**
-         * Payment event forwarded to the app's webhook_url
-         * @description Sent when a payment changes status. Verify `X-Kei-Signature` (hex
-         *     HMAC-SHA256 of the raw body keyed with the app's webhook signing
-         *     secret; for apps that existed before apps replaced tenants, that is
-         *     their original `api_secret`) in constant time. Return any `2xx` to
-         *     acknowledge; anything else is retried. Delivery is at-least-once:
-         *     dedupe on `payment_public_id` (or `payment_id`) + `event`.
+         * Event sent to a webhook endpoint (api_version v2)
+         * @description Sent to every active endpoint of the app whose subscriptions match
+         *     the event type, once per event. Verify `X-KeiPay-Signature` (see
+         *     "Webhooks to apps": HMAC-SHA256 of `"{t}.{raw body}"` with the
+         *     endpoint's signing secret, compared in constant time against every
+         *     `v1=` value) and reject a `t` more than 5 minutes old. Return any
+         *     `2xx` within 15 seconds to acknowledge; anything else is retried
+         *     per the endpoint's retry policy. Delivery is at-least-once: dedupe
+         *     on `X-KeiPay-Event-Id` (equal to the body's `id`).
          */
-        post: operations["paymentEventWebhook"];
+        post: operations["webhookEventV2"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    paymentEventV1: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Event sent to a webhook endpoint (api_version v1)
+         * @deprecated
+         * @description The flat body sent before the v2 envelope, still used by endpoints
+         *     whose `api_version` is `v1` (endpoints migrated from an app's
+         *     `webhook_url` start there). Headers are the same as for `v2`;
+         *     migrated endpoints also get `X-Kei-Signature` and `X-Kei-Event`
+         *     until `legacy_signature` is turned off. Move to `v2` by switching
+         *     the endpoint's `api_version` once your receiver reads the envelope.
+         */
+        post: operations["paymentEventWebhookV1"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1010,6 +1321,7 @@ export interface components {
          *     | `setup_completed` | 409 | First-run setup already happened; sign in instead. |
          *     | `last_owner` | 409 | The change would leave no active owner. |
          *     | `cannot_modify_self` | 409 | Owners cannot disable themselves or reset their own password through the users API. |
+         *     | `delivery_not_replayable` | 409 | The delivery cannot be replayed now. `details.reason`: `in_progress` (still `PENDING`), `no_endpoint`, `endpoint_deleted` or `endpoint_disabled`. |
          *     | `connection_in_use` | 409 | The connection is some app's default connection. `details.apps` lists up to 10 (`AppSummary`), `details.app_count` counts them. |
          *     | `no_eligible_connection` | 422 | No connection can take the payment. `details.reasons` is a list of strings: `no_default_connection`, `connection_disabled`. More reasons may be added. |
          *     | `provider_rejected` | 422 | The gateway refused the request (validation, limits, credentials). `details.provider` names the provider. The message is generic; the gateway's own text is only logged. |
@@ -1018,7 +1330,7 @@ export interface components {
          *     | `provider_unavailable` | 503 | The gateway could not be reached, timed out, or answered with a server error. Retry with the same `order_id`. |
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "validation_failed" | "invalid_cursor" | "unauthorized" | "invalid_credentials" | "missing_token" | "invalid_token" | "missing_signature_headers" | "invalid_timestamp" | "timestamp_out_of_range" | "unknown_api_key" | "invalid_signature" | "replayed_request" | "invalid_callback_token" | "tenant_inactive" | "not_found" | "conflict" | "internal_error" | "session_required" | "session_expired" | "forbidden" | "password_change_required" | "invalid_csrf_token" | "invalid_setup_token" | "setup_completed" | "last_owner" | "cannot_modify_self" | "rate_limited" | "api_key_revoked" | "api_key_expired" | "idempotency_key_reused" | "connection_in_use" | "no_eligible_connection" | "provider_rejected" | "provider_unavailable";
+        ErrorCode: "invalid_request" | "validation_failed" | "invalid_cursor" | "unauthorized" | "invalid_credentials" | "missing_token" | "invalid_token" | "missing_signature_headers" | "invalid_timestamp" | "timestamp_out_of_range" | "unknown_api_key" | "invalid_signature" | "replayed_request" | "invalid_callback_token" | "tenant_inactive" | "not_found" | "conflict" | "internal_error" | "session_required" | "session_expired" | "forbidden" | "password_change_required" | "invalid_csrf_token" | "invalid_setup_token" | "setup_completed" | "last_owner" | "cannot_modify_self" | "rate_limited" | "api_key_revoked" | "api_key_expired" | "idempotency_key_reused" | "connection_in_use" | "delivery_not_replayable" | "no_eligible_connection" | "provider_rejected" | "provider_unavailable";
         /**
          * @example {
          *       "error": {
@@ -1070,8 +1382,14 @@ export interface components {
          * @enum {string}
          */
         PaymentStatus: "PENDING" | "PAID" | "SETTLED" | "EXPIRED" | "FAILED";
-        /** @enum {string} */
-        PaymentEventType: "payment.paid" | "payment.settled" | "payment.expired" | "payment.failed";
+        /**
+         * @description The event catalog (`GET /admin/event-types` has descriptions and
+         *     examples). `payment.duplicate` is reserved for a payment paid more
+         *     than once; it is not sent yet. New types may be added; ignore types
+         *     you do not handle.
+         * @enum {string}
+         */
+        EventType: "payment.paid" | "payment.settled" | "payment.expired" | "payment.failed" | "payment.duplicate";
         OrderItem: {
             name: string;
             /** Format: int32 */
@@ -1367,8 +1685,6 @@ export interface components {
             environment: components["schemas"]["AppEnvironment"];
             status: components["schemas"]["AppStatus"];
             metadata: components["schemas"]["Metadata"];
-            /** @description Where payment events are sent; empty means none. */
-            webhook_url: string;
             redirect_success_url: string;
             redirect_failure_url: string;
             /** Format: date-time */
@@ -1387,7 +1703,6 @@ export interface components {
             name: components["schemas"]["AppName"];
             slug: components["schemas"]["AppSlug"];
             environment: components["schemas"]["AppEnvironment"];
-            webhook_url?: components["schemas"]["HttpUrl"];
             redirect_success_url?: components["schemas"]["HttpUrl"];
             redirect_failure_url?: components["schemas"]["HttpUrl"];
             metadata?: components["schemas"]["Metadata"];
@@ -1400,7 +1715,6 @@ export interface components {
             /** @description An active connection with the app's environment, or `null` to clear. */
             default_connection_id?: string | null;
             name?: components["schemas"]["AppName"];
-            webhook_url?: components["schemas"]["HttpUrl"];
             redirect_success_url?: components["schemas"]["HttpUrl"];
             redirect_failure_url?: components["schemas"]["HttpUrl"];
             metadata?: components["schemas"]["Metadata"];
@@ -1426,11 +1740,6 @@ export interface components {
              * @description The HMAC secret for `X-Signature`. Shown once; store it now.
              */
             api_secret: string;
-            /**
-             * Format: password
-             * @description The secret that signs outbound webhooks (`X-Kei-Signature`). Shown once; store it now.
-             */
-            webhook_secret: string;
         };
         /**
          * @description Derived. `revoked` once `revoked_at` is set; else `expired` once `expires_at` has passed; else `active`.
@@ -1790,44 +2099,388 @@ export interface components {
             entries: components["schemas"]["LedgerEntry"][];
             summary: components["schemas"]["LedgerSummary"][];
         };
+        EventTypeInfo: {
+            type: components["schemas"]["EventType"];
+            /** @description One sentence for people choosing subscriptions. */
+            description: string;
+            example: components["schemas"]["WebhookEnvelope"];
+        };
+        EventWildcard: {
+            /**
+             * @description A subscription entry that matches several types.
+             * @example payment.*
+             * @example *
+             */
+            pattern: string;
+            description: string;
+        };
+        EventTypeListResponse: {
+            data: components["schemas"]["EventTypeInfo"][];
+            /** @description `payment.*` (every `payment.` type) and `*` (every type, including ones added later), in that order. */
+            wildcards: components["schemas"]["EventWildcard"][];
+        };
+        /**
+         * @description An event type from the catalog, a group wildcard (`<group>.*` for a
+         *     group in the catalog, e.g. `payment.*`) or `*`. Surrounding spaces
+         *     are trimmed. Anything else: rule `oneof`.
+         * @example payment.paid
+         * @example payment.*
+         * @example *
+         */
+        EventSubscription: string;
+        /**
+         * @description The body an endpoint receives. `v2`: `WebhookEnvelope`. `v1`: the
+         *     older flat `PaymentWebhookEvent`, for endpoints migrated from an
+         *     app's `webhook_url`.
+         * @enum {string}
+         */
+        WebhookApiVersion: "v1" | "v2";
         /** @enum {string} */
-        WebhookDeliveryStatus: "PENDING" | "DELIVERED" | "FAILED";
-        WebhookDelivery: {
-            /** Format: int64 */
-            id: number;
-            payment_id: string;
+        WebhookEndpointStatus: "active" | "disabled";
+        /**
+         * @description `manual` (disabled through the API) or `consecutive_failures` (disabled automatically).
+         * @enum {string}
+         */
+        WebhookEndpointDisabledReason: "manual" | "consecutive_failures";
+        /**
+         * @description How many times one delivery is attempted and how long to wait
+         *     between attempts. With `exponential` the wait after attempt `n` is
+         *     `interval_seconds × 2^(n-1)`, capped at 6 hours; with `fixed` it is
+         *     `interval_seconds`. The default (8 attempts, exponential, 30 s)
+         *     spans about an hour. Out of range: rule `min` or `max` on
+         *     `retry_policy.<field>`; unknown `backoff`: rule `oneof`.
+         */
+        WebhookRetryPolicy: {
+            /** @default 8 */
+            max_attempts: number;
+            /**
+             * @default exponential
+             * @enum {string}
+             */
+            backoff: "exponential" | "fixed";
+            /** @default 30 */
+            interval_seconds: number;
+        };
+        WebhookHeaderInput: {
+            /**
+             * @description An HTTP header name (RFC 9110 token characters). Not allowed
+             *     (rule `reserved`, case-insensitive): `Content-Type`,
+             *     `Content-Length`, `Host`, `User-Agent`, `Connection`,
+             *     `Transfer-Encoding`, and any name starting with `X-KeiPay-` or
+             *     `X-Kei-`. Invalid characters: rule `header_name`. Repeated
+             *     name (case-insensitive): rule `duplicate`.
+             * @example Authorization
+             */
+            name: string;
+            /**
+             * Format: password
+             * @description Stored encrypted and never returned. Control characters (including CR and LF) are rejected with rule `header_value`.
+             */
+            value: string;
+        };
+        WebhookHeaderHint: {
+            name: string;
+            /** @description Last 4 characters of the value; `null` when the value is shorter than 12 characters. */
+            value_last4: string | null;
+        };
+        WebhookEndpoint: {
+            /** @example whe_01JBKQ7Z8M4X2Y6V3N9T5R1W0C */
+            id: string;
             app: components["schemas"]["AppSummary"];
-            event_type: components["schemas"]["PaymentEventType"];
-            /** @description The body as sent. Deliveries created before apps replaced tenants have no `payment_public_id` or `metadata`. */
-            payload: components["schemas"]["PaymentWebhookEvent"];
+            url: string;
+            description: string;
+            /** @description The subscriptions, in the order they were saved. */
+            events: components["schemas"]["EventSubscription"][];
+            api_version: components["schemas"]["WebhookApiVersion"];
+            /** @description Whether requests also carry `X-Kei-Signature` and `X-Kei-Event`. */
+            legacy_signature: boolean;
+            /** @description Custom headers, names only plus a hint of each value. */
+            headers: components["schemas"]["WebhookHeaderHint"][];
+            retry_policy: components["schemas"]["WebhookRetryPolicy"];
+            status: components["schemas"]["WebhookEndpointStatus"];
+            /** @description Set exactly when `status` is `disabled`. */
+            disabled_reason: components["schemas"]["WebhookEndpointDisabledReason"] | null;
+            /** Format: date-time */
+            disabled_at: string | null;
+            /** @description Deliveries in a row that ran out of attempts; reset by any successful attempt and by enabling. */
+            consecutive_failures: number;
+            /** @description Last 4 characters of the current signing secret; `null` for a secret carried over from an app's former webhook settings until it is rotated. */
+            secret_last4: string | null;
+            /**
+             * Format: date-time
+             * @description While set and in the future, the previous secret still signs requests.
+             */
+            previous_secret_expires_at: string | null;
+            /** @description Created from the app's former `webhook_url` when webhook endpoints were introduced. */
+            migrated: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        CreateWebhookEndpointRequest: {
+            /**
+             * @description An absolute `http` or `https` URL with a host, at most 2048
+             *     bytes, without whitespace or control characters. Blank: rule
+             *     `required`; invalid: rule `url`; `http` for an app in the
+             *     `live` environment: rule `https`.
+             * @example https://shop.example.com/hooks/keipay
+             */
+            url: string;
+            /** @description Free text, trimmed; at most 500 characters (rule `max`), no control characters other than newline and tab (rule `name`). */
+            description?: string;
+            /**
+             * @description Subscriptions. Empty: rule `required`; more than 20: rule
+             *     `max`; per element `events.<i>` rule `oneof` or `duplicate`.
+             */
+            events: components["schemas"]["EventSubscription"][];
+            api_version?: components["schemas"]["WebhookApiVersion"];
+            /** @default false */
+            legacy_signature: boolean;
+            /** @description More than 10 entries returns rule `max` on `headers`. Element errors use `headers.<i>.name` or `headers.<i>.value`. */
+            headers?: components["schemas"]["WebhookHeaderInput"][];
+            retry_policy?: components["schemas"]["WebhookRetryPolicy"];
+        };
+        /** @description Send only the fields to change. Rules as on create. */
+        UpdateWebhookEndpointRequest: {
+            url?: string;
+            description?: string;
+            events?: components["schemas"]["EventSubscription"][];
+            api_version?: components["schemas"]["WebhookApiVersion"];
+            legacy_signature?: boolean;
+            /** @description Replaces every custom header; `[]` removes them all. */
+            headers?: components["schemas"]["WebhookHeaderInput"][];
+            retry_policy?: components["schemas"]["WebhookRetryPolicy"];
+        };
+        RotateWebhookSecretRequest: {
+            /**
+             * @description How long the current secret keeps signing next to the new one. Out of range or not an integer returns `400 invalid_request` with rule `min`, `max` or `type`.
+             * @default 24
+             */
+            overlap_hours: number;
+        };
+        SendTestEventRequest: {
+            event_type: components["schemas"]["EventType"];
+        };
+        WebhookEndpointResponse: {
+            endpoint: components["schemas"]["WebhookEndpoint"];
+        };
+        WebhookEndpointSecretResponse: {
+            endpoint: components["schemas"]["WebhookEndpoint"];
+            /**
+             * Format: password
+             * @description The signing secret (`kpwh_` + 48 hex characters). Shown once; store it now.
+             * @example kpwh_3f9a0c1d2e4b5a69788796a5b4c3d2e1f0a9b8c7d6e5f4a3
+             */
+            secret: string;
+        };
+        WebhookEndpointListResponse: {
+            data: components["schemas"]["WebhookEndpoint"][];
+            /** @description Pass as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description The `v2` webhook body. Fields are only ever added within `v2`. */
+        WebhookEnvelope: {
+            /**
+             * @description The event id; the same for every endpoint and every attempt. Dedupe on it.
+             * @example evt_01JBKQ7Z8M4X2Y6V3N9T5R1W0C
+             */
+            id: string;
+            type: components["schemas"]["EventType"];
+            /** @constant */
+            api_version: "v2";
+            /**
+             * Format: date-time
+             * @description When the event happened in KeiPay (not when this attempt was sent).
+             */
+            created_at: string;
+            data: components["schemas"]["PaymentEventData"];
+        };
+        /** @description The payment as of the event. */
+        PaymentEventData: {
+            /** @example pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C */
+            id: string;
+            order_id: string;
+            /** @description The gateway reference (`reference` on the payment). */
+            reference: string;
+            status: components["schemas"]["PaymentStatus"];
+            /**
+             * Format: int64
+             * @description Minor units (whole rupiah for IDR).
+             */
+            amount: number;
+            currency: string;
+            metadata: components["schemas"]["Metadata"];
+            provider: components["schemas"]["ProviderName"] | null;
+            connection_id: string | null;
+            /** Format: date-time */
+            paid_at: string | null;
+            /** Format: date-time */
+            settled_at: string | null;
+        };
+        /**
+         * @description `PENDING`: waiting for its next attempt (`next_attempt_at`).
+         *     `DELIVERED`: an attempt got a `2xx`. `FAILED`: attempts ran out, or
+         *     the endpoint was disabled or deleted before the next attempt.
+         * @enum {string}
+         */
+        WebhookDeliveryStatus: "PENDING" | "DELIVERED" | "FAILED";
+        /** @description The endpoint a delivery went to. */
+        WebhookEndpointRef: {
+            id: string;
+            url: string;
+            description: string;
+            deleted: boolean;
+        };
+        EventRef: {
+            id: string;
+            type: components["schemas"]["EventType"];
+            /** @description A test send, not a real payment change. */
+            test: boolean;
+        };
+        WebhookDelivery: {
+            /** @example dlv_01JBKQ7Z8M4X2Y6V3N9T5R1W0C */
+            id: string;
+            app: components["schemas"]["AppSummary"];
+            /** @description `null` for a delivery from before webhook endpoints whose app had no webhook URL. */
+            endpoint: components["schemas"]["WebhookEndpointRef"] | null;
+            /** @description `null` for a delivery from before events existed. */
+            event: components["schemas"]["EventRef"] | null;
+            event_type: components["schemas"]["EventType"];
+            /** @description `null` for test sends. */
+            payment_id: string | null;
             status: components["schemas"]["WebhookDeliveryStatus"];
+            /** @description Attempts made so far, replays included. */
             attempts: number;
+            /** @description Attempts allowed before the delivery fails; a replay allows exactly one more. */
+            max_attempts: number;
+            /**
+             * Format: date-time
+             * @description Set while `PENDING`.
+             */
+            next_attempt_at: string | null;
+            /** Format: date-time */
+            last_attempt_at: string | null;
+            /** @description HTTP status of the last attempt; `null` when it got no response (timeout, connection error) or none was made. */
+            last_response_status: number | null;
+            /** @description Why the last attempt or the delivery failed; empty after success. */
             last_error: string;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             updated_at: string;
         };
+        WebhookDeliveryAttempt: {
+            attempt: number;
+            /** @description Made by a replay. */
+            manual: boolean;
+            url: string;
+            /** @description Headers sent; custom header values are `[REDACTED]`. */
+            request_headers: {
+                [key: string]: string;
+            };
+            response_status: number | null;
+            /** @description The first 4096 bytes of the response body as text (invalid UTF-8 replaced). */
+            response_body: string;
+            response_body_truncated: boolean;
+            /** @description Network or protocol error, or `unexpected status 500` style text; empty on success. */
+            error: string;
+            duration_ms: number;
+            /** Format: date-time */
+            started_at: string;
+        };
+        WebhookDeliveryDetail: components["schemas"]["WebhookDelivery"] & {
+            /** @description The body as sent (`WebhookEnvelope` or `PaymentWebhookEvent`, by the endpoint's version when the delivery was created). */
+            payload: {
+                [key: string]: unknown;
+            };
+            /** @description Oldest first. Empty for deliveries made before attempts were logged. */
+            attempt_log: components["schemas"]["WebhookDeliveryAttempt"][];
+        };
+        WebhookDeliveryResponse: {
+            delivery: components["schemas"]["WebhookDelivery"];
+        };
+        WebhookDeliveryDetailResponse: {
+            delivery: components["schemas"]["WebhookDeliveryDetail"];
+        };
         DeliveryListResponse: {
-            deliveries: components["schemas"]["WebhookDelivery"][];
+            data: components["schemas"]["WebhookDelivery"][];
+            /** @description Pass as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
         };
-        ReplayResponse: {
-            /** @constant */
-            requeued: true;
+        /**
+         * @description What KeiPay did with a callback.
+         *
+         *     | result | HTTP | meaning |
+         *     |---|---|---|
+         *     | `applied` | 200 | Moved the payment forward and created an event. |
+         *     | `stale` | 200 | Valid, but not a forward move (e.g. `PAID` after `SETTLED`). |
+         *     | `duplicate` | 200 | The same event key and gateway status already reached this connection. |
+         *     | `mismatch` | 200 | Amount or currency differs from the payment, or the payment belongs to another connection. Not applied; security event. |
+         *     | `unmapped` | 200 | A gateway status KeiPay does not know. Not applied. |
+         *     | `invalid_signature` | 401 | Verification with the connection's credentials failed. |
+         *     | `invalid_payload` | 400 | The body is not a callback this provider sends. |
+         *     | `error` | 500 | Processing failed (e.g. unknown payment reference); the gateway retries. |
+         * @enum {string}
+         */
+        InboundWebhookResult: "applied" | "stale" | "duplicate" | "mismatch" | "unmapped" | "invalid_signature" | "invalid_payload" | "error";
+        InboundWebhook: {
+            /** @example inb_01JBKQ7Z8M4X2Y6V3N9T5R1W0C */
+            id: string;
+            connection: components["schemas"]["ConnectionSummary"];
+            provider: components["schemas"]["ProviderName"];
+            /**
+             * @description `webhook` (a gateway callback). Other sources may be added.
+             * @enum {string}
+             */
+            source: "webhook";
+            signature_valid: boolean;
+            result: components["schemas"]["InboundWebhookResult"];
+            /** @description A short explanation, e.g. which field mismatched; may be empty. Never contains secrets. */
+            result_detail: string;
+            /** @description The gateway's event key (Xendit invoice id); `null` when the body could not be read or verification failed. */
+            event_key: string | null;
+            /** @description The gateway's own status value. */
+            provider_status: string | null;
+            /** @description The payment reference the callback names. */
+            reference: string | null;
+            /** @description The payment it was matched to, when one was found. */
+            payment_id: string | null;
+            /** @description The event an `applied` callback created. */
+            event: components["schemas"]["EventRef"] | null;
+            /** Format: date-time */
+            received_at: string;
         };
+        InboundWebhookDetail: components["schemas"]["InboundWebhook"] & {
+            /** @description The body exactly as received, as text (invalid UTF-8 replaced). Usually JSON. */
+            raw_body: string;
+            /** @description Bodies that failed verification are stored cut to 4096 bytes. */
+            raw_body_truncated: boolean;
+        };
+        InboundWebhookListResponse: {
+            data: components["schemas"]["InboundWebhook"][];
+            /** @description Pass as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        InboundWebhookDetailResponse: {
+            inbound_webhook: components["schemas"]["InboundWebhookDetail"];
+        };
+        /** @description The `v1` webhook body (endpoints with `api_version` `v1`). */
         PaymentWebhookEvent: {
-            event: components["schemas"]["PaymentEventType"];
+            event: components["schemas"]["EventType"];
+            /** @description The event id, also in `X-KeiPay-Event-Id`. Dedupe on it. Missing only in deliveries made before events existed. */
+            event_id?: string;
             /**
              * Format: int64
-             * @description Legacy integer id. Prefer `payment_public_id`.
+             * @description Legacy integer id (`0` on test sends). Prefer `payment_public_id`.
              */
             payment_id: number;
-            /** @description The payment's `pay_…` id. Sent on every event since apps replaced tenants. */
+            /** @description The payment's `pay_…` id. */
             payment_public_id?: string;
             order_id: string;
             /** @description The gateway reference (same as `reference` on the payment). */
             external_id: string;
-            /** @description The payment's `metadata`, `{}` when none. Sent on every event since apps replaced tenants. */
+            /** @description The payment's `metadata`, `{}` when none. */
             metadata?: components["schemas"]["Metadata"];
             status: components["schemas"]["PaymentStatus"];
             /** Format: int64 */
@@ -1837,7 +2490,10 @@ export interface components {
             paid_at?: string;
             /** Format: date-time */
             settled_at?: string;
-            /** Format: date-time */
+            /**
+             * Format: date-time
+             * @description When the event was created (the event's `created_at`).
+             */
             timestamp: string;
         };
         AuditActor: {
@@ -1851,7 +2507,8 @@ export interface components {
             type: string;
             /**
              * @description The user's `usr_…` id for `admin`; the component name (`seed`,
-             *     `cli`, `setup`) for `system`; `anonymous` for `anonymous`.
+             *     `cli`, `setup`, `import`, `worker`) for `system`; `anonymous`
+             *     for `anonymous`.
              *     Entries written before users existed carry the admin username.
              */
             id: string;
@@ -1863,10 +2520,11 @@ export interface components {
              * @example api_key
              * @example connection
              * @example user
+             * @example webhook_endpoint
              * @example webhook_delivery
              */
             type: string;
-            /** @description The target's identifier as a string (`app_…`, `key_…`, `usr_…`). Empty for a failed sign-in with an unknown email. */
+            /** @description The target's identifier as a string (`app_…`, `key_…`, `usr_…`, `whe_…`, `dlv_…`). Empty for a failed sign-in with an unknown email. Replays recorded before deliveries had public ids carry the integer delivery id. */
             id: string;
         };
         AuditLog: {
@@ -1881,7 +2539,12 @@ export interface components {
              *     `api_key.rotate`, `api_key.revoke`, `connection.create`,
              *     `connection.update`, `connection.update_credentials`,
              *     `connection.update_channels`, `connection.disable`,
-             *     `connection.enable`, `connection.test`, `webhook_delivery.replay`,
+             *     `connection.enable`, `connection.test`,
+             *     `webhook_endpoint.create`, `webhook_endpoint.update`,
+             *     `webhook_endpoint.delete`, `webhook_endpoint.rotate_secret`,
+             *     `webhook_endpoint.disable`, `webhook_endpoint.enable`,
+             *     `webhook_endpoint.auto_disable` (actor `system:worker`),
+             *     `webhook_endpoint.test`, `webhook_delivery.replay`,
              *     `user.setup`, `user.create`, `user.update`, `user.disable`,
              *     `user.enable`, `user.reset_password`, `user.change_password`,
              *     `user.login`, `user.login_failed`, `user.logout`. Older entries
@@ -1969,7 +2632,8 @@ export interface components {
          * @description `conflict` (duplicate slug within an environment, duplicate
          *     connection name or email, or an `order_id` reused with a different
          *     amount or currency), `idempotency_key_reused`, `setup_completed`,
-         *     `last_owner`, `cannot_modify_self`, or `connection_in_use`.
+         *     `last_owner`, `cannot_modify_self`, `connection_in_use`, or
+         *     `delivery_not_replayable`.
          */
         Conflict: {
             headers: {
@@ -2055,6 +2719,25 @@ export interface components {
          *     `[{"field": "id", "rule": "public_id"}]`.
          */
         ConnectionIdPath: string;
+        /**
+         * @description Webhook endpoint id (`whe_…`; lower case is accepted). Any other
+         *     format returns `400 invalid_request` with `details.fields`
+         *     `[{"field": "id", "rule": "public_id"}]`.
+         */
+        WebhookEndpointIdPath: string;
+        /**
+         * @description Delivery id (`dlv_…`; lower case is accepted). Any other format,
+         *     including the integer ids used before, returns
+         *     `400 invalid_request` with `details.fields`
+         *     `[{"field": "id", "rule": "public_id"}]`.
+         */
+        DeliveryIdPath: string;
+        /**
+         * @description Inbound webhook id (`inb_…`; lower case is accepted). Any other
+         *     format returns `400 invalid_request` with `details.fields`
+         *     `[{"field": "id", "rule": "public_id"}]`.
+         */
+        InboundWebhookIdPath: string;
         /** @description Only rows of this app (`app_…`). On these legacy offset lists an unparseable value is ignored; a well-formed id that matches no app still filters, so no rows are returned. */
         AppIdFilter: string;
         /**
@@ -2952,6 +3635,334 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
+    listWebhookEndpoints: {
+        parameters: {
+            query?: {
+                /** @description Page size. Outside 1-200 returns `400 invalid_request`. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Opaque `next_cursor` from the previous page. A malformed cursor returns `400 invalid_cursor`. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description App id (`app_…`; lower case is accepted). Any other format returns
+                 *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["AppIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of endpoints. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpointListResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createWebhookEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description App id (`app_…`; lower case is accepted). Any other format returns
+                 *     `400 invalid_request` with `details.fields` `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["AppIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWebhookEndpointRequest"];
+            };
+        };
+        responses: {
+            /** @description The endpoint and its one-time signing secret. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpointSecretResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getWebhookEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Webhook endpoint id (`whe_…`; lower case is accepted). Any other
+                 *     format returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["WebhookEndpointIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The endpoint. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpointResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteWebhookEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Webhook endpoint id (`whe_…`; lower case is accepted). Any other
+                 *     format returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["WebhookEndpointIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateWebhookEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Webhook endpoint id (`whe_…`; lower case is accepted). Any other
+                 *     format returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["WebhookEndpointIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateWebhookEndpointRequest"];
+            };
+        };
+        responses: {
+            /** @description The endpoint. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpointResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    rotateWebhookEndpointSecret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Webhook endpoint id (`whe_…`; lower case is accepted). Any other
+                 *     format returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["WebhookEndpointIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RotateWebhookSecretRequest"];
+            };
+        };
+        responses: {
+            /** @description The endpoint and its new one-time signing secret. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpointSecretResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    disableWebhookEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Webhook endpoint id (`whe_…`; lower case is accepted). Any other
+                 *     format returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["WebhookEndpointIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The disabled endpoint. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpointResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    enableWebhookEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Webhook endpoint id (`whe_…`; lower case is accepted). Any other
+                 *     format returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["WebhookEndpointIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The active endpoint. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookEndpointResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    sendWebhookEndpointTest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Webhook endpoint id (`whe_…`; lower case is accepted). Any other
+                 *     format returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["WebhookEndpointIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendTestEventRequest"];
+            };
+        };
+        responses: {
+            /** @description The queued test delivery. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookDeliveryResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listEventTypes: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The catalog. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EventTypeListResponse"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
     listProviders: {
         parameters: {
             query?: never;
@@ -3346,12 +4357,24 @@ export interface operations {
     listWebhookDeliveries: {
         parameters: {
             query?: {
-                /** @description Only rows of this app (`app_…`). On these legacy offset lists an unparseable value is ignored; a well-formed id that matches no app still filters, so no rows are returned. */
-                app_id?: components["parameters"]["AppIdFilter"];
+                /** @description Only deliveries of this app. */
+                app_id?: string;
+                /** @description Only deliveries to this endpoint (deleted endpoints included). */
+                endpoint_id?: string;
+                /** @description Only deliveries of this event (one per endpoint it fanned out to). */
+                event_id?: string;
+                event_type?: components["schemas"]["EventType"];
                 status?: components["schemas"]["WebhookDeliveryStatus"];
-                /** @description 1-200, default 50. */
-                limit?: number;
-                offset?: components["parameters"]["Offset"];
+                /** @description Only deliveries of apps in this environment. */
+                environment?: components["schemas"]["AppEnvironment"];
+                /** @description Inclusive lower bound on `created_at` (RFC 3339). */
+                from?: components["parameters"]["FromFilter"];
+                /** @description Inclusive upper bound on `created_at` (RFC 3339). */
+                to?: components["parameters"]["ToFilter"];
+                /** @description Page size. Outside 1-200 returns `400 invalid_request`. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Opaque `next_cursor` from the previous page. A malformed cursor returns `400 invalid_cursor`. */
+                cursor?: components["parameters"]["Cursor"];
             };
             header?: never;
             path?: never;
@@ -3368,8 +4391,42 @@ export interface operations {
                     "application/json": components["schemas"]["DeliveryListResponse"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getWebhookDelivery: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Delivery id (`dlv_…`; lower case is accepted). Any other format,
+                 *     including the integer ids used before, returns
+                 *     `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["DeliveryIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The delivery. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookDeliveryDetailResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -3378,20 +4435,95 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description Delivery id. A non-integer returns `400 invalid_request`; an integer below 1 matches nothing and returns `404 not_found`. */
-                id: number;
+                /**
+                 * @description Delivery id (`dlv_…`; lower case is accepted). Any other format,
+                 *     including the integer ids used before, returns
+                 *     `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["DeliveryIdPath"];
             };
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description Re-enqueued. */
+            /** @description The delivery, `PENDING` again with one attempt queued. */
             202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ReplayResponse"];
+                    "application/json": components["schemas"]["WebhookDeliveryResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listInboundWebhooks: {
+        parameters: {
+            query?: {
+                connection_id?: string;
+                result?: components["schemas"]["InboundWebhookResult"];
+                /** @description Only callbacks of connections in this environment. */
+                environment?: components["schemas"]["AppEnvironment"];
+                /** @description Inclusive lower bound on `received_at` (RFC 3339). */
+                from?: string;
+                /** @description Inclusive upper bound on `received_at` (RFC 3339). */
+                to?: string;
+                /** @description Page size. Outside 1-200 returns `400 invalid_request`. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Opaque `next_cursor` from the previous page. A malformed cursor returns `400 invalid_cursor`. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of inbound webhooks. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboundWebhookListResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getInboundWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Inbound webhook id (`inb_…`; lower case is accepted). Any other
+                 *     format returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["InboundWebhookIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The inbound webhook. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InboundWebhookDetailResponse"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -3430,12 +4562,50 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
-    paymentEventWebhook: {
+    webhookEventV2: {
         parameters: {
             query?: never;
             header: {
-                "X-Kei-Event": components["schemas"]["PaymentEventType"];
-                "X-Kei-Signature": string;
+                "X-KeiPay-Event-Id": string;
+                "X-KeiPay-Event-Type": components["schemas"]["EventType"];
+                /** @description The delivery (one per event and endpoint); a replay reuses it. */
+                "X-KeiPay-Delivery-Id": string;
+                /** @description `t=<unix seconds>` then one or more `v1=<64 hex>`, comma-separated, newest secret first. */
+                "X-KeiPay-Signature": string;
+                /** @description `true` on test sends (`POST /admin/webhook-endpoints/{id}/test`); absent otherwise. */
+                "X-KeiPay-Test"?: "true";
+                /** @description Only for endpoints with `legacy_signature`. Hex HMAC-SHA256 of the raw body with the current secret. */
+                "X-Kei-Signature"?: string;
+                /** @description Only for endpoints with `legacy_signature`. Same value as `X-KeiPay-Event-Type`. */
+                "X-Kei-Event"?: components["schemas"]["EventType"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookEnvelope"];
+            };
+        };
+        responses: {
+            /** @description Acknowledged. Any 2xx status works. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    paymentEventWebhookV1: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Absent only when replaying a delivery made before events existed (its body has no `event_id` either). */
+                "X-KeiPay-Event-Id"?: string;
+                "X-KeiPay-Signature": string;
+                "X-Kei-Event"?: components["schemas"]["EventType"];
+                "X-Kei-Signature"?: string;
             };
             path?: never;
             cookie?: never;

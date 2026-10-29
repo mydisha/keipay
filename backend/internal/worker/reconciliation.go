@@ -14,8 +14,8 @@ import (
 // reconciliation run.
 const TypeReconciliationRun = "reconciliation:run"
 
-// QueueReconciliation is the queue reconciliation runs take, so a long run
-// never holds up webhook forwarding.
+// QueueReconciliation is the queue reconciliation runs take. Its own server
+// in the Pool keeps a long run off the workers that forward webhooks.
 const QueueReconciliation = "reconciliation"
 
 // Limits of one reconciliation task. A retry could never claim the run

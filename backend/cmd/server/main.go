@@ -261,7 +261,7 @@ func main() {
 
 	// Optional in-process asynq worker, plus the sweeper that re-enqueues
 	// deliveries whose next attempt is overdue.
-	var asynqSrv *asynq.Server
+	var workers *worker.Pool
 	sweepCtx, stopSweeper := context.WithCancel(ctx)
 	defer stopSweeper()
 	if cfg.RunWorker {
@@ -269,9 +269,11 @@ func main() {
 		// re-enqueuing their attempt.
 		inspector := asynq.NewInspector(redisOpt)
 		defer func() { _ = inspector.Close() }()
-		log.Info("starting asynq worker", zap.Int("concurrency", 10),
+		log.Info("starting asynq worker",
+			zap.Int("webhook_concurrency", worker.WebhookConcurrency),
+			zap.Int("reconciliation_concurrency", worker.ReconciliationConcurrency),
 			zap.Int("disable_after_failures", cfg.WebhookDisableAfterFailures))
-		asynqSrv = startWorker(redisOpt, worker.NewForwarder(worker.ForwarderDeps{
+		fwd := worker.NewForwarder(worker.ForwarderDeps{
 			Deliveries:           deliveryRepo,
 			Endpoints:            endpointRepo,
 			Tx:                   txMgr,
@@ -280,7 +282,14 @@ func main() {
 			Enqueuer:             enqueuer,
 			Log:                  log,
 			DisableAfterFailures: cfg.WebhookDisableAfterFailures,
-		}), worker.NewReconciler(reconSvc), log)
+		})
+		workers, err = worker.StartPool(redisOpt, worker.Handlers{
+			WebhookForward:    fwd.HandleWebhookForward,
+			ReconciliationRun: worker.NewReconciler(reconSvc).HandleReconciliationRun,
+		}, newAsynqLogger(log))
+		if err != nil {
+			log.Fatal("asynq worker failed to start", zap.Error(err))
+		}
 		go worker.NewSweeper(deliveryRepo, enqueuer, inspector, log).Run(sweepCtx)
 		log.Info("asynq worker started")
 	}
@@ -324,10 +333,10 @@ func main() {
 	}
 
 	stopSweeper()
-	if asynqSrv != nil {
+	if workers != nil {
 		log.Info("shutting down asynq worker")
 		workerShutdownStart := time.Now()
-		asynqSrv.Shutdown()
+		workers.Shutdown()
 		log.Info("asynq worker shutdown complete", zap.Duration("duration_ms", time.Since(workerShutdownStart)))
 	}
 
@@ -341,22 +350,4 @@ func main() {
 		zap.Duration("total_shutdown_duration_ms", totalShutdownDuration),
 		zap.String("total_shutdown_duration", totalShutdownDuration.String()),
 	)
-}
-
-func startWorker(redisOpt asynq.RedisClientOpt, fwd *worker.Forwarder, rec *worker.Reconciler, log *zap.Logger) *asynq.Server {
-	srv := asynq.NewServer(redisOpt, asynq.Config{
-		Concurrency: 10,
-		Queues:      map[string]int{worker.QueueWebhooks: 10, worker.QueueReconciliation: 2},
-		Logger:      newAsynqLogger(log),
-	})
-	mux := asynq.NewServeMux()
-	mux.HandleFunc(worker.TypeWebhookForward, fwd.HandleWebhookForward)
-	mux.HandleFunc(worker.TypeReconciliationRun, rec.HandleReconciliationRun)
-
-	go func() {
-		if err := srv.Run(mux); err != nil {
-			log.Fatal("asynq worker failed to run", zap.Error(err))
-		}
-	}()
-	return srv
 }

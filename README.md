@@ -371,7 +371,10 @@ redirects to sign-in.
 
 Anyone who reaches the console before you can run setup. If the console is
 reachable by others before you create the owner, set `SETUP_TOKEN` in `.env`
-first: setup then asks for that value.
+first: setup then asks for that value. With `APP_ENV=production` (the
+Docker default) the token is required: setup answers
+`503 setup_token_not_configured` until it is set, and an install that is
+already set up is unaffected.
 
 Owners add more users in **Settings → Users** and pick a role:
 
@@ -402,7 +405,18 @@ password. Sign in with that email, then change it in Settings → Users.
 Behind a reverse proxy, list the proxy in `TRUSTED_PROXIES` so sign-in rate
 limits and the audit log see the real client IP. Session cookies are
 `Secure` unless `APP_ENV=development`; serve the console over HTTPS, or set
-`COOKIE_SECURE=false` for plain HTTP on a host other than `localhost`.
+`COOKIE_SECURE=false` for plain HTTP on a host other than `localhost`
+(refused in production). Every response carries the usual browser
+protections (`nosniff`, no framing, no referrer, a content security policy
+and `Cache-Control: no-store`); `Strict-Transport-Security` is sent
+whenever cookies are `Secure`, or as `HSTS_ENABLED` says. In production
+the server also warns at startup when Redis has no password or the
+Postgres DSN has `sslmode=disable`.
+
+Request bodies are capped: 64 KiB on `/v1`, 1 MiB on `/admin` and on
+gateway callbacks (`413 request_too_large`). A client `X-Request-ID` is
+echoed and logged only when it is at most 128 characters of letters,
+digits, `.`, `_` and `-`; otherwise the server generates one.
 
 ## Connect a gateway (Xendit)
 
@@ -468,7 +482,10 @@ Every error has the same shape on every endpoint:
 Branch on `code`; it is stable and listed under `ErrorCode` in the spec
 (for example `invalid_signature`, `timestamp_out_of_range`, `conflict`,
 `not_found`). `message` is for humans and may change. `details` is always an
-object.
+object. Three codes are worth handling in every client: `429 rate_limited`
+(wait `Retry-After` seconds), `413 request_too_large`, and
+`503 auth_unavailable` on `/v1` (nothing was processed; retry later with
+the same `Idempotency-Key` or `order_id`).
 
 ## App API
 

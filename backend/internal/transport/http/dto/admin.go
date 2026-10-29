@@ -1,7 +1,6 @@
 package dto
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
@@ -120,44 +119,6 @@ func LedgerListFromDomain(entries []domain.LedgerEntry, summary []domain.LedgerS
 		})
 	}
 	return out
-}
-
-// WebhookDelivery is an outbound delivery with its app and the payment's
-// public id.
-type WebhookDelivery struct {
-	ID        int64                        `json:"id"`
-	PaymentID string                       `json:"payment_id"`
-	App       AppSummary                   `json:"app"`
-	EventType string                       `json:"event_type"`
-	Payload   json.RawMessage              `json:"payload"`
-	Status    domain.WebhookDeliveryStatus `json:"status"`
-	Attempts  int                          `json:"attempts"`
-	LastError string                       `json:"last_error"`
-	CreatedAt time.Time                    `json:"created_at"`
-	UpdatedAt time.Time                    `json:"updated_at"`
-}
-
-// DeliveryListResponse is the response for GET /admin/webhook-deliveries.
-type DeliveryListResponse struct {
-	Deliveries []WebhookDelivery `json:"deliveries"`
-}
-
-// DeliveryListFromDomain converts deliveries; the list is [] when empty.
-func DeliveryListFromDomain(ds []domain.WebhookDelivery) DeliveryListResponse {
-	out := DeliveryListResponse{Deliveries: make([]WebhookDelivery, 0, len(ds))}
-	for _, d := range ds {
-		out.Deliveries = append(out.Deliveries, WebhookDelivery{
-			ID: d.ID, PaymentID: d.PaymentPublicID, App: AppSummaryFromDomain(d.App), EventType: d.EventType,
-			Payload: d.Payload, Status: d.Status, Attempts: d.Attempts, LastError: d.LastError,
-			CreatedAt: d.CreatedAt.UTC(), UpdatedAt: d.UpdatedAt.UTC(),
-		})
-	}
-	return out
-}
-
-// ReplayResponse is the response for POST /admin/webhook-deliveries/:id/replay.
-type ReplayResponse struct {
-	Requeued bool `json:"requeued"`
 }
 
 // MessageResponse is a generic message response.

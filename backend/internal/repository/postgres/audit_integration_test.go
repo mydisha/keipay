@@ -172,7 +172,7 @@ func TestIntegrationAppMutationsWriteTheirEntries(t *testing.T) {
 		if r.action != want[i] || r.actorType != "admin" || r.ip != "203.0.113.7" || r.ua != "it-agent" || r.rid != "req-it" {
 			t.Fatalf("entry %d = %+v", i, r)
 		}
-		for _, secret := range []string{created.APIKey, created.APISecret, created.WebhookSecret, rotated.APIKey, rotated.APISecret,
+		for _, secret := range []string{created.APIKey, created.APISecret, rotated.APIKey, rotated.APISecret,
 			created.Key.Hash, rotated.Key.Hash, "enc:"} {
 			if contains(r.before, secret) || contains(r.after, secret) {
 				t.Fatalf("entry %d stores secret material", i)

@@ -2,44 +2,39 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/mydisha/keipay/backend/internal/domain"
+	"github.com/mydisha/keipay/backend/internal/pkg/id"
+	"github.com/mydisha/keipay/backend/internal/pkg/logger"
 	"github.com/mydisha/keipay/backend/internal/provider"
 )
 
-// Enqueuer schedules a webhook delivery for async forwarding (asynq).
+// Enqueuer schedules one attempt of a delivery on the queue. Enqueuing an
+// attempt that is already queued is a no-op.
 type Enqueuer interface {
-	EnqueueWebhookForward(ctx context.Context, deliveryID int64) error
+	EnqueueDelivery(ctx context.Context, deliveryID int64, attempt int, manual bool, at time.Time) error
 }
 
-// Idempotencer is the fast first-line dedup cache (Redis) in front of the
-// durable webhook_events guard. Keys are marked only after an event commits.
-type Idempotencer interface {
-	Seen(ctx context.Context, key string) bool
-	Mark(ctx context.Context, key string)
-}
-
-// ErrForwardNotQueued means the event was committed but its forward could not be
-// enqueued. The delivery row is durable and the sweeper re-enqueues it, so the
-// callback should still be acknowledged.
+// ErrForwardNotQueued means the event was committed but a delivery could not
+// be enqueued. The delivery row is durable and the sweeper re-enqueues it, so
+// the callback should still be acknowledged.
 var ErrForwardNotQueued = errors.New("forward not queued")
 
 // ErrCallbackMismatch means a callback does not belong to the payment it
 // routes to: its amount or currency differs, or the payment was created
-// through another connection. It is not applied and needs a manual look; the
-// caller acknowledges it so the gateway stops retrying. An amount or currency
-// mismatch is recorded as processed; a connection mismatch is not (see
-// ConnectionMismatchError).
+// through another connection. It is recorded as mismatch, not applied, and
+// needs a manual look; the caller acknowledges it so the gateway stops
+// retrying.
 var ErrCallbackMismatch = errors.New("callback does not match payment")
 
 // ConnectionMismatchError is the ErrCallbackMismatch of a callback that
-// arrived at another connection than the payment's. Its event key is left
-// unrecorded, so it cannot mark the payment's real callback as a duplicate.
+// arrived at another connection than the payment's. It carries the ids the
+// security log needs.
 type ConnectionMismatchError struct {
 	PaymentID int64
 	// PaymentConnectionID is nil for a payment without a connection.
@@ -58,215 +53,349 @@ func (e *ConnectionMismatchError) Error() string {
 
 func (e *ConnectionMismatchError) Unwrap() error { return ErrCallbackMismatch }
 
-// WebhookService applies verified gateway callbacks and queues app forwards.
+// Result details stored on inbound webhooks. They are fixed strings, so no
+// gateway text or internal error reaches the console through them.
+const (
+	detailOtherConnection  = "payment belongs to another connection"
+	detailAmountMismatch   = "amount or currency differs from the payment"
+	detailUnknownReference = "unknown payment reference"
+	detailProcessingFailed = "processing failed"
+	detailMissingKey       = "missing event key or reference"
+)
+
+// WebhookDeps are the collaborators of a WebhookService.
+type WebhookDeps struct {
+	Payments   domain.PaymentRepository
+	Ledger     domain.LedgerRepository
+	Inbound    domain.InboundWebhookRepository
+	Events     domain.EventRepository
+	Endpoints  domain.WebhookEndpointRepository
+	Deliveries domain.DeliveryRepository
+	Tx         domain.TxManager
+	Enqueuer   Enqueuer
+	Log        *zap.Logger
+}
+
+// WebhookService records every callback that reaches a known connection,
+// applies the verified ones, and fans the resulting event out to the app's
+// webhook endpoints.
 type WebhookService struct {
-	payments domain.PaymentRepository
-	ledger   domain.LedgerRepository
-	webhooks domain.WebhookRepository
-	tx       domain.TxManager
-	idemp    Idempotencer
-	enqueuer Enqueuer
+	payments   domain.PaymentRepository
+	ledger     domain.LedgerRepository
+	inbound    domain.InboundWebhookRepository
+	events     domain.EventRepository
+	endpoints  domain.WebhookEndpointRepository
+	deliveries domain.DeliveryRepository
+	tx         domain.TxManager
+	enqueuer   Enqueuer
+	log        *zap.Logger
+	now        func() time.Time
 }
 
 // NewWebhookService constructs a WebhookService.
-func NewWebhookService(
-	payments domain.PaymentRepository,
-	ledger domain.LedgerRepository,
-	webhooks domain.WebhookRepository,
-	tx domain.TxManager,
-	idemp Idempotencer,
-	enqueuer Enqueuer,
-) *WebhookService {
-	return &WebhookService{payments: payments, ledger: ledger, webhooks: webhooks, tx: tx, idemp: idemp, enqueuer: enqueuer}
+func NewWebhookService(d WebhookDeps) *WebhookService {
+	log := d.Log
+	if log == nil {
+		log = zap.NewNop()
+	}
+	return &WebhookService{
+		payments: d.Payments, ledger: d.Ledger, inbound: d.Inbound, events: d.Events, endpoints: d.Endpoints,
+		deliveries: d.Deliveries, tx: d.Tx, enqueuer: d.Enqueuer, log: log, now: time.Now,
+	}
 }
 
-// ForwardPayload is the normalized event KeiPay forwards to apps. Fields are
-// only ever added, so existing receivers keep working.
-type ForwardPayload struct {
-	Event           string               `json:"event"`
-	PaymentID       int64                `json:"payment_id"`
-	PaymentPublicID string               `json:"payment_public_id"`
-	OrderID         string               `json:"order_id"`
-	ExternalID      string               `json:"external_id"`
-	Metadata        domain.Metadata      `json:"metadata"`
-	Status          domain.PaymentStatus `json:"status"`
-	Amount          int64                `json:"amount"`
-	Currency        string               `json:"currency"`
-	PaidAt          *time.Time           `json:"paid_at,omitempty"`
-	SettledAt       *time.Time           `json:"settled_at,omitempty"`
-	Timestamp       time.Time            `json:"timestamp"`
+func (s *WebhookService) timestamp() time.Time {
+	return s.now().UTC().Truncate(time.Microsecond)
 }
 
-// Process applies one verified callback that arrived at conn. It is
-// idempotent: a repeated (event key, provider status) is ignored. Returns nil
-// when accepted or safely skipped.
+// processOutcome is what one committed callback produced.
+type processOutcome struct {
+	duplicate bool
+	// rejected is set when the callback was recorded but deliberately not applied.
+	rejected   error
+	deliveries []domain.WebhookDelivery
+}
+
+// Process applies one verified callback that arrived at conn and records it
+// in the inbound log. It returns nil when the callback was applied or safely
+// skipped (duplicate, stale, unmapped).
 //
-// The idempotency record, status update, ledger entry and delivery row commit in
-// one transaction, so a failure leaves nothing behind and the gateway's retry is
-// processed in full. The forward is enqueued after commit; see ErrForwardNotQueued.
+// The dedupe claim, status update, ledger entry, event and deliveries commit
+// in one transaction, so a failure leaves nothing behind (only an error row)
+// and the gateway's retry is processed in full. Deliveries are enqueued after
+// commit; see ErrForwardNotQueued.
 func (s *WebhookService) Process(ctx context.Context, conn *domain.Connection, ev provider.InboundEvent, raw []byte) error {
 	if ev.Reference == "" || ev.EventKey == "" {
-		return fmt.Errorf("%w: missing event key or reference", domain.ErrInvalidInput)
+		s.record(ctx, s.newInbound(conn, raw, domain.InboundInvalidPayload, detailMissingKey))
+		return fmt.Errorf("%w: %s", domain.ErrInvalidInput, detailMissingKey)
 	}
 
-	dedupKey := ev.EventKey + ":" + ev.ProviderStatus
-	if s.idemp.Seen(ctx, dedupKey) {
-		return nil // already processed (Redis)
-	}
-
-	var res applyResult
+	var out processOutcome
 	err := s.tx.WithinTx(ctx, func(ctx context.Context) error {
 		var err error
-		res, err = s.apply(ctx, conn, ev, raw)
+		out, err = s.apply(ctx, conn, ev, raw)
 		return err
 	})
 	if err != nil {
+		detail := detailProcessingFailed
+		if errors.Is(err, domain.ErrNotFound) {
+			detail = detailUnknownReference
+		}
+		s.record(ctx, s.callbackInbound(conn, ev, raw, domain.InboundError, detail))
 		return err
 	}
-	var foreign *ConnectionMismatchError
-	if !errors.As(res.rejected, &foreign) {
-		s.idemp.Mark(ctx, dedupKey) // see apply: a foreign callback must not consume the key
+	if out.duplicate {
+		s.record(ctx, s.callbackInbound(conn, ev, raw, domain.InboundDuplicate, ""))
+		return nil
 	}
-	if res.rejected != nil {
-		return res.rejected
+	if out.rejected != nil {
+		return out.rejected
 	}
-	if res.delivery == nil {
-		return nil // duplicate or stale event
-	}
-
-	if err := s.enqueuer.EnqueueWebhookForward(ctx, res.delivery.ID); err != nil {
-		return fmt.Errorf("%w: delivery %d: %v", ErrForwardNotQueued, res.delivery.ID, err)
-	}
-	return nil
+	return s.enqueueAll(ctx, out.deliveries)
 }
 
-// applyResult is what one committed callback produced.
-type applyResult struct {
-	// delivery is the forward to enqueue; nil for a duplicate or stale event.
-	delivery *domain.WebhookDelivery
-	// rejected is set when the event was recorded but deliberately not applied.
-	rejected error
+// RecordRejected logs a callback that failed before processing: verification
+// (InboundInvalidSignature; the body is cut to MaxRejectedBodyBytes, since
+// anyone can send it) or parsing (InboundInvalidPayload). Failing to write
+// is logged, not returned.
+func (s *WebhookService) RecordRejected(ctx context.Context, conn *domain.Connection, raw []byte, result domain.InboundResult, detail string) {
+	s.record(ctx, s.newInbound(conn, raw, result, detail))
+}
+
+func (s *WebhookService) newInbound(conn *domain.Connection, raw []byte, result domain.InboundResult, detail string) *domain.InboundWebhook {
+	w := &domain.InboundWebhook{
+		PublicID: id.New(id.Inbound), ConnectionID: conn.ID, Connection: conn.Summary(), Provider: conn.Provider,
+		Source: domain.InboundSourceWebhook, SignatureValid: result != domain.InboundInvalidSignature,
+		Result: result, ResultDetail: detail, RawBody: raw,
+	}
+	if !w.SignatureValid && len(raw) > domain.MaxRejectedBodyBytes {
+		w.RawBody, w.BodyTruncated = raw[:domain.MaxRejectedBodyBytes], true
+	}
+	return w
+}
+
+// callbackInbound is the log row of a verified, parsed callback.
+func (s *WebhookService) callbackInbound(conn *domain.Connection, ev provider.InboundEvent, raw []byte, result domain.InboundResult, detail string) *domain.InboundWebhook {
+	w := s.newInbound(conn, raw, result, detail)
+	key, status, ref := ev.EventKey, ev.ProviderStatus, ev.Reference
+	w.EventKey, w.ProviderStatus, w.Reference = &key, &status, &ref
+	return w
+}
+
+// record writes a log row outside any transaction, best effort.
+func (s *WebhookService) record(ctx context.Context, w *domain.InboundWebhook) {
+	if err := s.inbound.Create(ctx, w); err != nil {
+		logger.Ctx(ctx, s.log).Error("inbound webhook not recorded",
+			zap.String(logger.FieldLogType, logger.LogTypeWebhook),
+			zap.String(logger.FieldEvent, "webhook.inbound.record_failed"),
+			zap.String("connection_id", w.Connection.PublicID),
+			zap.String("result", string(w.Result)),
+			zap.Error(err),
+		)
+	}
 }
 
 // apply writes the effects of one callback inside the caller's transaction.
-func (s *WebhookService) apply(ctx context.Context, conn *domain.Connection, ev provider.InboundEvent, raw []byte) (applyResult, error) {
+func (s *WebhookService) apply(ctx context.Context, conn *domain.Connection, ev provider.InboundEvent, raw []byte) (processOutcome, error) {
+	row := s.callbackInbound(conn, ev, raw, domain.InboundApplied, "")
+	claimed, err := s.inbound.Claim(ctx, row)
+	if err != nil {
+		return processOutcome{}, err
+	}
+	if !claimed {
+		return processOutcome{duplicate: true}, nil
+	}
+	settle := func(result domain.InboundResult, detail string, paymentID *int64) error {
+		row.Result, row.ResultDetail, row.PaymentID = result, detail, paymentID
+		return s.inbound.UpdateOutcome(ctx, row)
+	}
+
+	if ev.Status == "" {
+		return processOutcome{}, settle(domain.InboundUnmapped, fmt.Sprintf("unknown gateway status %q", ev.ProviderStatus), nil)
+	}
+
 	// The reference is matched as stored, never parsed: it finds kp_pay_…
 	// references and legacy {slug}:{order_id} ones alike. Locked until commit,
 	// so PAID and SETTLED for one payment apply in turn.
 	p, err := s.payments.GetByReferenceForUpdate(ctx, ev.Reference)
 	if err != nil {
-		return applyResult{}, fmt.Errorf("lookup payment %q: %w", ev.Reference, err)
+		return processOutcome{}, fmt.Errorf("lookup payment %q: %w", ev.Reference, err)
 	}
 
 	// A callback only updates payments of the connection it arrived at: the
-	// same reference at another gateway account is not this payment. This is
-	// checked before the event is recorded because the dedupe key is not
-	// scoped by connection: recording it would make the payment's own
-	// gateway callback look like a duplicate and drop it.
+	// same reference at another gateway account is not this payment.
 	if p.ConnectionID == nil || *p.ConnectionID != conn.ID {
-		return applyResult{rejected: &ConnectionMismatchError{PaymentID: p.ID, PaymentConnectionID: p.ConnectionID, ConnectionID: conn.ID}}, nil
-	}
-
-	isNew, err := s.webhooks.CreateEventIfNew(ctx, ev.EventKey, ev.ProviderStatus)
-	if err != nil {
-		return applyResult{}, err
-	}
-	if !isNew {
-		return applyResult{}, nil
+		if err := settle(domain.InboundMismatch, detailOtherConnection, &p.ID); err != nil {
+			return processOutcome{}, err
+		}
+		return processOutcome{rejected: &ConnectionMismatchError{PaymentID: p.ID, PaymentConnectionID: p.ConnectionID, ConnectionID: conn.ID}}, nil
 	}
 
 	// Invoices have a fixed amount, so a mismatch means the callback is not for
 	// this payment (e.g. an invoice made outside KeiPay reused external_id).
 	// A missing amount/currency is not treated as a mismatch.
 	if (ev.Amount != 0 && ev.Amount != p.Amount) || (ev.Currency != "" && ev.Currency != p.Currency) {
-		return applyResult{rejected: fmt.Errorf("%w: payment %d is %d %s, callback has %d %s",
+		if err := settle(domain.InboundMismatch, detailAmountMismatch, &p.ID); err != nil {
+			return processOutcome{}, err
+		}
+		return processOutcome{rejected: fmt.Errorf("%w: payment %d is %d %s, callback has %d %s",
 			ErrCallbackMismatch, p.ID, p.Amount, p.Currency, ev.Amount, ev.Currency)}, nil
 	}
 
+	if !p.Status.CanTransitionTo(ev.Status) {
+		return processOutcome{}, settle(domain.InboundStale, "", &p.ID)
+	}
+
+	paidAt, settledAt, err := s.applyStatus(ctx, p, ev, raw)
+	if err != nil {
+		return processOutcome{}, err
+	}
+	event, deliveries, err := s.fanOut(ctx, conn, p, ev.Status, paidAt, settledAt)
+	if err != nil {
+		return processOutcome{}, err
+	}
+	row.PaymentID, row.EventID = &p.ID, eventIDOf(event)
+	if err := s.inbound.UpdateOutcome(ctx, row); err != nil {
+		return processOutcome{}, err
+	}
+	return processOutcome{deliveries: deliveries}, nil
+}
+
+func eventIDOf(e *domain.Event) *int64 {
+	if e == nil {
+		return nil
+	}
+	return &e.ID
+}
+
+// applyStatus moves p to ev.Status and books a successful payment in the
+// ledger. It returns the payment's paid and settled times after the change.
+func (s *WebhookService) applyStatus(ctx context.Context, p *domain.Payment, ev provider.InboundEvent, raw []byte) (paidAt, settledAt *time.Time, err error) {
 	status := ev.Status
-	if !p.Status.CanTransitionTo(status) {
-		return applyResult{}, nil // stale, e.g. PAID arriving after SETTLED
-	}
-
-	var paidAt *time.Time
+	var newPaidAt *time.Time
 	if status.IsSuccessful() {
-		paidAt = ev.PaidAt
-		if paidAt == nil && status == domain.PaymentStatusPaid {
-			now := time.Now().UTC()
-			paidAt = &now
+		newPaidAt = ev.PaidAt
+		if newPaidAt == nil && status == domain.PaymentStatusPaid {
+			now := s.timestamp()
+			newPaidAt = &now
 		}
 	}
-
-	// Capture settlement timing. On a SETTLED event the funds have settled now;
-	// PAID callbacks may carry settlement_date as a forward-looking estimate.
-	var settledAt *time.Time
+	// On a SETTLED event the funds have settled now; PAID callbacks may carry
+	// settlement_date only as a forward-looking estimate.
+	var newSettledAt *time.Time
 	if status == domain.PaymentStatusSettled {
-		settledAt = ev.SettledAt
-		if settledAt == nil {
-			now := time.Now().UTC()
-			settledAt = &now
+		newSettledAt = ev.SettledAt
+		if newSettledAt == nil {
+			now := s.timestamp()
+			newSettledAt = &now
 		}
 	}
-
-	if err := s.payments.UpdateStatus(ctx, p.ID, status, paidAt, settledAt, raw); err != nil {
-		return applyResult{}, err
+	if err := s.payments.UpdateStatus(ctx, p.ID, status, newPaidAt, newSettledAt, raw); err != nil {
+		return nil, nil, err
 	}
 
-	// Record ledger on successful payment (idempotent via unique payment_id,type).
 	if status.IsSuccessful() {
 		amount := ev.PaidAmount
 		if amount == 0 {
 			amount = p.Amount
 		}
 		entry := &domain.LedgerEntry{
-			AppID:     p.AppID,
-			PaymentID: p.ID,
-			Amount:    amount,
-			XenditFee: ev.Fee,
-			NetAmount: amount - ev.Fee,
-			Type:      domain.LedgerEntryTypePayment,
-			SettledAt: settledAt,
+			AppID: p.AppID, PaymentID: p.ID, Amount: amount, XenditFee: ev.Fee,
+			NetAmount: amount - ev.Fee, Type: domain.LedgerEntryTypePayment, SettledAt: newSettledAt,
 		}
+		// Idempotent via the unique (payment_id, type).
 		if err := s.ledger.Create(ctx, entry); err != nil {
-			return applyResult{}, err
+			return nil, nil, err
 		}
 		// The entry may already exist from PAID; record when it settled.
-		if settledAt != nil {
-			if err := s.ledger.MarkSettled(ctx, p.ID, *settledAt); err != nil {
-				return applyResult{}, err
+		if newSettledAt != nil {
+			if err := s.ledger.MarkSettled(ctx, p.ID, *newSettledAt); err != nil {
+				return nil, nil, err
 			}
 		}
 	}
-
-	// Build normalized forward payload + durable delivery record.
-	fp := ForwardPayload{
-		Event:           "payment." + strings.ToLower(string(status)),
-		PaymentID:       p.ID,
-		PaymentPublicID: p.PublicID,
-		OrderID:         p.OrderID,
-		ExternalID:      p.Reference(),
-		Metadata:        p.Metadata,
-		Status:          status,
-		Amount:          p.Amount,
-		Currency:        p.Currency,
-		PaidAt:          paidAt,
-		SettledAt:       settledAt,
-		Timestamp:       time.Now().UTC(),
+	// UpdateStatus keeps earlier times when the new ones are nil.
+	paidAt, settledAt = p.PaidAt, p.SettledAt
+	if newPaidAt != nil {
+		paidAt = newPaidAt
 	}
-	payload, err := json.Marshal(fp)
+	if newSettledAt != nil {
+		settledAt = newSettledAt
+	}
+	return paidAt, settledAt, nil
+}
+
+// fanOut creates the event of p moving to status and one PENDING delivery per
+// active endpoint of the app whose subscriptions match. A status that emits
+// no event returns nil.
+func (s *WebhookService) fanOut(ctx context.Context, conn *domain.Connection, p *domain.Payment, status domain.PaymentStatus,
+	paidAt, settledAt *time.Time) (*domain.Event, []domain.WebhookDelivery, error) {
+	eventType, ok := domain.EventTypeForStatus(status)
+	if !ok {
+		return nil, nil, nil
+	}
+	data, err := marshalData(paymentEventData(p, conn, status, paidAt, settledAt))
 	if err != nil {
-		return applyResult{}, err
+		return nil, nil, err
 	}
+	paymentID := p.ID
+	event := &domain.Event{
+		PublicID: id.New(id.Event), Type: eventType, APIVersion: domain.EventAPIVersion, AppID: p.AppID,
+		PaymentID: &paymentID, Data: data, CreatedAt: s.timestamp(),
+	}
+	if err := s.events.Create(ctx, event); err != nil {
+		return nil, nil, err
+	}
+	endpoints, err := s.endpoints.ListActiveByApp(ctx, p.AppID)
+	if err != nil {
+		return nil, nil, err
+	}
+	var out []domain.WebhookDelivery
+	for i := range endpoints {
+		ep := &endpoints[i]
+		if !domain.MatchSubscription(ep.Events, eventType) {
+			continue
+		}
+		d, err := newDelivery(event, ep, ep.RetryPolicy.MaxAttempts, event.CreatedAt)
+		if err != nil {
+			return nil, nil, err
+		}
+		d.PaymentPublicID = p.PublicID
+		if err := s.deliveries.Create(ctx, d); err != nil {
+			return nil, nil, err
+		}
+		out = append(out, *d)
+	}
+	return event, out, nil
+}
 
-	delivery := &domain.WebhookDelivery{
-		PaymentID: p.ID,
-		AppID:     p.AppID,
-		EventType: fp.Event,
-		Payload:   payload,
-		Status:    domain.WebhookDeliveryPending,
+// newDelivery is an unsaved PENDING delivery of event to ep, due at.
+func newDelivery(event *domain.Event, ep *domain.WebhookEndpoint, maxAttempts int, at time.Time) (*domain.WebhookDelivery, error) {
+	body, err := renderBody(event, ep.APIVersion)
+	if err != nil {
+		return nil, err
 	}
-	if err := s.webhooks.CreateDelivery(ctx, delivery); err != nil {
-		return applyResult{}, err
+	ref, endpointRef, endpointID, eventID := domain.EventRef{PublicID: event.PublicID, Type: event.Type, IsTest: event.IsTest},
+		ep.Ref(), ep.ID, event.ID
+	return &domain.WebhookDelivery{
+		PublicID: id.New(id.Delivery), PaymentID: event.PaymentID, AppID: event.AppID, App: ep.App,
+		EventID: &eventID, Event: &ref, EndpointID: &endpointID, Endpoint: &endpointRef,
+		EventType: string(event.Type), Payload: body, Status: domain.WebhookDeliveryPending,
+		MaxAttempts: maxAttempts, NextAttemptAt: &at,
+	}, nil
+}
+
+// enqueueAll queues the first attempt of each delivery. A failure is
+// ErrForwardNotQueued: the rows are committed and the sweeper sends them.
+func (s *WebhookService) enqueueAll(ctx context.Context, deliveries []domain.WebhookDelivery) error {
+	var failed []error
+	for _, d := range deliveries {
+		if err := s.enqueuer.EnqueueDelivery(ctx, d.ID, 1, false, *d.NextAttemptAt); err != nil {
+			failed = append(failed, fmt.Errorf("delivery %s: %w", d.PublicID, err))
+		}
 	}
-	return applyResult{delivery: delivery}, nil
+	if len(failed) > 0 {
+		return fmt.Errorf("%w: %w", ErrForwardNotQueued, errors.Join(failed...))
+	}
+	return nil
 }

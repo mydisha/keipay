@@ -10,7 +10,7 @@ import (
 	"github.com/mydisha/keipay/backend/internal/domain"
 )
 
-var allPrefixes = []Prefix{App, Payment, Connection, WebhookEndpoint, Event, User, APIKey, Reconciliation, Audit}
+var allPrefixes = []Prefix{App, Payment, Connection, WebhookEndpoint, Event, Delivery, Inbound, User, APIKey, Reconciliation, Audit}
 
 func TestNewFormatForEveryPrefix(t *testing.T) {
 	for _, p := range allPrefixes {

@@ -62,7 +62,7 @@ func (h *AppHandler) Create(c *gin.Context) {
 		Name:               req.Name,
 		Slug:               req.Slug,
 		Environment:        req.Environment,
-		WebhookURL:         req.WebhookURL,
+		WebhookURL:         req.WebhookURL != nil,
 		RedirectSuccessURL: req.RedirectSuccessURL,
 		RedirectFailureURL: req.RedirectFailureURL,
 		Metadata:           req.Metadata,
@@ -122,13 +122,13 @@ func updateAppInput(body map[string]json.RawMessage) (service.UpdateAppInput, er
 	in := service.UpdateAppInput{Metadata: body["metadata"]}
 	_, in.Slug = body["slug"]
 	_, in.Environment = body["environment"]
+	_, in.WebhookURL = body["webhook_url"]
 	var fields []domain.FieldError
 	for _, f := range []struct {
 		name string
 		dst  **string
 	}{
 		{"name", &in.Name},
-		{"webhook_url", &in.WebhookURL},
 		{"redirect_success_url", &in.RedirectSuccessURL},
 		{"redirect_failure_url", &in.RedirectFailureURL},
 	} {

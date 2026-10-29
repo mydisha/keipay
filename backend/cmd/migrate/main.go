@@ -94,9 +94,9 @@ func runSeed(ctx context.Context, pool *pgxpool.Pool, cipher service.SecretCiphe
 	if created == nil {
 		fmt.Fprintf(out, "app %s (%s) already exists, skipping\n", slug, domain.EnvTest)
 	} else {
-		fmt.Fprintf(out, "created app %s (%s, %s)\n  api_key=%s\n  api_secret=%s\n  webhook_secret=%s\n",
+		fmt.Fprintf(out, "created app %s (%s, %s)\n  api_key=%s\n  api_secret=%s\n",
 			created.App.Slug, created.App.PublicID, created.App.Environment,
-			created.APIKey, created.APISecret, created.WebhookSecret)
+			created.APIKey, created.APISecret)
 	}
 
 	n, err := postgres.NewUserRepo(pool).Count(ctx)

@@ -98,6 +98,8 @@ func TestAuditRedaction(t *testing.T) {
 		{"secret object", map[string]any{"secret": map[string]any{"k": "v"}}, map[string]any{"secret": redacted}},
 		{"flags stay", map[string]any{"must_change_password": true, "token": nil}, map[string]any{"must_change_password": true, "token": nil}},
 		{"untouched", map[string]any{"api_key_last4": "abcd", "slug": "acme", "count": 3}, map[string]any{"api_key_last4": "abcd", "slug": "acme", "count": 3}},
+		{"secret hints", map[string]any{"secret_last4": "abcd", "previous_secret_expires_at": "2026-01-02T00:00:00Z", "previous_secret": "kpwh_x"},
+			map[string]any{"secret_last4": "abcd", "previous_secret_expires_at": "2026-01-02T00:00:00Z", "previous_secret": redacted}},
 		{"top-level array", []any{map[string]any{"password": "p"}}, []any{map[string]any{"password": redacted}}},
 	}
 	for _, tc := range cases {

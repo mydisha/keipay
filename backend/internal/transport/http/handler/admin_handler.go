@@ -13,24 +13,18 @@ import (
 	"github.com/mydisha/keipay/backend/internal/transport/http/response"
 )
 
-// AdminHandler exposes the reporting, delivery and audit endpoints of the
-// admin API. Sessions, CSRF and permissions are enforced by the router's
-// middleware before these handlers run.
+// AdminHandler exposes the reporting and audit endpoints of the admin API.
+// Sessions, CSRF and permissions are enforced by the router's middleware
+// before these handlers run.
 type AdminHandler struct {
-	payments   *service.PaymentService
-	ledger     *service.LedgerService
-	deliveries *service.DeliveryService
-	audit      *service.AuditService
+	payments *service.PaymentService
+	ledger   *service.LedgerService
+	audit    *service.AuditService
 }
 
 // NewAdminHandler constructs an AdminHandler.
-func NewAdminHandler(
-	payments *service.PaymentService,
-	ledger *service.LedgerService,
-	deliveries *service.DeliveryService,
-	audit *service.AuditService,
-) *AdminHandler {
-	return &AdminHandler{payments: payments, ledger: ledger, deliveries: deliveries, audit: audit}
+func NewAdminHandler(payments *service.PaymentService, ledger *service.LedgerService, audit *service.AuditService) *AdminHandler {
+	return &AdminHandler{payments: payments, ledger: ledger, audit: audit}
 }
 
 // ListPayments handles GET /admin/payments (cursor-paginated, newest first).
@@ -103,41 +97,6 @@ func (h *AdminHandler) ListLedger(c *gin.Context) {
 		return
 	}
 	response.Success(c, dto.LedgerListFromDomain(entries, summary))
-}
-
-// ListDeliveries handles GET /admin/webhook-deliveries.
-// Query params: app_id, status, limit, offset. An unparseable app_id is ignored.
-func (h *AdminHandler) ListDeliveries(c *gin.Context) {
-	f := domain.DeliveryFilter{
-		AppPublicID: lenientPublicID(c, "app_id", id.App),
-		Limit:       atoiDefault(c.Query("limit"), 50),
-		Offset:      atoiDefault(c.Query("offset"), 0),
-	}
-	if v := c.Query("status"); v != "" {
-		s := domain.WebhookDeliveryStatus(v)
-		f.Status = &s
-	}
-	items, err := h.deliveries.List(c.Request.Context(), f)
-	if err != nil {
-		response.Error(c, err)
-		return
-	}
-	response.Success(c, dto.DeliveryListFromDomain(items))
-}
-
-// ReplayDelivery handles POST /admin/webhook-deliveries/:id/replay.
-// Re-enqueues a webhook delivery for retry.
-func (h *AdminHandler) ReplayDelivery(c *gin.Context) {
-	id, err := pathID(c)
-	if err != nil {
-		response.Error(c, err)
-		return
-	}
-	if err := h.deliveries.Replay(c.Request.Context(), id); err != nil {
-		response.Error(c, err)
-		return
-	}
-	response.Accepted(c, dto.ReplayResponse{Requeued: true})
 }
 
 // ListAuditLogs handles GET /admin/audit-logs (cursor-paginated, newest first).

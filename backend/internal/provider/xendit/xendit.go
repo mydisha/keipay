@@ -224,7 +224,7 @@ func (a *Adapter) CreateCheckout(ctx context.Context, acc provider.Account, in p
 	out := &provider.CheckoutOutput{
 		ProviderPaymentID: resp.GetId(),
 		CheckoutURL:       resp.GetInvoiceUrl(),
-		Status:            MapStatus(string(resp.GetStatus())),
+		Status:            checkoutStatus(string(resp.GetStatus())),
 		Raw:               raw,
 	}
 	if exp := resp.GetExpiryDate(); !exp.IsZero() {
@@ -286,12 +286,14 @@ func (a *Adapter) ParseWebhook(raw []byte) (*provider.InboundEvent, error) {
 	if settledAt == nil {
 		settledAt = parseTime(cb.Updated)
 	}
+	// An unknown status is left empty: the callback is recorded, never applied.
+	status, _ := MapStatus(cb.Status)
 	return &provider.InboundEvent{
 		EventKey:          cb.ID,
 		Reference:         cb.ExternalID,
 		ProviderPaymentID: cb.ID,
 		ProviderStatus:    cb.Status,
-		Status:            MapStatus(cb.Status),
+		Status:            status,
 		Amount:            cb.Amount,
 		Currency:          cb.Currency,
 		PaidAmount:        cb.PaidAmount,
@@ -302,21 +304,32 @@ func (a *Adapter) ParseWebhook(raw []byte) (*provider.InboundEvent, error) {
 	}, nil
 }
 
-// MapStatus normalizes a Xendit invoice status. Unknown statuses map to
-// PENDING, which a callback never moves a payment back to.
-func MapStatus(s string) domain.PaymentStatus {
+// MapStatus normalizes a Xendit invoice status and reports whether Xendit's
+// status is one KeiPay knows.
+func MapStatus(s string) (domain.PaymentStatus, bool) {
 	switch s {
+	case "PENDING":
+		return domain.PaymentStatusPending, true
 	case "PAID":
-		return domain.PaymentStatusPaid
+		return domain.PaymentStatusPaid, true
 	case "SETTLED":
-		return domain.PaymentStatusSettled
+		return domain.PaymentStatusSettled, true
 	case "EXPIRED":
-		return domain.PaymentStatusExpired
+		return domain.PaymentStatusExpired, true
 	case "FAILED", "STOPPED":
-		return domain.PaymentStatusFailed
+		return domain.PaymentStatusFailed, true
 	default:
-		return domain.PaymentStatusPending
+		return "", false
 	}
+}
+
+// checkoutStatus is the status of a new invoice; one KeiPay does not know is
+// still pending, since nothing was paid yet.
+func checkoutStatus(s string) domain.PaymentStatus {
+	if status, ok := MapStatus(s); ok {
+		return status
+	}
+	return domain.PaymentStatusPending
 }
 
 func parseTime(s string) *time.Time {

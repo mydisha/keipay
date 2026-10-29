@@ -34,6 +34,8 @@ type Deps struct {
 	Webhook     *handler.WebhookHandler
 	Admin       *handler.AdminHandler
 	Apps        *handler.AppHandler
+	Endpoints   *handler.WebhookEndpointHandler
+	Deliveries  *handler.DeliveryHandler
 	Connections *handler.ConnectionHandler
 	Auth        *handler.AuthHandler
 	Users       *handler.UserHandler
@@ -107,6 +109,17 @@ func adminRoutes(d Deps) []adminRoute {
 		permitted(http.MethodPost, "/apps/:id/keys/:key_id/rotate", domain.PermAppsWrite, d.Apps.RotateKey),
 		permitted(http.MethodPost, "/apps/:id/keys/:key_id/revoke", domain.PermAppsWrite, d.Apps.RevokeKey),
 
+		permitted(http.MethodGet, "/event-types", domain.PermAppsRead, d.Endpoints.EventTypes),
+		permitted(http.MethodGet, "/apps/:id/webhook-endpoints", domain.PermAppsRead, d.Endpoints.List),
+		permitted(http.MethodPost, "/apps/:id/webhook-endpoints", domain.PermAppsWrite, d.Endpoints.Create),
+		permitted(http.MethodGet, "/webhook-endpoints/:id", domain.PermAppsRead, d.Endpoints.Get),
+		permitted(http.MethodPatch, "/webhook-endpoints/:id", domain.PermAppsWrite, d.Endpoints.Update),
+		permitted(http.MethodDelete, "/webhook-endpoints/:id", domain.PermAppsWrite, d.Endpoints.Delete),
+		permitted(http.MethodPost, "/webhook-endpoints/:id/rotate-secret", domain.PermAppsWrite, d.Endpoints.RotateSecret),
+		permitted(http.MethodPost, "/webhook-endpoints/:id/disable", domain.PermAppsWrite, d.Endpoints.Disable),
+		permitted(http.MethodPost, "/webhook-endpoints/:id/enable", domain.PermAppsWrite, d.Endpoints.Enable),
+		permitted(http.MethodPost, "/webhook-endpoints/:id/test", domain.PermAppsWrite, d.Endpoints.SendTest),
+
 		permitted(http.MethodGet, "/providers", domain.PermConnectionsRead, d.Connections.Providers),
 		permitted(http.MethodGet, "/connections", domain.PermConnectionsRead, d.Connections.List),
 		permitted(http.MethodPost, "/connections", domain.PermConnectionsWrite, d.Connections.Create),
@@ -120,8 +133,11 @@ func adminRoutes(d Deps) []adminRoute {
 
 		permitted(http.MethodGet, "/payments", domain.PermPaymentsRead, d.Admin.ListPayments),
 		permitted(http.MethodGet, "/ledger", domain.PermPaymentsRead, d.Admin.ListLedger),
-		permitted(http.MethodGet, "/webhook-deliveries", domain.PermDeliveriesRead, d.Admin.ListDeliveries),
-		permitted(http.MethodPost, "/webhook-deliveries/:id/replay", domain.PermDeliveriesReplay, d.Admin.ReplayDelivery),
+		permitted(http.MethodGet, "/webhook-deliveries", domain.PermDeliveriesRead, d.Deliveries.ListDeliveries),
+		permitted(http.MethodGet, "/webhook-deliveries/:id", domain.PermDeliveriesRead, d.Deliveries.GetDelivery),
+		permitted(http.MethodPost, "/webhook-deliveries/:id/replay", domain.PermDeliveriesReplay, d.Deliveries.ReplayDelivery),
+		permitted(http.MethodGet, "/inbound-webhooks", domain.PermDeliveriesRead, d.Deliveries.ListInbound),
+		permitted(http.MethodGet, "/inbound-webhooks/:id", domain.PermDeliveriesRead, d.Deliveries.GetInbound),
 
 		permitted(http.MethodGet, "/audit-logs", domain.PermAuditRead, d.Admin.ListAuditLogs),
 	}

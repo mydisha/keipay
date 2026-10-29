@@ -10,20 +10,18 @@ import (
 	"github.com/mydisha/keipay/backend/internal/domain"
 )
 
-// memAuditRepo stores entries in memory and drops them when the fake
-// transaction rolls back.
+// memAuditRepo stores entries in memory.
 type memAuditRepo struct {
 	logs []domain.AuditLog
 	err  error
 	page domain.Page
 }
 
-func (m *memAuditRepo) Create(ctx context.Context, l *domain.AuditLog) error {
+func (m *memAuditRepo) Create(_ context.Context, l *domain.AuditLog) error {
 	if m.err != nil {
 		return m.err
 	}
 	m.logs = append(m.logs, *l)
-	onRollback(ctx, func() { m.logs = m.logs[:len(m.logs)-1] })
 	return nil
 }
 

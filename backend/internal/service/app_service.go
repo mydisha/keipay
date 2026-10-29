@@ -56,23 +56,25 @@ func NewAppService(apps domain.AppRepository, keys domain.APIKeyRepository, conn
 }
 
 // CreateAppInput is a new app. Metadata is raw JSON; omitted or null is {}.
+// WebhookURL records that the retired webhook_url field was sent, which is
+// refused: webhook URLs are webhook endpoints now.
 type CreateAppInput struct {
 	Name               string
 	Slug               string
 	Environment        domain.Environment
-	WebhookURL         string
+	WebhookURL         bool
 	RedirectSuccessURL string
 	RedirectFailureURL string
 	Metadata           json.RawMessage
 }
 
 // UpdateAppInput holds the fields present in a PATCH body; nil means absent.
-// Slug and Environment only record that the field was sent, which is refused.
-// DefaultConnectionSet records that default_connection_id was sent;
-// DefaultConnectionID is then the con_ id, or nil to clear it.
+// Slug, Environment and WebhookURL only record that the field was sent, which
+// is refused. DefaultConnectionSet records that default_connection_id was
+// sent; DefaultConnectionID is then the con_ id, or nil to clear it.
 type UpdateAppInput struct {
 	Name                 *string
-	WebhookURL           *string
+	WebhookURL           bool
 	RedirectSuccessURL   *string
 	RedirectFailureURL   *string
 	Metadata             json.RawMessage
@@ -84,11 +86,10 @@ type UpdateAppInput struct {
 
 // AppCreated is a new app with its first key and the one-time secrets.
 type AppCreated struct {
-	App           *domain.App
-	Key           *domain.APIKey
-	APIKey        string
-	APISecret     string
-	WebhookSecret string
+	App       *domain.App
+	Key       *domain.APIKey
+	APIKey    string
+	APISecret string
 }
 
 // KeyCreated is a new key of app with its one-time key and secret.
@@ -106,7 +107,6 @@ type appSnapshot struct {
 	Name               string             `json:"name"`
 	Environment        domain.Environment `json:"environment"`
 	Status             domain.AppStatus   `json:"status"`
-	WebhookURL         string             `json:"webhook_url"`
 	RedirectSuccessURL string             `json:"redirect_success_url"`
 	RedirectFailureURL string             `json:"redirect_failure_url"`
 	Metadata           domain.Metadata    `json:"metadata"`
@@ -115,7 +115,7 @@ type appSnapshot struct {
 func snapshotApp(a *domain.App) appSnapshot {
 	return appSnapshot{
 		ID: a.PublicID, Slug: a.Slug, Name: a.Name, Environment: a.Environment, Status: a.Status,
-		WebhookURL: a.WebhookURL, RedirectSuccessURL: a.RedirectSuccessURL,
+		RedirectSuccessURL: a.RedirectSuccessURL,
 		RedirectFailureURL: a.RedirectFailureURL, Metadata: a.Metadata,
 	}
 }
@@ -184,7 +184,7 @@ func (s *AppService) Get(ctx context.Context, publicID string) (*domain.App, err
 }
 
 // Create registers an active app with its first key ("Default", no expiry)
-// and its webhook signing secret, and returns the secrets once.
+// and returns the key's secret once.
 func (s *AppService) Create(ctx context.Context, in CreateAppInput) (*AppCreated, error) {
 	var fe fieldErrors
 	name, nameRule := normalizeName(in.Name)
@@ -192,8 +192,9 @@ func (s *AppService) Create(ctx context.Context, in CreateAppInput) (*AppCreated
 	slug, slugRule := normalizeSlug(in.Slug)
 	fe.check("slug", slugRule)
 	fe.check("environment", environmentRule(in.Environment))
-	webhookURL, rule := normalizeURL(in.WebhookURL)
-	fe.check("webhook_url", rule)
+	if in.WebhookURL {
+		fe.check("webhook_url", RuleMoved)
+	}
 	successURL, rule := normalizeURL(in.RedirectSuccessURL)
 	fe.check("redirect_success_url", rule)
 	failureURL, rule := normalizeURL(in.RedirectFailureURL)
@@ -204,11 +205,6 @@ func (s *AppService) Create(ctx context.Context, in CreateAppInput) (*AppCreated
 		return nil, err
 	}
 
-	webhookSecret := keygen.WebhookSecret()
-	webhookSecretEnc, err := s.cipher.Encrypt(webhookSecret)
-	if err != nil {
-		return nil, fmt.Errorf("encrypt webhook secret: %w", err)
-	}
 	app := &domain.App{
 		PublicID:           id.New(id.App),
 		Slug:               slug,
@@ -216,10 +212,8 @@ func (s *AppService) Create(ctx context.Context, in CreateAppInput) (*AppCreated
 		Environment:        in.Environment,
 		Status:             domain.AppActive,
 		Metadata:           meta,
-		WebhookURL:         webhookURL,
 		RedirectSuccessURL: successURL,
 		RedirectFailureURL: failureURL,
-		WebhookSecretEnc:   webhookSecretEnc,
 	}
 	key, apiKey, apiSecret, err := s.newKey(app, DefaultKeyLabel, nil)
 	if err != nil {
@@ -241,7 +235,7 @@ func (s *AppService) Create(ctx context.Context, in CreateAppInput) (*AppCreated
 	if err != nil {
 		return nil, fmt.Errorf("create app: %w", err)
 	}
-	return &AppCreated{App: app, Key: key, APIKey: apiKey, APISecret: apiSecret, WebhookSecret: webhookSecret}, nil
+	return &AppCreated{App: app, Key: key, APIKey: apiKey, APISecret: apiSecret}, nil
 }
 
 // newKey builds an unsaved key in the app's environment with a fresh key and
@@ -278,7 +272,10 @@ func (s *AppService) Update(ctx context.Context, publicID string, in UpdateAppIn
 	if in.Environment {
 		fe.check("environment", RuleImmutable)
 	}
-	if !in.Slug && !in.Environment && in.Name == nil && in.WebhookURL == nil &&
+	if in.WebhookURL {
+		fe.check("webhook_url", RuleMoved)
+	}
+	if !in.Slug && !in.Environment && !in.WebhookURL && in.Name == nil &&
 		in.RedirectSuccessURL == nil && in.RedirectFailureURL == nil && in.Metadata == nil && !in.DefaultConnectionSet {
 		return nil, domain.InvalidFields(domain.FieldError{Field: "body", Rule: RuleRequired})
 	}
@@ -289,7 +286,7 @@ func (s *AppService) Update(ctx context.Context, publicID string, in UpdateAppIn
 		changes["name"] = name
 	}
 	for field, v := range map[string]*string{
-		"webhook_url": in.WebhookURL, "redirect_success_url": in.RedirectSuccessURL, "redirect_failure_url": in.RedirectFailureURL,
+		"redirect_success_url": in.RedirectSuccessURL, "redirect_failure_url": in.RedirectFailureURL,
 	} {
 		if v != nil {
 			u, rule := normalizeURL(*v)
@@ -393,8 +390,7 @@ func connectionPublicID(s *domain.ConnectionSummary) any {
 func applyAppChanges(a *domain.App, changes map[string]any) (before, after map[string]any) {
 	before, after = map[string]any{}, map[string]any{}
 	fields := map[string]*string{
-		"name": &a.Name, "webhook_url": &a.WebhookURL,
-		"redirect_success_url": &a.RedirectSuccessURL, "redirect_failure_url": &a.RedirectFailureURL,
+		"name": &a.Name, "redirect_success_url": &a.RedirectSuccessURL, "redirect_failure_url": &a.RedirectFailureURL,
 	}
 	for name, ptr := range fields {
 		if v, ok := changes[name].(string); ok && v != *ptr {

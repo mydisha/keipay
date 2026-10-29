@@ -24,6 +24,8 @@ const (
 	Connection      Prefix = "con"
 	WebhookEndpoint Prefix = "whe"
 	Event           Prefix = "evt"
+	Delivery        Prefix = "dlv"
+	Inbound         Prefix = "inb"
 	User            Prefix = "usr"
 	APIKey          Prefix = "key"
 	Reconciliation  Prefix = "rec"
@@ -32,7 +34,7 @@ const (
 
 var known = map[Prefix]bool{
 	App: true, Payment: true, Connection: true, WebhookEndpoint: true, Event: true,
-	User: true, APIKey: true, Reconciliation: true, Audit: true,
+	Delivery: true, Inbound: true, User: true, APIKey: true, Reconciliation: true, Audit: true,
 }
 
 const ulidLen = 26

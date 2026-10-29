@@ -7,69 +7,127 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-
-	"github.com/mydisha/keipay/backend/internal/domain"
 )
 
-type unsentRepo struct {
-	domain.WebhookRepository
-	unsent    []domain.WebhookDelivery
-	olderThan time.Time
-	limit     int
+// fakeQueue holds task ids like asynq: scheduling a held id is ErrTaskExists;
+// deleting an active one fails.
+type fakeQueue struct {
+	held      map[string]bool
+	active    map[string]bool
+	scheduled []scheduled
+	deleted   []string
+	err       error
 }
 
-func (r *unsentRepo) ListUnsentDeliveries(_ context.Context, olderThan time.Time, limit int) ([]domain.WebhookDelivery, error) {
-	r.olderThan, r.limit = olderThan, limit
-	return r.unsent, nil
-}
-
-type recordingEnqueuer struct {
-	ids []int64
-	err error
-}
-
-func (e *recordingEnqueuer) EnqueueWebhookForward(_ context.Context, id int64) error {
-	if e.err != nil {
-		return e.err
+func (q *fakeQueue) Schedule(_ context.Context, id int64, attempt int, manual bool, at time.Time) error {
+	if q.err != nil {
+		return q.err
 	}
-	e.ids = append(e.ids, id)
+	tid := ForwardTaskID(id, attempt)
+	if q.held[tid] {
+		return ErrTaskExists
+	}
+	q.held[tid] = true
+	q.scheduled = append(q.scheduled, scheduled{id: id, attempt: attempt, manual: manual, at: at})
 	return nil
 }
 
-func TestSweepOnceEnqueuesUnsent(t *testing.T) {
-	repo := &unsentRepo{unsent: []domain.WebhookDelivery{{ID: 3}, {ID: 7}}}
-	enq := &recordingEnqueuer{}
-	s := NewSweeper(repo, enq, zap.NewNop())
+func (q *fakeQueue) DeleteTask(queue, id string) error {
+	if queue != QueueWebhooks || q.active[id] {
+		return errors.New("cannot delete active task")
+	}
+	delete(q.held, id)
+	q.deleted = append(q.deleted, id)
+	return nil
+}
 
+// T-B27 / AC-9: overdue deliveries get their next attempt queued now; a task
+// still holding the id (archived) is replaced; an active one is left alone.
+func TestSweeper(t *testing.T) {
+	x := newFwdFixture(t, 5)
+	ep := x.addEndpoint(t, nil)
+	overdue := x.addDelivery(t, ep, false, 8)
+	archived := x.addDelivery(t, ep, false, 8)
+	running := x.addDelivery(t, ep, false, 8)
+	x.clock.Advance(time.Minute)
+	fresh := x.addDelivery(t, ep, false, 8)
+	x.recv.status(500)
+	if err := x.run(t, archived, 1, false); err != nil {
+		t.Fatal(err)
+	}
+	// archived failed once and waits for attempt 2, whose task is archived.
+	x.clock.Advance(3 * time.Minute)
+	finished := x.addDelivery(t, ep, false, 8)
+	x.recv.status(200)
+	if err := x.run(t, finished, 1, false); err != nil {
+		t.Fatal(err)
+	}
+
+	q := &fakeQueue{held: map[string]bool{ForwardTaskID(archived.ID, 2): true, ForwardTaskID(running.ID, 1): true},
+		active: map[string]bool{ForwardTaskID(running.ID, 1): true}}
+	s := NewSweeper(x.hooks.Deliveries(), q, q, zap.NewNop())
+	s.now = x.clock.Now
 	n, err := s.SweepOnce(context.Background())
-	if err != nil {
-		t.Fatalf("sweep: %v", err)
+	if err != nil || n != 3 {
+		t.Fatalf("swept %d, %v", n, err)
 	}
-	if n != 2 || len(enq.ids) != 2 || enq.ids[0] != 3 || enq.ids[1] != 7 {
-		t.Fatalf("expected deliveries 3,7 enqueued, got n=%d ids=%v", n, enq.ids)
+	now := x.clock.Now()
+	want := []scheduled{{id: overdue.ID, attempt: 1, at: now}, {id: fresh.ID, attempt: 1, at: now}, {id: archived.ID, attempt: 2, at: now}}
+	got := map[int64]scheduled{}
+	for _, s := range q.scheduled {
+		got[s.id] = s
 	}
-	// Only deliveries older than minAge, so it never races the post-commit enqueue.
-	if age := time.Since(repo.olderThan); age < s.minAge {
-		t.Fatalf("cutoff too recent: %v", age)
+	for _, w := range want {
+		if got[w.id] != w {
+			t.Fatalf("scheduled = %+v, want %+v", q.scheduled, want)
+		}
 	}
-	if repo.limit != s.batch {
-		t.Fatalf("expected batch limit %d, got %d", s.batch, repo.limit)
+	if _, ok := got[running.ID]; ok || len(q.deleted) != 1 || q.deleted[0] != ForwardTaskID(archived.ID, 2) {
+		t.Fatalf("deleted = %v scheduled = %+v", q.deleted, q.scheduled)
+	}
+	if _, ok := got[finished.ID]; ok {
+		t.Fatal("a delivered delivery was swept")
 	}
 }
 
-func TestSweepOnceNothingToDo(t *testing.T) {
-	enq := &recordingEnqueuer{}
-	n, err := NewSweeper(&unsentRepo{}, enq, zap.NewNop()).SweepOnce(context.Background())
-	if err != nil || n != 0 || len(enq.ids) != 0 {
-		t.Fatalf("expected no-op, got n=%d err=%v ids=%v", n, err, enq.ids)
+// Deliveries due less than two minutes ago are left to their own task.
+func TestSweeperLeavesRecentDeliveries(t *testing.T) {
+	x := newFwdFixture(t, 5)
+	x.addDelivery(t, x.addEndpoint(t, nil), false, 8)
+	x.clock.Advance(119 * time.Second)
+	q := &fakeQueue{held: map[string]bool{}}
+	s := NewSweeper(x.hooks.Deliveries(), q, q, zap.NewNop())
+	s.now = x.clock.Now
+	if n, err := s.SweepOnce(context.Background()); err != nil || n != 0 {
+		t.Fatalf("swept %d, %v", n, err)
 	}
 }
 
-func TestSweepOnceStopsOnEnqueueError(t *testing.T) {
-	repo := &unsentRepo{unsent: []domain.WebhookDelivery{{ID: 3}, {ID: 7}}}
-	enq := &recordingEnqueuer{err: errors.New("redis down")}
-	n, err := NewSweeper(repo, enq, zap.NewNop()).SweepOnce(context.Background())
-	if !errors.Is(err, enq.err) || n != 0 {
-		t.Fatalf("expected enqueue error after 0, got n=%d err=%v", n, err)
+func TestSweeperQueueDown(t *testing.T) {
+	x := newFwdFixture(t, 5)
+	x.addDelivery(t, x.addEndpoint(t, nil), false, 8)
+	x.clock.Advance(time.Hour)
+	q := &fakeQueue{held: map[string]bool{}, err: errors.New("redis down")}
+	s := NewSweeper(x.hooks.Deliveries(), q, q, zap.NewNop())
+	s.now = x.clock.Now
+	if n, err := s.SweepOnce(context.Background()); err == nil || n != 0 {
+		t.Fatalf("swept %d, %v", n, err)
+	}
+}
+
+func TestSweeperRunStopsOnCancel(t *testing.T) {
+	x := newFwdFixture(t, 5)
+	q := &fakeQueue{held: map[string]bool{}}
+	s := NewSweeper(x.hooks.Deliveries(), q, q, zap.NewNop())
+	s.interval = time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { s.Run(ctx); close(done) }()
+	time.Sleep(5 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("sweeper did not stop")
 	}
 }

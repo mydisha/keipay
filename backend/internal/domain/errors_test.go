@@ -46,7 +46,14 @@ func TestErrorCodesAreUnique(t *testing.T) {
 		}
 		seen[c] = true
 	}
-	if len(seen) != 35 {
-		t.Fatalf("got %d codes, want 35", len(seen))
+	if len(seen) != 36 {
+		t.Fatalf("got %d codes, want 36", len(seen))
+	}
+}
+
+func TestDeliveryNotReplayable(t *testing.T) {
+	err := DeliveryNotReplayable(ReplayReasonDisabled)
+	if err.Code != CodeDeliveryNotReplayable || err.Details["reason"] != "endpoint_disabled" || !errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %+v", err)
 	}
 }

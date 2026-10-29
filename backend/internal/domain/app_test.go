@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// T-1: status is derived at the exact instant; revocation wins over expiry.
+// Status is derived at the exact instant; revocation wins over expiry.
 func TestAPIKeyStatus(t *testing.T) {
 	now := time.Date(2026, 10, 29, 12, 0, 0, 0, time.UTC)
 	at := func(d time.Duration) *time.Time { v := now.Add(d); return &v }

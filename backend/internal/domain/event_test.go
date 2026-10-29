@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// T-B1 / AC-1: the catalog's exact content and order.
+// The catalog's exact content and order.
 func TestEventCatalog(t *testing.T) {
 	want := []struct {
 		t           EventType
@@ -61,7 +61,7 @@ func TestEventCatalog(t *testing.T) {
 	}
 }
 
-// T-B1: four statuses emit an event; PENDING does not.
+// Four statuses emit an event; PENDING does not.
 func TestEventTypeForStatus(t *testing.T) {
 	for s, want := range map[PaymentStatus]EventType{
 		PaymentStatusPaid: EventPaymentPaid, PaymentStatusSettled: EventPaymentSettled,
@@ -78,7 +78,6 @@ func TestEventTypeForStatus(t *testing.T) {
 	}
 }
 
-// T-B2 / AC-4
 func TestMatchSubscription(t *testing.T) {
 	cases := []struct {
 		subs []string
@@ -104,7 +103,6 @@ func TestMatchSubscription(t *testing.T) {
 	}
 }
 
-// T-B3 / AC-3
 func TestValidateSubscriptions(t *testing.T) {
 	got, errs := ValidateSubscriptions([]string{" payment.paid ", "payment.*", "*"})
 	if errs != nil || !reflect.DeepEqual(got, []string{"payment.paid", "payment.*", "*"}) {
@@ -143,7 +141,7 @@ func TestValidateSubscriptions(t *testing.T) {
 	}
 }
 
-// T-B20: exponential doubles from the interval and stops at 6 hours; fixed
+// Exponential doubles from the interval and stops at 6 hours; fixed
 // stays at the interval.
 func TestRetryPolicyDelay(t *testing.T) {
 	exp := RetryPolicy{MaxAttempts: 20, Backoff: BackoffExponential, IntervalSeconds: 30}

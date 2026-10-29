@@ -23,7 +23,7 @@ func assertCode(t *testing.T, err error, code domain.ErrorCode) *domain.Error {
 	return coded
 }
 
-// T-17 / AC-15: without a usable default connection a payment is not
+// Without a usable default connection a payment is not
 // eligible, but replays never look at the connection.
 func TestCreateNeedsAnEligibleConnection(t *testing.T) {
 	f := newPaymentFixture(t)
@@ -67,7 +67,7 @@ func TestCreateNeedsAnEligibleConnection(t *testing.T) {
 	}
 }
 
-// T-17 / AC-16: gateway failures map to their codes and store nothing.
+// Gateway failures map to their codes and store nothing.
 func TestCreateProviderErrors(t *testing.T) {
 	cases := []struct {
 		err  error
@@ -102,7 +102,7 @@ func TestCreateProviderErrors(t *testing.T) {
 	}
 }
 
-// T-17 / AC-16, AC-17: the payment records its connection; channels and
+// The payment records its connection; channels and
 // expiry reach the provider.
 func TestCreateUsesTheDefaultConnection(t *testing.T) {
 	f := newPaymentFixture(t)

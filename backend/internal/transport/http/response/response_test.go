@@ -150,8 +150,8 @@ func TestRateLimitedSetsRetryAfter(t *testing.T) {
 	}
 }
 
-// T-21: the connection codes keep their statuses, details and codes; a
-// provider outage is a 503 with its own code, never internal_error.
+// The connection codes keep their statuses, details and codes; a provider
+// outage is a 503 with its own code, never internal_error.
 func TestConnectionErrorCodes(t *testing.T) {
 	cause := errors.New("xendit said: invalid api key xnd_development_secret")
 	cases := []struct {

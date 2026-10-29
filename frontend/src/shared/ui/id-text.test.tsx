@@ -16,7 +16,7 @@ afterEach(() => {
   Object.defineProperty(navigator, "clipboard", { value: undefined, configurable: true });
 });
 
-describe("IdText (T-22)", () => {
+describe("IdText", () => {
   it("is monospace, truncated, and keeps the full id in title", () => {
     render(<IdText value={LONG_ID} label="payment id" />);
     const text = screen.getByText(LONG_ID);

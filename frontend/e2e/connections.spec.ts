@@ -9,7 +9,7 @@ import {
   signInToDashboard,
 } from "./helpers";
 
-// T-60..T-64: gateway connections against the real server. scripts/ci.sh
+// Gateway connections against the real server. scripts/ci.sh
 // starts it with fake XENDIT_* values, which the server imports once as the
 // `xendit-imported` test connection; its key is fake, so every connection
 // test against Xendit ends `Failed`. Names are unique per run so the suite can
@@ -51,7 +51,7 @@ async function confirmDisable(page: Page) {
 test.describe.serial("connections", () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
-  test("the imported connection is listed with its legacy URL (T-60)", async ({ page }) => {
+  test("the imported connection is listed with its legacy URL", async ({ page }) => {
     await signInToDashboard(page);
     await page.getByRole("navigation", { name: "Main" }).getByRole("link", { name: "Connections", exact: true }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Connections" })).toBeVisible();
@@ -65,7 +65,7 @@ test.describe.serial("connections", () => {
     await expect(row.getByText("Xendit", { exact: true })).toBeVisible();
   });
 
-  test("the wizard creates, tests and sets up a connection without showing the key again (T-61)", async ({ page }) => {
+  test("the wizard creates, tests and sets up a connection without showing the key again", async ({ page }) => {
     test.setTimeout(120_000);
     await signInToDashboard(page);
     await page.goto("/connections");
@@ -126,7 +126,7 @@ test.describe.serial("connections", () => {
     expect(await page.content()).not.toContain(secretKey);
   });
 
-  test("an app's default connection blocks disabling until it is cleared (T-62)", async ({ page }) => {
+  test("an app's default connection blocks disabling until it is cleared", async ({ page }) => {
     test.skip(!created.id, "the wizard test did not create a connection");
     const appName = `E2E Conn ${suffix}`;
     await signInToDashboard(page);
@@ -161,7 +161,7 @@ test.describe.serial("connections", () => {
     await expect(page.getByRole("button", { name: "Disable", exact: true })).toBeVisible();
   });
 
-  test("callbacks are verified with the connection's own token (T-63)", async ({ request }) => {
+  test("callbacks are verified with the connection's own token", async ({ request }) => {
     test.skip(!created.id, "the wizard test did not create a connection");
     const path = new URL(created.callbackUrl).pathname;
     expect(path).toBe(`/webhooks/xendit/${created.id}`);
@@ -189,7 +189,7 @@ test.describe.serial("connections", () => {
   });
 });
 
-test.describe("connections at 375px (T-64)", () => {
+test.describe("connections at 375px", () => {
   test.use({ viewport: { width: 375, height: 812 }, hasTouch: true });
 
   test("the list is cards and the wizard fits without horizontal scroll", async ({ page }) => {

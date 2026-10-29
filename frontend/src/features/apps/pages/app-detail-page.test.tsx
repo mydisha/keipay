@@ -5,15 +5,13 @@ import { errorBody, json, mockApi } from "@/test/http";
 import { setViewport } from "@/test/media";
 import { renderApp } from "@/test/render";
 
-// T-43 (header, states, disable/enable, edit) and T-45 (placeholder tabs).
-
 const DETAIL = `GET /admin/apps/${APP_ID}`;
 
 beforeEach(() => {
   setViewport("desktop");
 });
 
-describe("App detail (T-43)", () => {
+describe("App detail", () => {
   it("shows the header facts and the overview", async () => {
     mockApi({
       [DETAIL]: {
@@ -189,7 +187,7 @@ describe("App detail (T-43)", () => {
   });
 });
 
-describe("Routing tab (T-45)", () => {
+describe("Routing tab", () => {
   it("shows its empty state without API calls beyond the app", async () => {
     const api = mockApi({ [DETAIL]: { app: app() } });
     renderApp(`/apps/${APP_ID}/routing`);

@@ -37,7 +37,7 @@ async function openMenu(user: ReturnType<typeof renderApp>["user"], url = webhoo
   await user.click(await screen.findByRole("button", { name: `Actions for ${url}` }));
 }
 
-describe("App webhooks tab: list and states (F-6)", () => {
+describe("App webhooks tab: list and states", () => {
   it("shows skeleton rows while loading", async () => {
     routes({ [LIST]: () => new Promise<Response>(() => {}) });
     renderApp(PATH);
@@ -175,7 +175,7 @@ describe("App webhooks tab: list and states (F-6)", () => {
   });
 });
 
-describe("Add endpoint sheet (F-1, F-3, F-5)", () => {
+describe("Add endpoint sheet", () => {
   async function openSheet() {
     const rendered = renderApp(PATH);
     await rendered.user.click((await screen.findAllByRole("button", { name: "Add endpoint" }))[0]!);
@@ -230,7 +230,7 @@ describe("Add endpoint sheet (F-1, F-3, F-5)", () => {
     expect(api.to("POST", `/admin/apps/${APP_ID}/webhook-endpoints`)).toHaveLength(0);
   });
 
-  it("sends the payload, then reveals the secret once (F-5)", async () => {
+  it("sends the payload, then reveals the secret once", async () => {
     const created = webhookEndpoint({ headers: [{ name: "Authorization", value_last4: null }] });
     const api = routes({ [CREATE]: () => json(201, { endpoint: created, secret: WEBHOOK_SECRET }) });
     const { user, sheet } = await openSheet();
@@ -268,7 +268,7 @@ describe("Add endpoint sheet (F-1, F-3, F-5)", () => {
     await waitFor(() => expect(screen.queryByText(WEBHOOK_SECRET)).not.toBeInTheDocument());
   });
 
-  it("maps server field errors onto the fields (F-3)", async () => {
+  it("maps server field errors onto the fields", async () => {
     routes({
       [CREATE]: () =>
         json(
@@ -319,7 +319,7 @@ describe("Add endpoint sheet (F-1, F-3, F-5)", () => {
   });
 });
 
-describe("Edit endpoint (F-4)", () => {
+describe("Edit endpoint", () => {
   const stored = webhookEndpoint({ headers: [{ name: "Authorization", value_last4: "9xyz" }] });
 
   async function openEdit(api: ReturnType<typeof routes>) {
@@ -370,7 +370,7 @@ describe("Edit endpoint (F-4)", () => {
   });
 });
 
-describe("Row actions (F-5, F-7)", () => {
+describe("Row actions", () => {
   it("rotates after the URL host is typed, with the chosen overlap, and reveals the new secret", async () => {
     const api = routes({
       [`POST ${ITEM}/rotate-secret`]: () =>

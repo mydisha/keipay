@@ -25,7 +25,7 @@ function loginApi(login: (request: Request) => Response | Promise<Response>) {
   });
 }
 
-describe("Login page (T-45)", () => {
+describe("Login page", () => {
   it("asks for email and password before calling the API", async () => {
     const api = loginApi(() => json(200, me()));
     const { user } = renderApp("/login");

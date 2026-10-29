@@ -30,7 +30,7 @@ var (
 	inbPattern = regexp.MustCompile(`^inb_[0-9A-HJKMNP-TV-Z]{26}$`)
 )
 
-// T-B1 / AC-1: the served catalog is the spec's EventType enum, in order.
+// The served catalog is the spec's EventType enum, in order.
 func TestEventTypesMatchSpec(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "api", "openapi.yaml"))
 	if err != nil {
@@ -78,8 +78,7 @@ func (f *apiFixture) createEndpoint(t *testing.T, b *browser, appID, body string
 	return decode(t, f.send(b, http.MethodPost, "/admin/apps/"+appID+"/webhook-endpoints", body), http.StatusCreated)
 }
 
-// T-B4, T-B7, T-B8, T-B9, T-B10, T-B26 over HTTP: shapes, statuses and the
-// request parsing of every endpoint operation.
+// Shapes, statuses and the request parsing of every endpoint operation.
 func TestWebhookEndpointAPI(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
@@ -207,8 +206,8 @@ func TestWebhookEndpointAPI(t *testing.T) {
 	}
 }
 
-// T-B28 / AC-13: list filters are validated strictly; the detail carries the
-// body and the attempt log.
+// List filters are validated strictly; the detail carries the body and the
+// attempt log.
 func TestDeliveryAPI(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
@@ -306,8 +305,8 @@ func finishDelivery(t *testing.T, f *apiFixture, publicID string) {
 	}
 }
 
-// T-B14, T-B17, T-B29 / AC-14, AC-17: callbacks to known connections are
-// recorded with their result; the log reads back with filters and bodies.
+// Callbacks to known connections are recorded with their result; the log
+// reads back with filters and bodies.
 func TestInboundWebhookAPI(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
@@ -384,8 +383,8 @@ func TestInboundWebhookAPI(t *testing.T) {
 		domain.FieldError{Field: "id", Rule: "public_id"})
 }
 
-// T-B34 / AC-19: viewers read every webhook resource; every endpoint write
-// and replay is 403 for them, allowed for admins.
+// Viewers read every webhook resource; every endpoint write and replay is 403
+// for them, allowed for admins.
 func TestWebhookPermissions(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)

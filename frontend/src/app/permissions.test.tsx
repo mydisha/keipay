@@ -22,7 +22,7 @@ function settingsTabs() {
 const DETAIL = `GET /admin/apps/${APP_ID}`;
 const KEYS = `GET /admin/apps/${APP_ID}/keys`;
 
-describe("Permission-aware console (T-49, AC-25; T-48)", () => {
+describe("Permission-aware console", () => {
   it("viewers see apps without Create app", async () => {
     mockApi({ "GET /admin/me": viewer, "GET /admin/apps": page([app()]) });
     const { user } = renderApp("/apps");

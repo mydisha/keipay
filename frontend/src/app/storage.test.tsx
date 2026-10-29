@@ -17,7 +17,7 @@ function storageEntries(storage: Storage): [string, string][] {
   });
 }
 
-describe("Web storage holds no auth data (T-51, AC-21)", () => {
+describe("Web storage holds no auth data", () => {
   it("has only preference keys, none about the session", () => {
     expect(Object.keys(storageKeys).sort()).toEqual(["mode", "sidebarCollapsed", "theme"]);
   });

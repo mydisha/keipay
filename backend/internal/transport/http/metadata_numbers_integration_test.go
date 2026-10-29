@@ -12,11 +12,11 @@ import (
 	"github.com/mydisha/keipay/backend/internal/service"
 )
 
-// AC-16 (B6, D-12): metadata numbers are kept as json.Number, but Postgres
-// JSONB stores them as numeric. A number numeric cannot hold must be refused
-// as invalid_request before anything is written (not a 500 after the Xendit
-// invoice exists), and a number Postgres expands on storage must not let the
-// stored metadata outgrow the 8192-byte cap that every webhook then carries.
+// Metadata numbers are kept as json.Number, but Postgres JSONB stores them as
+// numeric. A number numeric cannot hold must be refused as invalid_request
+// before anything is written (not a 500 after the Xendit invoice exists), and
+// a number Postgres expands on storage must not let the stored metadata
+// outgrow the 8192-byte cap that every webhook then carries.
 
 func TestIntegrationMetadataNumberOutsideNumericRangeIsInvalidRequest(t *testing.T) {
 	e := newE2E(t)

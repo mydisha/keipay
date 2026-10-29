@@ -38,7 +38,6 @@ func randomToken(t *testing.T) string {
 	return "it-" + hex.EncodeToString(b)
 }
 
-// T-27 / AC-5, AC-6
 func TestIntegrationSessionStore(t *testing.T) {
 	rdb := testRedis(t)
 	store := NewSessionStore(rdb)
@@ -113,7 +112,6 @@ func TestIntegrationSessionStore(t *testing.T) {
 	}
 }
 
-// T-28 / AC-12
 func TestIntegrationFailureCounter(t *testing.T) {
 	rdb := testRedis(t)
 	fc := NewFailureCounter(rdb)
@@ -195,8 +193,8 @@ func TestIntegrationFailureCounter(t *testing.T) {
 	}
 }
 
-// T-28 / AC-12: the check and the increment are one step in Redis, so
-// parallel attempts never get past the limit.
+// The check and the increment are one step in Redis, so parallel attempts
+// never get past the limit.
 func TestIntegrationFailureCounterConcurrentReserve(t *testing.T) {
 	rdb := testRedis(t)
 	fc := NewFailureCounter(rdb)

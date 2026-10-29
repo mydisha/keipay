@@ -7,7 +7,7 @@ import { renderApp } from "@/test/render";
 const setupDone = { setup_required: false, setup_token_required: false };
 const setupNeeded = { setup_required: true, setup_token_required: false };
 
-describe("RequireAuth (T-42)", () => {
+describe("RequireAuth", () => {
   it("shows a full-page skeleton, not the console, while the user loads", async () => {
     mockApi({ "GET /admin/me": () => new Promise<Response>(() => {}) });
     renderApp("/payments");
@@ -69,7 +69,7 @@ describe("RequireAuth (T-42)", () => {
   });
 });
 
-describe("Public-only pages (T-43, AC-22)", () => {
+describe("Public-only pages", () => {
   it("first run: / and /login lead to /setup", async () => {
     mockApi({ "GET /admin/me": signedOut, "GET /admin/setup": setupNeeded });
     const { router } = renderApp("/");

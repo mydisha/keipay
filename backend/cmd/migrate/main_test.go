@@ -30,11 +30,11 @@ func freshCLIPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// T-19 / AC-8, T-B33: the seed creates the demo test app with one key through
-// the service, audited as system:seed, prints the one-time secrets in the
-// agreed format (no webhook secret: apps have none since webhook endpoints),
-// and on a rerun prints the skip line and creates nothing. It never creates a
-// user or a webhook endpoint.
+// The seed creates the demo test app with one key through the service,
+// audited as system:seed, prints the one-time api_key and api_secret lines
+// (no webhook secret: apps have none since webhook endpoints), and on a rerun
+// prints the skip line and creates nothing. It never creates a user or a
+// webhook endpoint.
 func TestIntegrationSeedCreatesDemoTestApp(t *testing.T) {
 	pool := freshCLIPool(t)
 	cipher, err := crypto.New("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
@@ -105,7 +105,7 @@ func TestIntegrationSeedCreatesDemoTestApp(t *testing.T) {
 	}
 }
 
-// T-22 / AC-4: -reset-admin creates the first owner, resets by email or the
+// -reset-admin creates the first owner, resets by email or the
 // oldest owner, and refuses unknown emails; every change is system:cli.
 func TestIntegrationResetAdmin(t *testing.T) {
 	pool := freshCLIPool(t)

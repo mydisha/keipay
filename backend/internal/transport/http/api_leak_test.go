@@ -9,9 +9,9 @@ import (
 	"testing"
 )
 
-// T-21 / AC-5, AC-19: run every credential-handling flow and check that no
-// log line, audit snapshot or unrelated response carries a password, hash,
-// session token or CSRF token.
+// Run every credential-handling flow and check that no log line, audit
+// snapshot or unrelated response carries a password, hash, session token or
+// CSRF token.
 func TestNoSecretsInLogsAuditOrBodies(t *testing.T) {
 	f := newAPI(t, "")
 	f.users.Remove(f.owner.PublicID)
@@ -119,8 +119,8 @@ func TestNoSecretsInLogsAuditOrBodies(t *testing.T) {
 	}
 }
 
-// T-B37 / AC-2: no response, audit snapshot or log line carries an endpoint
-// secret or a custom header value.
+// No response, audit snapshot or log line carries an endpoint secret or a
+// custom header value.
 func TestWebhookSecretsNeverLeak(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)

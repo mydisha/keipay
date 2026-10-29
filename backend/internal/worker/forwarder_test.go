@@ -17,7 +17,7 @@ import (
 	"github.com/mydisha/keipay/backend/internal/pkg/hmac"
 )
 
-// T-B18 / AC-6: every request carries the KeiPay headers and custom headers;
+// Every request carries the KeiPay headers and custom headers;
 // the attempt log keeps the headers with custom values redacted.
 func TestForwardHeaders(t *testing.T) {
 	x := newFwdFixture(t, 5)
@@ -82,7 +82,7 @@ func TestForwardHeaders(t *testing.T) {
 	}
 }
 
-// T-B18 / T-B32 / AC-8: legacy endpoints also get X-Kei-Signature over the
+// Legacy endpoints also get X-Kei-Signature over the
 // raw body with the current secret; test sends carry X-KeiPay-Test.
 func TestForwardLegacyAndTestHeaders(t *testing.T) {
 	x := newFwdFixture(t, 5)
@@ -128,7 +128,7 @@ func TestForwardLegacyDeliveryWithoutEvent(t *testing.T) {
 	}
 }
 
-// T-B19 / T-B30 / AC-7: during the overlap both secrets sign, newest first;
+// During the overlap both secrets sign, newest first;
 // after it only the new one.
 func TestForwardSignatureDuringOverlap(t *testing.T) {
 	x := newFwdFixture(t, 5)
@@ -175,7 +175,7 @@ func TestForwardSignatureDuringOverlap(t *testing.T) {
 	}
 }
 
-// T-B20 / AC-9: failures are retried on the endpoint's schedule and the
+// Failures are retried on the endpoint's schedule and the
 // delivery fails once attempts run out; every attempt is logged.
 func TestForwardRetrySchedule(t *testing.T) {
 	for _, tc := range []struct {
@@ -226,7 +226,7 @@ func TestForwardRetrySchedule(t *testing.T) {
 	}
 }
 
-// T-B21 / AC-9: a redirect is not followed and counts as a failure.
+// A redirect is not followed and counts as a failure.
 func TestForwardRedirectIsFailure(t *testing.T) {
 	x := newFwdFixture(t, 5)
 	followed := newReceiver(t)
@@ -246,7 +246,7 @@ func TestForwardRedirectIsFailure(t *testing.T) {
 	}
 }
 
-// T-B21: a timeout is a failed attempt without a response status.
+// A timeout is a failed attempt without a response status.
 func TestForwardTimeoutIsFailure(t *testing.T) {
 	x := newFwdFixture(t, 5)
 	release := make(chan struct{})
@@ -265,7 +265,7 @@ func TestForwardTimeoutIsFailure(t *testing.T) {
 	}
 }
 
-// T-B21: at most 4096 bytes of the answer are kept, as valid UTF-8 without NUL.
+// At most 4096 bytes of the answer are kept, as valid UTF-8 without NUL.
 func TestForwardResponseBodyKept(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -295,7 +295,7 @@ func TestForwardResponseBodyKept(t *testing.T) {
 	}
 }
 
-// T-B22 / AC-9: stale tasks and finished deliveries are ignored.
+// Stale tasks and finished deliveries are ignored.
 func TestForwardIgnoresStaleTasks(t *testing.T) {
 	x := newFwdFixture(t, 5)
 	ep := x.addEndpoint(t, nil)
@@ -342,7 +342,7 @@ func TestForwardGuardLosesQuietly(t *testing.T) {
 	}
 }
 
-// T-B23 / AC-10: exhausted deliveries in a row disable the endpoint at the
+// Exhausted deliveries in a row disable the endpoint at the
 // threshold, audited as system:worker; a success resets the count; test and
 // manual attempts never count.
 func TestForwardAutoDisable(t *testing.T) {
@@ -400,7 +400,7 @@ func TestForwardAutoDisable(t *testing.T) {
 	}
 }
 
-// T-B23: a threshold of 0 never disables.
+// A threshold of 0 never disables.
 func TestForwardAutoDisableOff(t *testing.T) {
 	x := newFwdFixture(t, 0)
 	x.recv.status(http.StatusInternalServerError)
@@ -415,7 +415,7 @@ func TestForwardAutoDisableOff(t *testing.T) {
 	}
 }
 
-// T-B24 / AC-10, AC-12: deliveries an endpoint can no longer take end FAILED
+// Deliveries an endpoint can no longer take end FAILED
 // without an attempt; a test send to a disabled endpoint still goes out.
 func TestForwardBlockedDeliveries(t *testing.T) {
 	x := newFwdFixture(t, 5)

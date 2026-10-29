@@ -3,7 +3,7 @@ import { strings } from "@/shared/lib/strings";
 import { createAppSchema, editAppSchema, suggestSlug } from "./app-form";
 import { createKeySchema, wibInputToDate } from "./key-form";
 
-// T-41 / T-44: the form schemas mirror the contract's field rules.
+// The form schemas mirror the contract's field rules.
 
 const valid = {
   name: "Acme",

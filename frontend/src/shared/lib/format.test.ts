@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { currencyExponent, formatDateTimeWIB, formatMoney, formatRelative, parseDate } from "./format";
 
-describe("formatMoney (T-20)", () => {
+describe("formatMoney", () => {
   it.each([
     [150000, "IDR", "Rp150.000"],
     [0, "IDR", "Rp0"],
@@ -36,7 +36,7 @@ describe("formatMoney (T-20)", () => {
   });
 });
 
-describe("formatDateTimeWIB (T-21)", () => {
+describe("formatDateTimeWIB", () => {
   it("shows Asia/Jakarta time across the UTC date boundary", () => {
     const text = formatDateTimeWIB(new Date("2026-01-01T18:30:00Z"));
     expect(text).toContain("2 Jan 2026");

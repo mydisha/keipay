@@ -6,8 +6,6 @@ import { errorBody, json, mockApi } from "@/test/http";
 import { setViewport } from "@/test/media";
 import { renderApp } from "@/test/render";
 
-// T-40: the Apps list.
-
 beforeEach(() => {
   setViewport("desktop");
 });
@@ -33,7 +31,7 @@ const globex = app({
   status: "disabled",
 });
 
-describe("Apps page (T-40)", () => {
+describe("Apps page", () => {
   it("lists apps with environment, status and id as text", async () => {
     mockApi({ "GET /admin/apps": page([app(), globex]) });
     window.localStorage.setItem(storageKeys.mode, "live");

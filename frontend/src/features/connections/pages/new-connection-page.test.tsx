@@ -6,8 +6,6 @@ import { errorBody, json, mockApi } from "@/test/http";
 import { setViewport } from "@/test/media";
 import { renderApp } from "@/test/render";
 
-// T-53: the add-connection wizard.
-
 const DETAIL = `GET /admin/connections/${CON_ID}`;
 const TEST = `POST /admin/connections/${CON_ID}/test`;
 const TESTED_AT = "2026-01-01T00:05:00Z";
@@ -42,7 +40,7 @@ function secretInput(label: string) {
   return screen.getByLabelText(new RegExp(label), { selector: "input" });
 }
 
-describe("Add connection wizard (T-53)", () => {
+describe("Add connection wizard", () => {
   it("creates, tests, shows the callback URL, saves channels and opens the detail", async () => {
     const api = mockApi({
       "GET /admin/providers": { data: [provider()] },

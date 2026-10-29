@@ -130,8 +130,6 @@ func actions(logs []domain.AuditLog) []string {
 
 const ownerPassword = "owner-password-1"
 
-// --- T-7 setup ---
-
 func TestSetupCreatesOwnerAndSession(t *testing.T) {
 	f := newAuthFixture(t, testAuthConfig())
 	ctx := context.Background()
@@ -280,8 +278,6 @@ func TestSetupRateLimitedByIP(t *testing.T) {
 		t.Fatalf("after the window: %v", err)
 	}
 }
-
-// --- T-8 login ---
 
 func TestLoginSuccess(t *testing.T) {
 	f := newAuthFixture(t, testAuthConfig())
@@ -440,8 +436,6 @@ func TestLoginStoreErrorsAreInternal(t *testing.T) {
 	}
 }
 
-// --- T-9 rate limits ---
-
 func TestLoginRateLimitPerEmail(t *testing.T) {
 	f := newAuthFixture(t, testAuthConfig())
 	f.addUser(t, "ops@example.com", ownerPassword, domain.RoleAdmin)
@@ -591,8 +585,6 @@ func TestRetryAfterIsLargestExceededWindow(t *testing.T) {
 		t.Fatalf("sub-second window: %+v", coded)
 	}
 }
-
-// --- T-10 authenticate ---
 
 func TestAuthenticate(t *testing.T) {
 	f := newAuthFixture(t, testAuthConfig())
@@ -744,8 +736,6 @@ func TestAuthenticateStoreErrorIsInternal(t *testing.T) {
 	}
 }
 
-// --- T-11 logout ---
-
 func TestLogout(t *testing.T) {
 	f := newAuthFixture(t, testAuthConfig())
 	u := f.addUser(t, "ops@example.com", ownerPassword, domain.RoleAdmin)
@@ -772,8 +762,6 @@ func TestLogout(t *testing.T) {
 		t.Fatal("logout without a session was audited")
 	}
 }
-
-// --- T-12 change password ---
 
 func TestChangePassword(t *testing.T) {
 	f := newAuthFixture(t, testAuthConfig())

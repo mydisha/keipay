@@ -9,9 +9,9 @@ import (
 	"testing"
 )
 
-// T-6: exactly /webhooks is the console's Webhooks page, so a reload or deep
-// link must serve index.html when the console is built. Paths below
-// /webhooks/ and non-GET methods stay JSON 404 envelopes.
+// Exactly /webhooks is the console's Webhooks page, so a reload or deep link
+// must serve index.html when the console is built. Paths below /webhooks/ and
+// non-GET methods stay JSON 404 envelopes.
 func TestRouter_WebhooksPathIsConsolePage(t *testing.T) {
 	dist := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dist, "index.html"), []byte("<html>console</html>"), 0o644); err != nil {

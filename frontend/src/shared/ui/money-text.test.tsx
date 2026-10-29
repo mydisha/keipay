@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { MoneyText } from "./money-text";
 
-describe("MoneyText (T-20)", () => {
+describe("MoneyText", () => {
   it("renders rupiah right-aligned with tabular figures", () => {
     render(<MoneyText amount={150000} />);
     const el = screen.getByText("Rp150.000");

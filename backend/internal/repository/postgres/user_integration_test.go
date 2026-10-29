@@ -34,7 +34,6 @@ func newUser(email string, role domain.Role) *domain.User {
 	return &domain.User{PublicID: id.New(id.User), Email: email, Name: email, Role: role, PasswordHash: "hash", SessionVersion: 1}
 }
 
-// T-23 / AC-1
 func TestIntegrationUsersMigrationBackfill(t *testing.T) {
 	db := pgtest.New(t, 5)
 	pool := freshPool(t, db)
@@ -99,7 +98,6 @@ func TestIntegrationUsersMigrationBackfill(t *testing.T) {
 	}
 }
 
-// T-24
 func TestIntegrationUserRepo(t *testing.T) {
 	pool := freshPool(t, pgtest.New(t, 0))
 	repo := postgres.NewUserRepo(pool)
@@ -173,7 +171,7 @@ func TestIntegrationUserRepo(t *testing.T) {
 	}
 }
 
-// T-24: keyset pagination over rows with the same created_at.
+// Keyset pagination over rows with the same created_at.
 func TestIntegrationUserListKeyset(t *testing.T) {
 	pool := freshPool(t, pgtest.New(t, 0))
 	repo := postgres.NewUserRepo(pool)
@@ -256,7 +254,7 @@ func (s *userServices) entries(t *testing.T, action string) int {
 	return n
 }
 
-// T-25 / AC-3: concurrent first-run setups create exactly one owner.
+// Concurrent first-run setups create exactly one owner.
 func TestIntegrationConcurrentSetup(t *testing.T) {
 	s := newUserServices(t)
 	ctx := context.Background()
@@ -296,8 +294,8 @@ func TestIntegrationConcurrentSetup(t *testing.T) {
 	}
 }
 
-// T-25 / AC-18: two owners disabling or demoting each other at the same time
-// never leave zero active owners.
+// Two owners disabling or demoting each other at the same time never leave
+// zero active owners.
 func TestIntegrationConcurrentLastOwner(t *testing.T) {
 	s := newUserServices(t)
 	ctx := context.Background()
@@ -350,7 +348,7 @@ func TestIntegrationConcurrentLastOwner(t *testing.T) {
 	}
 }
 
-// T-26 / AC-19: a failing audit insert rolls back the user change.
+// A failing audit insert rolls back the user change.
 func TestIntegrationUserUpdateRollsBackWithAudit(t *testing.T) {
 	s := newUserServices(t)
 	ctx := context.Background()

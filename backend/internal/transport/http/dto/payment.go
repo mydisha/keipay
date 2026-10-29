@@ -18,10 +18,6 @@ import (
 	"github.com/mydisha/keipay/backend/internal/domain"
 )
 
-// ============================================================================
-// Payment DTOs
-// ============================================================================
-
 // OrderItemRequest represents an order item in a payment request.
 type OrderItemRequest struct {
 	Name        string `json:"name" binding:"required"`

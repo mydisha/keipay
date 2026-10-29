@@ -48,7 +48,7 @@ func VerifyKeiPaySignature(header string, body []byte, secret string, tolerance 
 	return false
 }
 
-// T-B30: the verifier above is the README's, character for character, so the
+// The verifier above is the README's, character for character, so the
 // documented code is the code these tests run.
 func TestReadmeVerifierIsTested(t *testing.T) {
 	readme, err := os.ReadFile(filepath.Join("..", "..", "..", "README.md"))

@@ -8,7 +8,6 @@ import (
 
 const otherKey = "1f1e1d1c1b1a191817161514131211100f0e0d0c0b0a09080706050403020100"
 
-// T-9 / AC-7
 func TestSealOpen(t *testing.T) {
 	c, _ := New(testKey)
 	plain := []byte(`{"secret_key":"xnd_development_abc","callback_token":"tok"}`)

@@ -21,7 +21,7 @@ function run(fields: FieldError[], headerRows: number, code: "invalid_request" |
   return { placed, message };
 }
 
-describe("applyEndpointServerErrors (F-3)", () => {
+describe("applyEndpointServerErrors", () => {
   it("puts element errors of events on the picker and retry errors on their inputs", () => {
     const { placed, message } = run(
       [

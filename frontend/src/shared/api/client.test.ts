@@ -72,7 +72,7 @@ describe("API client", () => {
   });
 });
 
-describe("API client CSRF (T-40)", () => {
+describe("API client CSRF", () => {
   it.each([
     ["POST", (c: ReturnType<typeof clientWith>["client"]) => c.POST("/admin/apps", { body: newApp })],
     [
@@ -144,7 +144,7 @@ describe("API client CSRF (T-40)", () => {
   });
 });
 
-describe("API client session redirects (T-41)", () => {
+describe("API client session redirects", () => {
   it.each([
     [401, "session_expired"],
     [401, "session_required"],

@@ -5,8 +5,6 @@ import { errorBody, json, mockApi } from "@/test/http";
 import { setViewport } from "@/test/media";
 import { renderApp } from "@/test/render";
 
-// T-55: the default connection on the app Overview tab.
-
 const DETAIL = `GET /admin/apps/${APP_ID}`;
 const PATCH = `PATCH /admin/apps/${APP_ID}`;
 const OTHER_ID = "con_01JBKQ7Z8M4X2Y6V3N9T5R1W0K";
@@ -28,7 +26,7 @@ const options = page([
   connectionListItem({ id: OTHER_ID, name: "xendit-backup" }),
 ]);
 
-describe("Default connection (T-55)", () => {
+describe("Default connection", () => {
   it("offers active connections of the app's environment and sets one", async () => {
     const api = mockApi({
       [DETAIL]: { app: app() },

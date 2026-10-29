@@ -19,7 +19,7 @@ function renderDialog(confirmText: string | undefined, onConfirm = vi.fn()) {
   return onConfirm;
 }
 
-describe("ConfirmDialog (T-25)", () => {
+describe("ConfirmDialog", () => {
   it("keeps confirm disabled until the exact text is typed", async () => {
     const user = userEvent.setup();
     const onConfirm = renderDialog("acme-store");

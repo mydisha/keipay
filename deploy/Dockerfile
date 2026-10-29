@@ -2,7 +2,6 @@
 
 # One image runs the API, the webhook worker and the admin console.
 
-# ---- frontend build stage ----
 FROM node:22-alpine AS frontend
 WORKDIR /src/frontend
 COPY frontend/package.json frontend/package-lock.json ./
@@ -10,7 +9,6 @@ RUN --mount=type=cache,target=/root/.npm npm ci
 COPY frontend/ .
 RUN npm run build
 
-# ---- backend build stage ----
 FROM golang:1.26-alpine AS backend
 WORKDIR /src/backend
 # VERSION falls back to SOURCE_COMMIT (injected by some PaaS builders), then "dev".
@@ -31,7 +29,6 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
       -o /out/keipay-migrate ./cmd/migrate
 
-# ---- runtime stage ----
 FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates tzdata curl \

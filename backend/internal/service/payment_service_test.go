@@ -99,7 +99,7 @@ func TestCreateDuplicateOrderDifferentAmountConflicts(t *testing.T) {
 	}
 }
 
-// T-12: the gateway reference is kp_ + the new pay_ id; redirects come from
+// The gateway reference is kp_ + the new pay_ id; redirects come from
 // the app; metadata, key and fingerprint are stored.
 func TestCreateStoresReferenceMetadataAndKey(t *testing.T) {
 	f := newPaymentFixture(t)
@@ -134,7 +134,7 @@ func TestCreateStoresReferenceMetadataAndKey(t *testing.T) {
 	}
 }
 
-// T-12 / AC-15: the idempotency rules.
+// The idempotency rules.
 func TestCreateIdempotencyKey(t *testing.T) {
 	f := newPaymentFixture(t)
 	first, _, err := f.create(t, f.acme, order1, "K1")
@@ -306,7 +306,7 @@ func TestCreateUnicodeOrderID(t *testing.T) {
 	}
 }
 
-// T-13: Get by pay_ id or integer, scoped to the app.
+// Get by pay_ id or integer, scoped to the app.
 func TestGetPaymentScopedToApp(t *testing.T) {
 	f := newPaymentFixture(t)
 	p, _, err := f.create(t, f.acme, order1, "")
@@ -328,7 +328,7 @@ func TestGetPaymentScopedToApp(t *testing.T) {
 	}
 }
 
-// T-13: List filters by app and status, pages newest first, and rows carry
+// List filters by app and status, pages newest first, and rows carry
 // the app summary.
 func TestListPayments(t *testing.T) {
 	f := newPaymentFixture(t)

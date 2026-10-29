@@ -8,7 +8,7 @@ import {
   signInToDashboard,
 } from "./helpers";
 
-// T-54. The gate starts with no user: create the owner through the console's
+// The gate starts with no user: create the owner through the console's
 // first-run setup. On a rerun against the same server (setup already done)
 // only check that the owner can sign in.
 

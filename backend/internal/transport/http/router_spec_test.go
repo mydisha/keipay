@@ -102,7 +102,6 @@ func routerAdminAccess() map[string]string {
 	return out
 }
 
-// T-16 / AC-15
 func TestRouterPermissionsMatchSpec(t *testing.T) {
 	want := specAdminAccess(t, loadSpec(t))
 	got := routerAdminAccess()
@@ -147,7 +146,7 @@ func TestEveryRegisteredAdminRouteIsInTheTable(t *testing.T) {
 	}
 }
 
-// T-2: permission constants and the role table equal the contract.
+// Permission constants and the role table equal the contract.
 func TestPermissionsMatchSpec(t *testing.T) {
 	s := loadSpec(t)
 	want := slices.Clone(s.Components.Schemas.Permission.Enum)
@@ -180,8 +179,8 @@ func TestPermissionsMatchSpec(t *testing.T) {
 	}
 }
 
-// T-17 / AC-15, AC-17: every admin operation for every kind of caller. The
-// expected access comes from the spec, not from the router under test.
+// Every admin operation for every kind of caller. The expected access comes
+// from the spec, not from the router under test.
 func TestRoleRouteMatrix(t *testing.T) {
 	specAccess := specAdminAccess(t, loadSpec(t))
 	f := newAPI(t, "")

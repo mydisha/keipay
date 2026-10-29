@@ -67,7 +67,7 @@ func countingPool(t *testing.T, dsn string) (*pgxpool.Pool, *queryCounter) {
 	return pool, counter
 }
 
-// T-B6 / AC-3: the app row lock keeps concurrent creates within 10 endpoints.
+// The app row lock keeps concurrent creates within 10 endpoints.
 func TestIntegrationEndpointLimitUnderConcurrency(t *testing.T) {
 	pool := openPool(t, pgtest.New(t, 0).DSN)
 	app := newTestApp(t, pool, domain.EnvTest)
@@ -226,8 +226,8 @@ func (w *deliveryWorld) add(t *testing.T, app *domain.App, e *domain.WebhookEndp
 	return d
 }
 
-// T-B28 / AC-13: every filter, keyset paging across equal created_at, and one
-// query per page.
+// Every filter, keyset paging across equal created_at, and one query per
+// page.
 func TestIntegrationDeliveryList(t *testing.T) {
 	db := pgtest.New(t, 0)
 	pool, counter := countingPool(t, db.DSN)
@@ -295,8 +295,8 @@ func TestIntegrationDeliveryList(t *testing.T) {
 	}
 }
 
-// T-B29 / AC-17: inbound list filters and pages; the detail returns the body
-// byte for byte, invalid UTF-8 and NUL included.
+// Inbound list filters and pages; the detail returns the body byte for byte,
+// invalid UTF-8 and NUL included.
 func TestIntegrationInboundList(t *testing.T) {
 	pool := openPool(t, pgtest.New(t, 0).DSN)
 	ctx := context.Background()
@@ -365,7 +365,7 @@ func TestIntegrationInboundList(t *testing.T) {
 	}
 }
 
-// T-B22 / AC-9: two workers running the same attempt record it once.
+// Two workers running the same attempt record it once.
 func TestIntegrationForwarderOptimisticGuard(t *testing.T) {
 	pool := openPool(t, pgtest.New(t, 0).DSN)
 	ctx := context.Background()
@@ -415,10 +415,9 @@ func TestIntegrationForwarderOptimisticGuard(t *testing.T) {
 	}
 }
 
-// T-B31 / T-B32 / AC-8: apps with a webhook_url get one migrated endpoint
-// with their secret; existing deliveries get public ids, the endpoint and
-// attempt budgets; an old-format task is still processed and signed as
-// before; up/down/up works.
+// Apps with a webhook_url get one migrated endpoint with their secret;
+// existing deliveries get public ids, the endpoint and attempt budgets; an
+// old-format task is still processed and signed as before; up/down/up works.
 func TestIntegrationWebhookRouterMigration(t *testing.T) {
 	db := pgtest.New(t, 8)
 	pool := openPool(t, db.DSN)

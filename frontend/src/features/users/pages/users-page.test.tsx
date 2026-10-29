@@ -39,7 +39,7 @@ async function openActions(user: User, email: string) {
   return screen.findByRole("menu");
 }
 
-describe("Users page (T-47)", () => {
+describe("Users page", () => {
   it("lists users with role and status as text, the own row marked", async () => {
     mockApi({ "GET /admin/users": page([self, viewer, disabledAdmin]) });
     renderApp("/settings/users");
@@ -136,7 +136,7 @@ describe("Users page (T-47)", () => {
   });
 });
 
-describe("Users flows (T-48)", () => {
+describe("Users flows", () => {
   it("adds a user and reveals the temporary password once", async () => {
     let created = false;
     const added = userFixture({ id: "usr_01JBKQ7Z8M4X2Y6V3N9T5R1W0F", email: "ada@example.com", name: "Ada", role: "admin" });

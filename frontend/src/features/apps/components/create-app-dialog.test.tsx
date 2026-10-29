@@ -6,8 +6,6 @@ import { errorBody, json, mockApi } from "@/test/http";
 import { setViewport } from "@/test/media";
 import { renderApp } from "@/test/render";
 
-// T-41: the create app dialog and the one-time secrets.
-
 beforeEach(() => {
   setViewport("desktop");
 });
@@ -19,7 +17,7 @@ async function openDialog(path = "/apps") {
   return { ...rendered, dialog };
 }
 
-describe("Create app dialog (T-41)", () => {
+describe("Create app dialog", () => {
   it("suggests the slug from the name until the slug is edited", async () => {
     mockApi({ "GET /admin/apps": page([]) });
     const { user, dialog } = await openDialog();
@@ -101,7 +99,7 @@ describe("Create app dialog (T-41)", () => {
     expect(await within(dialog).findByText("This slug is already used in the test environment.")).toBeInTheDocument();
   });
 
-  it("has no webhook URL field and explains a moved webhook_url error (F-12)", async () => {
+  it("has no webhook URL field and explains a moved webhook_url error", async () => {
     mockApi({
       "GET /admin/apps": page([]),
       "POST /admin/apps": () =>
@@ -126,7 +124,7 @@ describe("Create app dialog (T-41)", () => {
     expect(within(dialog).getByText(/Use 3-32 lowercase letters/)).toBeInTheDocument();
   });
 
-  it("shows the two secrets once, then opens the new app (F-12)", async () => {
+  it("shows the two secrets once, then opens the new app", async () => {
     const created = appCreated({ name: "Acme", slug: "acme", environment: "live" });
     const api = mockApi({
       "GET /admin/apps": page([]),

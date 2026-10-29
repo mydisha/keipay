@@ -4,16 +4,17 @@ import { toast } from "sonner";
 import { usePermission } from "@/features/auth/components/can";
 import { isApiError } from "@/shared/api/errors";
 import { strings } from "@/shared/lib/strings";
+import { BackLink } from "@/shared/ui/back-link";
 import { Button } from "@/shared/ui/button";
-import { Card } from "@/shared/ui/card";
+import { Card, CardContent } from "@/shared/ui/card";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { ErrorState } from "@/shared/ui/error-state";
 import { PageHeader } from "@/shared/ui/page-header";
+import { Section } from "@/shared/ui/section";
 import { providerLabel, useConnection, useProviders } from "../api/connections";
-import { BackToConnections } from "../components/back-to-connections";
 import { ChannelsForm } from "../components/channels-form";
-import { ConnectionHeader, ConnectionHeaderSkeleton } from "../components/connection-header";
-import { ConnectionFacts, CredentialHints, DetailsForm, Section } from "../components/connection-sections";
+import { backToConnections, ConnectionHeader, ConnectionHeaderSkeleton } from "../components/connection-header";
+import { ConnectionFacts, connectionHeadingId, CredentialHints, DetailsForm } from "../components/connection-sections";
 import { WebhookSetup } from "../components/webhook-setup";
 
 function isNotFound(error: unknown): boolean {
@@ -43,7 +44,7 @@ export function ConnectionDetailPage() {
   if (error || !connection.data) {
     return (
       <>
-        <BackToConnections />
+        <BackLink {...backToConnections} />
         <PageHeader title={strings.connections.title} />
         {isNotFound(connection.error) ? (
           <EmptyState
@@ -77,26 +78,30 @@ export function ConnectionDetailPage() {
     <>
       <ConnectionHeader connection={current} providerName={providerName} />
       <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
-        <Section id="overview" title={strings.connections.factsTitle}>
+        <Section id={connectionHeadingId("overview")} title={strings.connections.factsTitle}>
           <ConnectionFacts connection={current} providerName={providerName} />
         </Section>
-        <Section id="callback" title={strings.connections.callbackUrl} description={strings.connections.webhookBody}>
-          <Card className="p-4">
-            <WebhookSetup connection={current} provider={provider} />
+        <Section id={connectionHeadingId("callback")} title={strings.connections.callbackUrl} description={strings.connections.webhookBody}>
+          <Card>
+            <CardContent>
+              <WebhookSetup connection={current} provider={provider} />
+            </CardContent>
           </Card>
         </Section>
         <CredentialHints connection={current} provider={provider} canWrite={canWrite} />
-        <Section id="details" title={strings.connections.detailsTitle} description={strings.connections.detailsBody}>
+        <Section id={connectionHeadingId("details")} title={strings.connections.detailsTitle} description={strings.connections.detailsBody}>
           <DetailsForm key={current.id} connection={current} provider={provider} readOnly={!canWrite} />
         </Section>
-        <Section id="channels" title={strings.connections.channelsTitle} description={strings.connections.channelsBody}>
-          <Card className="p-4">
-            <ChannelsForm
-              key={current.id}
-              connection={current}
-              readOnly={!canWrite}
-              onSaved={() => toast.success(strings.connections.channelsSaved)}
-            />
+        <Section id={connectionHeadingId("channels")} title={strings.connections.channelsTitle} description={strings.connections.channelsBody}>
+          <Card>
+            <CardContent>
+              <ChannelsForm
+                key={current.id}
+                connection={current}
+                readOnly={!canWrite}
+                onSaved={() => toast.success(strings.connections.channelsSaved)}
+              />
+            </CardContent>
           </Card>
         </Section>
       </div>

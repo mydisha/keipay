@@ -1,23 +1,32 @@
-import type { ReactNode } from "react";
-import { cn } from "@/shared/lib/utils";
+import { useId, type ReactNode } from "react";
+import { Fact as SharedFact, FactList } from "@/shared/ui/fact-list";
+import { Section } from "@/shared/ui/section";
 import { Skeleton } from "@/shared/ui/skeleton";
 
 /** A label/value row in a detail panel. */
 export function Fact({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
   return (
-    <div className={cn("grid min-w-0 gap-1 sm:grid-cols-[9rem_minmax(0,1fr)] sm:gap-4", className)}>
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="min-w-0">{children}</dd>
-    </div>
+    <SharedFact label={label} className={className}>
+      {children}
+    </SharedFact>
+  );
+}
+
+/** The `dl` that holds a panel's facts, with the narrow label column of a side panel. */
+export function Facts({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <FactList labelWidth="sm" className={className}>
+      {children}
+    </FactList>
   );
 }
 
 export function DetailSection({ title, children }: { title: string; children: ReactNode }) {
+  const id = useId();
   return (
-    <section className="grid gap-2">
-      <h3 className="text-sm font-semibold">{title}</h3>
+    <Section id={id} title={title} headingLevel={3} className="gap-2">
       {children}
-    </section>
+    </Section>
   );
 }
 

@@ -67,7 +67,7 @@ describe("Run detail", () => {
     expect(screen.getByTestId("run-progress")).toHaveTextContent("Comparing records…");
     expect(screen.getByText("1 Okt 2026 – 7 Okt 2026")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /xendit-test/ })).toHaveAttribute("href", `/connections/${CON_ID}`);
-    expect(screen.getByText("Olivia Owner")).toBeInTheDocument();
+    expect(within(screen.getByRole("main")).getByText("Olivia Owner")).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Export CSV" })).not.toBeInTheDocument();
     expect(api.to("GET", ITEMS)).toHaveLength(0);

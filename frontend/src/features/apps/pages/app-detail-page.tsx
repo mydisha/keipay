@@ -2,13 +2,14 @@ import { SearchXIcon } from "lucide-react";
 import { Link, Outlet, useOutletContext, useParams } from "react-router";
 import { isApiError } from "@/shared/api/errors";
 import { strings } from "@/shared/lib/strings";
+import { BackLink } from "@/shared/ui/back-link";
 import { Button } from "@/shared/ui/button";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { ErrorState } from "@/shared/ui/error-state";
 import { LinkTabs } from "@/shared/ui/link-tabs";
 import { PageHeader } from "@/shared/ui/page-header";
 import { useApp, type App } from "../api/apps";
-import { AppHeader, AppHeaderSkeleton, BackToApps } from "../components/app-header";
+import { AppHeader, AppHeaderSkeleton, backToApps } from "../components/app-header";
 
 /** The loaded app, for the tab routes under `/apps/:id`. */
 export function useDetailApp(): App {
@@ -39,7 +40,7 @@ export function AppDetailPage() {
   if (app.isError) {
     return (
       <>
-        <BackToApps />
+        <BackLink {...backToApps} />
         <PageHeader title={strings.apps.title} />
         {isNotFound(app.error) ? (
           <EmptyState

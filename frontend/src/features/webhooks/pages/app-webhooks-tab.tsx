@@ -16,6 +16,7 @@ import { DataTable, type DataColumn } from "@/shared/ui/data-table";
 import { DateTimeText } from "@/shared/ui/date-time-text";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { SecretRevealDialog } from "@/shared/ui/secret-reveal-dialog";
+import { Section } from "@/shared/ui/section";
 import { StatusBadge } from "@/shared/ui/status-badge";
 import {
   useDeleteWebhookEndpoint,
@@ -178,17 +179,7 @@ export function AppWebhooksTab() {
   const isDisable = action?.type === "disable";
 
   return (
-    <section className="grid gap-3" aria-labelledby="app-webhooks-heading">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 space-y-1">
-          <h2 id="app-webhooks-heading" className="text-base font-semibold">
-            {strings.endpoints.title}
-          </h2>
-          <p className="text-sm text-muted-foreground">{strings.endpoints.description}</p>
-        </div>
-        {addButton}
-      </div>
-
+    <Section id="app-webhooks-heading" title={strings.endpoints.title} description={strings.endpoints.description} actions={addButton}>
       {autoDisabled.map((endpoint) => (
         <Alert key={endpoint.id} variant="warning">
           <TriangleAlertIcon aria-hidden="true" />
@@ -332,6 +323,6 @@ export function AppWebhooksTab() {
         secrets={revealed ? [{ label: strings.endpoints.secret, value: revealed.result.secret }] : []}
         onClose={() => setRevealed(null)}
       />
-    </section>
+    </Section>
   );
 }

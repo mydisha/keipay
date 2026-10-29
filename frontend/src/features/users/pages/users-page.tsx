@@ -13,6 +13,7 @@ import { DataTable, type DataColumn } from "@/shared/ui/data-table";
 import { DateTimeText } from "@/shared/ui/date-time-text";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { SecretRevealDialog } from "@/shared/ui/secret-reveal-dialog";
+import { Section } from "@/shared/ui/section";
 import { StatusBadge } from "@/shared/ui/status-badge";
 import { useDisableUser, useEnableUser, useResetUserPassword, useUsers, type User } from "../api/users";
 import { AddUserDialog, EditUserDialog } from "../components/user-dialogs";
@@ -190,16 +191,7 @@ function UsersSection() {
   const copy = confirming ? confirmCopy[confirming.action] : null;
 
   return (
-    <section className="grid gap-3" aria-labelledby="users-heading">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0 space-y-1">
-          <h2 id="users-heading" className="text-base font-semibold">
-            {strings.users.title}
-          </h2>
-          <p className="text-sm text-muted-foreground">{strings.users.description}</p>
-        </div>
-        {addButton}
-      </div>
+    <Section id="users-heading" title={strings.users.title} description={strings.users.description} actions={addButton}>
       <DataTable
         caption={strings.users.title}
         columns={columns}
@@ -258,6 +250,6 @@ function UsersSection() {
         warning={strings.users.secretWarning}
         onClose={() => setRevealed(null)}
       />
-    </section>
+    </Section>
   );
 }

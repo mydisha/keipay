@@ -14,6 +14,7 @@ import { DateTimeText } from "@/shared/ui/date-time-text";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { IdText } from "@/shared/ui/id-text";
 import { MoneyText } from "@/shared/ui/money-text";
+import { Section } from "@/shared/ui/section";
 import { StatusBadge } from "@/shared/ui/status-badge";
 import {
   reportsExportUrl,
@@ -214,10 +215,7 @@ export function SummaryTab({ search }: { search: ReconciliationSearch }) {
         </div>
       </div>
 
-      <section className="grid gap-3" aria-labelledby="summary-heading">
-        <h2 id="summary-heading" className="text-base font-semibold">
-          {strings.reconciliation.summaryTitle}
-        </h2>
+      <Section id="summary-heading" title={strings.reconciliation.summaryTitle}>
         <DataTable
           caption={strings.reconciliation.summaryTitle}
           columns={summaryColumns(search.interval)}
@@ -255,7 +253,7 @@ export function SummaryTab({ search }: { search: ReconciliationSearch }) {
             )
           }
         />
-      </section>
+      </Section>
 
       {filters && !isEmpty && !summary.error && <ReportList filters={filters} />}
     </div>
@@ -266,10 +264,7 @@ function ReportList({ filters }: { filters: ReportFilters }) {
   const reports = usePaymentReports(filters);
   const list = loadMoreList(reports);
   return (
-    <section className="grid gap-3" aria-labelledby="reports-heading">
-      <h2 id="reports-heading" className="text-base font-semibold">
-        {strings.reconciliation.reportsTitle}
-      </h2>
+    <Section id="reports-heading" title={strings.reconciliation.reportsTitle}>
       <DataTable
         caption={strings.reconciliation.reportsTitle}
         columns={reportColumns}
@@ -281,6 +276,6 @@ function ReportList({ filters }: { filters: ReportFilters }) {
         loadMore={list.loadMore}
         emptyState={<EmptyState headingLevel={3} title={strings.reconciliation.emptyTitle} />}
       />
-    </section>
+    </Section>
   );
 }

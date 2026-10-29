@@ -4,13 +4,14 @@ import { toast } from "sonner";
 import { RequirePermission } from "@/features/auth/components/can";
 import { isApiError } from "@/shared/api/errors";
 import { strings } from "@/shared/lib/strings";
+import { BackLink } from "@/shared/ui/back-link";
 import { Button } from "@/shared/ui/button";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { ErrorState } from "@/shared/ui/error-state";
 import { PageHeader } from "@/shared/ui/page-header";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { useConnection, useProviders, type Connection } from "../api/connections";
-import { BackToConnections } from "../components/back-to-connections";
+import { backToConnections } from "../components/connection-header";
 import { CreateConnectionSteps } from "../components/wizard/create-steps";
 import { ChannelsStep, TestStep, WebhookStep } from "../components/wizard/post-create-steps";
 import { WIZARD_STEPS } from "../components/wizard/wizard-frame";
@@ -29,7 +30,7 @@ function resumeStep(value: string | null): number {
 export function NewConnectionPage() {
   return (
     <>
-      <BackToConnections />
+      <BackLink {...backToConnections} />
       <PageHeader title={strings.connections.wizardTitle} description={strings.connections.wizardSubtitle} />
       <RequirePermission permission="connections:write">
         <Wizard />

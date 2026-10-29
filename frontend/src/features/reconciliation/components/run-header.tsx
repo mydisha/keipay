@@ -1,5 +1,5 @@
-import { ChevronLeftIcon, DownloadIcon, RotateCwIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { DownloadIcon, RotateCwIcon } from "lucide-react";
+import { useState } from "react";
 import { Link } from "react-router";
 import { toast } from "sonner";
 import { usePermission } from "@/features/auth/components/can";
@@ -7,27 +7,19 @@ import { errorMessage } from "@/shared/api/error-message";
 import { isApiError } from "@/shared/api/errors";
 import { strings } from "@/shared/lib/strings";
 import { Button } from "@/shared/ui/button";
+import { Card, CardContent } from "@/shared/ui/card";
 import { ConfirmDialog } from "@/shared/ui/confirm-dialog";
 import { CopyButton } from "@/shared/ui/copy-button";
 import { DateTimeText } from "@/shared/ui/date-time-text";
-import { Skeleton } from "@/shared/ui/skeleton";
+import { DetailHeader, DetailHeaderSkeleton } from "@/shared/ui/detail-header";
+import { Fact, FactList } from "@/shared/ui/fact-list";
 import { useRerun, type ReconciliationRun } from "../api/runs";
 import { formatRunRange } from "../lib/format-range";
 import { RUNS_TAB_PATH } from "../lib/reconciliation-search";
 import { RunStatusBadge } from "./badges";
 import { RunConnection } from "./run-connection";
 
-export function BackToRuns() {
-  return (
-    <Link
-      to={RUNS_TAB_PATH}
-      className="inline-flex w-fit items-center gap-1 rounded-sm text-sm text-muted-foreground outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 max-md:min-h-11"
-    >
-      <ChevronLeftIcon className="size-4" aria-hidden="true" />
-      {strings.reconciliation.backToRuns}
-    </Link>
-  );
-}
+export const backToRuns = { to: RUNS_TAB_PATH, label: strings.reconciliation.backToRuns };
 
 /** The toast for a failed re-run: `409 run_in_progress` says why. */
 function rerunErrorMessage(error: unknown): string {
@@ -69,34 +61,24 @@ export function RerunButton({ run }: { run: ReconciliationRun }) {
   );
 }
 
-function Fact({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="grid min-w-0 gap-1">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 text-sm">{children}</dd>
-    </div>
-  );
-}
-
 /** Back link, the run id as the title, its status, key facts and the actions. */
 export function RunHeader({ run, exportHref }: { run: ReconciliationRun; exportHref: string | null }) {
   const canWrite = usePermission("reconciliation:write");
   return (
-    <div className="grid gap-4">
-      <BackToRuns />
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="grid min-w-0 gap-1">
-          <p className="text-sm text-muted-foreground">{strings.reconciliation.runTitle}</p>
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <h1 className="min-w-0 truncate font-mono text-xl font-semibold tracking-tight" title={run.id}>
-              {run.id}
-            </h1>
-            <CopyButton value={run.id} label={`${strings.common.copyValue(strings.reconciliation.runId)} ${run.id}`} />
-            <RunStatusBadge status={run.status} />
-          </div>
-        </div>
-        {(exportHref || canWrite) && (
-          <div className="flex flex-wrap gap-2">
+    <DetailHeader
+      back={backToRuns}
+      eyebrow={strings.reconciliation.runTitle}
+      title={run.id}
+      titleMono
+      badges={
+        <>
+          <CopyButton value={run.id} label={`${strings.common.copyValue(strings.reconciliation.runId)} ${run.id}`} />
+          <RunStatusBadge status={run.status} />
+        </>
+      }
+      actions={
+        (exportHref || canWrite) && (
+          <>
             {exportHref && (
               <Button asChild variant="outline">
                 <a href={exportHref} download>
@@ -106,48 +88,43 @@ export function RunHeader({ run, exportHref }: { run: ReconciliationRun; exportH
               </Button>
             )}
             {canWrite && <RerunButton run={run} />}
-          </div>
-        )}
-      </div>
-      <dl className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-lg border bg-card p-4 md:grid-cols-4">
-        <Fact label={strings.reconciliation.connection}>
-          <Link
-            to={`/connections/${run.connection.id}`}
-            className="inline-flex max-w-full rounded-sm underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
-          >
-            <RunConnection run={run} />
-          </Link>
-        </Fact>
-        <Fact label={strings.reconciliation.range}>{formatRunRange(run.from, run.to)}</Fact>
-        <Fact label={strings.reconciliation.runCount}>
-          <span className="tabular-nums">{run.run_count}</span>
-        </Fact>
-        <Fact label={strings.reconciliation.startedBy}>{run.created_by?.name ?? strings.reconciliation.system}</Fact>
-        <Fact label={strings.reconciliation.created}>
-          <DateTimeText value={run.created_at} />
-        </Fact>
-        <Fact label={strings.reconciliation.started}>
-          <DateTimeText value={run.started_at} />
-        </Fact>
-        <Fact label={strings.reconciliation.finished}>
-          <DateTimeText value={run.finished_at} />
-        </Fact>
-      </dl>
-    </div>
+          </>
+        )
+      }
+      facts={
+        <Card size="compact">
+          <CardContent>
+            <FactList layout="tiles">
+              <Fact label={strings.reconciliation.connection}>
+                <Link
+                  to={`/connections/${run.connection.id}`}
+                  className="inline-flex max-w-full rounded-sm underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                >
+                  <RunConnection run={run} />
+                </Link>
+              </Fact>
+              <Fact label={strings.reconciliation.range}>{formatRunRange(run.from, run.to)}</Fact>
+              <Fact label={strings.reconciliation.runCount}>
+                <span className="tabular-nums">{run.run_count}</span>
+              </Fact>
+              <Fact label={strings.reconciliation.startedBy}>{run.created_by?.name ?? strings.reconciliation.system}</Fact>
+              <Fact label={strings.reconciliation.created}>
+                <DateTimeText value={run.created_at} />
+              </Fact>
+              <Fact label={strings.reconciliation.started}>
+                <DateTimeText value={run.started_at} />
+              </Fact>
+              <Fact label={strings.reconciliation.finished}>
+                <DateTimeText value={run.finished_at} />
+              </Fact>
+            </FactList>
+          </CardContent>
+        </Card>
+      }
+    />
   );
 }
 
 export function RunHeaderSkeleton() {
-  return (
-    <div className="grid gap-4" aria-busy="true" data-testid="run-header-skeleton">
-      <Skeleton className="h-4 w-40" />
-      <Skeleton className="h-7 w-80 max-w-full" />
-      <Skeleton className="h-24 w-full" />
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {Array.from({ length: 4 }, (_, i) => (
-          <Skeleton key={i} className="h-16" />
-        ))}
-      </div>
-    </div>
-  );
+  return <DetailHeaderSkeleton testId="run-header-skeleton" />;
 }

@@ -5,12 +5,14 @@ import { AppLabel } from "@/features/apps/components/app-label";
 import { formatDateTimeWIB } from "@/shared/lib/format";
 import { strings } from "@/shared/lib/strings";
 import { Alert, AlertDescription } from "@/shared/ui/alert";
+import { Card } from "@/shared/ui/card";
 import { DateTimeText } from "@/shared/ui/date-time-text";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { ErrorState } from "@/shared/ui/error-state";
 import { IdText } from "@/shared/ui/id-text";
 import { JsonViewer } from "@/shared/ui/json-viewer";
 import { MoneyText } from "@/shared/ui/money-text";
+import { Section } from "@/shared/ui/section";
 import { SidePanel } from "@/shared/ui/side-panel";
 import { Skeleton } from "@/shared/ui/skeleton";
 import { StatusBadge } from "@/shared/ui/status-badge";
@@ -116,7 +118,7 @@ export function comparisonRows(keipay: KeipaySide | null, gateway: GatewaySide |
 function Comparison({ item }: { item: ReconciliationItem }) {
   const rows = comparisonRows(item.keipay, item.gateway);
   return (
-    <div className="overflow-hidden rounded-lg border bg-card">
+    <Card size="compact" className="overflow-hidden">
       <table className="w-full table-fixed text-sm">
         <caption className="sr-only">{strings.reconciliation.comparison}</caption>
         <thead className="border-b bg-muted/50">
@@ -147,7 +149,7 @@ function Comparison({ item }: { item: ReconciliationItem }) {
           ))}
         </tbody>
       </table>
-    </div>
+    </Card>
   );
 }
 
@@ -183,12 +185,9 @@ function Resolution({ item, run, resolve }: { item: ReconciliationItem; run: Rec
     body = <ResolveForm key={item.id} item={item} resolve={resolve} />;
   }
   return (
-    <section className="grid gap-2" aria-labelledby="resolution-heading">
-      <h3 id="resolution-heading" className="text-sm font-semibold">
-        {strings.reconciliation.resolution}
-      </h3>
+    <Section id="resolution-heading" title={strings.reconciliation.resolution} headingLevel={3} className="gap-2">
       {body}
-    </section>
+    </Section>
   );
 }
 

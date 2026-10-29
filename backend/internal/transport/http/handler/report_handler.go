@@ -62,21 +62,14 @@ func (h *ReportHandler) Summary(c *gin.Context) {
 		response.Error(c, err)
 		return
 	}
-	interval, err := queryEnum(c, "interval", domain.ReportInterval.Valid)
+	// The service defaults and validates the interval.
+	interval := domain.ReportInterval(c.Query("interval"))
+	rows, err := h.reports.Summary(c.Request.Context(), f, interval)
 	if err != nil {
 		response.Error(c, err)
 		return
 	}
-	iv := domain.ReportIntervalTotal
-	if interval != nil {
-		iv = *interval
-	}
-	rows, err := h.reports.Summary(c.Request.Context(), f, iv)
-	if err != nil {
-		response.Error(c, err)
-		return
-	}
-	response.Success(c, dto.PaymentReportSummaryFromDomain(iv, *f.From, *f.To, rows))
+	response.Success(c, dto.PaymentReportSummaryFromDomain(interval.OrTotal(), *f.From, *f.To, rows))
 }
 
 // Export handles GET /admin/payment-reports/export: every matching report,

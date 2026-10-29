@@ -54,9 +54,7 @@ func (s *PaymentReportService) List(ctx context.Context, f domain.PaymentReportF
 // interval ("" is total), app, connection and currency. Both bounds are
 // required.
 func (s *PaymentReportService) Summary(ctx context.Context, f domain.PaymentReportFilter, interval domain.ReportInterval) ([]domain.PaymentReportSummaryRow, error) {
-	if interval == "" {
-		interval = domain.ReportIntervalTotal
-	}
+	interval = interval.OrTotal()
 	var errs fieldErrors
 	if f.From == nil {
 		errs.check("from", RuleRequired)

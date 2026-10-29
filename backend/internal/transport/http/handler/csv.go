@@ -22,11 +22,11 @@ const csvFlushEvery = 500
 // zone is exact and needs no tzdata in the image.
 var wib = time.FixedZone("WIB", 7*60*60)
 
-// csvStream writes rows as a CSV attachment. Rows are buffered until the
-// first flush, so a failure until then still gets a JSON error.
+// csvStream writes rows as a CSV attachment. Until the first byte reaches
+// the client (the csv writer's buffer filling, or the first explicit flush),
+// a failure is still answered as JSON.
 type csvStream struct {
 	c        *gin.Context
-	log      *zap.Logger
 	filename string
 	header   []string
 	w        *csv.Writer
@@ -38,7 +38,7 @@ type csvStream struct {
 // it the response is cut off, so the client sees an incomplete download
 // rather than a short file that looks complete.
 func streamCSV(c *gin.Context, log *zap.Logger, filename string, header []string, produce func(write func([]string) error) error) {
-	s := &csvStream{c: c, log: log, filename: filename, header: header}
+	s := &csvStream{c: c, filename: filename, header: header}
 	err := produce(s.write)
 	if err == nil {
 		err = s.finish()

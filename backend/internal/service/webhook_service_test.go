@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
+	"github.com/mydisha/keipay/backend/internal/testutil/memstore"
 )
 
 func paid(ref string, amount int64) xenditCallback {
@@ -485,16 +486,25 @@ func TestProcessMissingKeyIsInvalidPayload(t *testing.T) {
 	}
 }
 
-// A body that failed verification is stored cut to 4096
-// bytes; an unparsable but verified one is kept whole.
+// A body that failed verification is stored cut to 4096 bytes and an
+// unparsable but verified one to 64 KiB; smaller bodies are kept whole.
 func TestRecordRejected(t *testing.T) {
 	f := newWebhookFixture(t)
 	big := bytes.Repeat([]byte("a"), 10*1024)
-	f.svc.RecordRejected(context.Background(), f.conn, big, domain.InboundInvalidSignature, "bad token")
-	f.svc.RecordRejected(context.Background(), f.conn, big, domain.InboundInvalidPayload, "bad body")
-	f.svc.RecordRejected(context.Background(), f.conn, []byte(`{}`), domain.InboundInvalidSignature, "bad token")
+	huge := bytes.Repeat([]byte("b"), 100*1024)
+	for _, c := range []struct {
+		raw    []byte
+		result domain.InboundResult
+	}{
+		{big, domain.InboundInvalidSignature}, {big, domain.InboundInvalidPayload},
+		{[]byte(`{}`), domain.InboundInvalidSignature}, {huge, domain.InboundInvalidPayload},
+	} {
+		if err := f.svc.RecordRejected(context.Background(), f.conn, c.raw, c.result, "rejected"); err != nil {
+			t.Fatal(err)
+		}
+	}
 	rows := f.hooks.AllInbound()
-	if len(rows) != 3 {
+	if len(rows) != 4 {
 		t.Fatalf("rows = %d", len(rows))
 	}
 	if rows[0].SignatureValid || len(rows[0].RawBody) != 4096 || !rows[0].BodyTruncated || rows[0].Result != domain.InboundInvalidSignature {
@@ -505,6 +515,70 @@ func TestRecordRejected(t *testing.T) {
 	}
 	if rows[2].BodyTruncated || string(rows[2].RawBody) != `{}` {
 		t.Fatalf("short body = %+v", rows[2])
+	}
+	if len(rows[3].RawBody) != domain.MaxUnappliedBodyBytes || !rows[3].BodyTruncated {
+		t.Fatalf("huge invalid payload: len=%d truncated=%v", len(rows[3].RawBody), rows[3].BodyTruncated)
+	}
+}
+
+// withCallbackLimits turns the rejected-callback limits on.
+func (f *webhookFixture) withCallbackLimits(perIP, perConn int) *memstore.Failures {
+	limiter := memstore.NewFailures(f.clock.Now)
+	f.svc.limiter, f.svc.limits = limiter, CallbackLimits{MaxRejectedPerIP: perIP, MaxRejectedPerConnection: perConn, Window: 15 * time.Minute}
+	return limiter
+}
+
+// Rejected callbacks count per sender and per connection; at a limit they
+// are refused without a row, while accepted callbacks are untouched.
+func TestRecordRejectedBlockedAfterLimit(t *testing.T) {
+	f := newWebhookFixture(t)
+	limiter := f.withCallbackLimits(10, 2)
+	other := f.addConnection(t, "xendit-b")
+	ctx := WithClientMeta(context.Background(), ClientMeta{IP: "203.0.113.9", RequestID: "req-1"})
+	for i := 0; i < 2; i++ {
+		if err := f.svc.RecordRejected(ctx, f.conn, []byte(`x`), domain.InboundInvalidSignature, "bad token"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if limiter.Value("ip:203.0.113.9") != 2 || limiter.Value("con:"+f.conn.PublicID) != 2 {
+		t.Fatalf("counted ip %d, connection %d", limiter.Value("ip:203.0.113.9"), limiter.Value("con:"+f.conn.PublicID))
+	}
+	err := f.svc.RecordRejected(ctx, f.conn, []byte(`x`), domain.InboundInvalidSignature, "bad token")
+	var coded *domain.Error
+	if !errors.As(err, &coded) || coded.Code != domain.CodeRateLimited || coded.Details["retry_after_seconds"].(int) < 1 {
+		t.Fatalf("over the limit: %v", err)
+	}
+	if n := len(f.hooks.AllInbound()); n != 2 {
+		t.Fatalf("rows = %d, the refused callback was recorded", n)
+	}
+	// The connection's limit is its own: another connection from the same
+	// sender is still recorded, and a missing reference goes the same way.
+	if err := f.svc.RecordRejected(ctx, other, []byte(`x`), domain.InboundInvalidPayload, "bad body"); err != nil {
+		t.Fatal(err)
+	}
+	unkeyed := xenditCallback{ID: "", ExternalID: "", Status: "PAID", Amount: 5000, Currency: "IDR"}
+	if err := f.process(t, f.conn, unkeyed); !errors.Is(err, domain.ErrRateLimited) {
+		t.Fatalf("missing key on a blocked connection: %v", err)
+	}
+	// Accepted callbacks are never limited.
+	if err := f.svc.Process(ctx, f.conn, paid(f.payment.ExternalID, 5000).event(), paid(f.payment.ExternalID, 5000).raw()); err != nil {
+		t.Fatalf("accepted callback on a blocked connection: %v", err)
+	}
+}
+
+// A limiter that does not answer neither blocks nor loses the record: the
+// gateway's retries matter more than the limit.
+func TestRecordRejectedLimiterDownStillRecords(t *testing.T) {
+	f := newWebhookFixture(t)
+	limiter := f.withCallbackLimits(1, 1)
+	limiter.Err = errors.New("redis down")
+	for i := 0; i < 3; i++ {
+		if err := f.svc.RecordRejected(context.Background(), f.conn, []byte(`x`), domain.InboundInvalidSignature, "bad token"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := len(f.hooks.AllInbound()); n != 3 {
+		t.Fatalf("rows = %d", n)
 	}
 }
 
@@ -519,7 +593,9 @@ func TestRecordFailureIsNotReturned(t *testing.T) {
 	if err := f.process(t, f.conn, cb); err != nil {
 		t.Fatalf("duplicate with a failing log: %v", err)
 	}
-	f.svc.RecordRejected(context.Background(), f.conn, []byte(`x`), domain.InboundInvalidPayload, "bad body")
+	if err := f.svc.RecordRejected(context.Background(), f.conn, []byte(`x`), domain.InboundInvalidPayload, "bad body"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // A successful callback writes one report; SETTLED updates it in

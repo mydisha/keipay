@@ -31,9 +31,16 @@ func (r InboundResult) Valid() bool {
 // InboundSourceWebhook is the source of a gateway callback.
 const InboundSourceWebhook = "webhook"
 
-// MaxRejectedBodyBytes caps the stored body of a callback that failed
-// verification: it comes from anyone who knows the URL.
-const MaxRejectedBodyBytes = 4096
+// Caps on the stored body of a callback that was not applied.
+const (
+	// MaxRejectedBodyBytes is for a callback that failed verification: it
+	// comes from anyone who knows the URL.
+	MaxRejectedBodyBytes = 4096
+	// MaxUnappliedBodyBytes is for a verified callback whose body could not
+	// be parsed: enough to debug a provider's format, not enough to fill
+	// the table with what a gateway's account could send.
+	MaxUnappliedBodyBytes = 64 << 10
+)
 
 // InboundWebhook is one callback that reached a known connection, with what
 // processing did with it.

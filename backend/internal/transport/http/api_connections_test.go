@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/pkg/id"
@@ -630,5 +631,37 @@ func TestAppDefaultConnectionOverHTTP(t *testing.T) {
 	actions := f.audit.actions()
 	if n := len(actions); n < 2 || actions[n-1] != "app.update" || actions[n-2] != "app.update" {
 		t.Fatalf("audit = %v", actions)
+	}
+}
+
+// Rejected callbacks are limited per sender and per connection: at the
+// limit they are refused with 429 and not recorded, while a valid callback
+// from the same sender still goes through.
+func TestCallbackRateLimitOverHTTP(t *testing.T) {
+	f := newAPI(t, "")
+	a := f.addXendit(t, "xendit-a", "xnd_development_aaa", "token-of-a")
+	pa := f.addPayment(t, a, 5000)
+	target := "/webhooks/xendit/" + a.PublicID
+	for i := 0; i < 58; i++ {
+		f.callbackFailures.Inc("con:"+a.PublicID, 15*time.Minute)
+	}
+	for i := 0; i < 2; i++ {
+		expectError(t, f.send(nil, http.MethodPost, target, `{}`, "x-callback-token", "wrong"), 401, domain.CodeInvalidCallbackToken)
+	}
+	rows := len(f.hooks.AllInbound())
+	w := f.send(nil, http.MethodPost, target, `{}`, "x-callback-token", "wrong")
+	expectError(t, w, http.StatusTooManyRequests, domain.CodeRateLimited)
+	if w.Header().Get("Retry-After") == "" || len(f.hooks.AllInbound()) != rows {
+		t.Fatalf("blocked: Retry-After %q, rows %d -> %d", w.Header().Get("Retry-After"), rows, len(f.hooks.AllInbound()))
+	}
+	if n := f.logs.FilterField(stringField("event", "callback.rate_limited")).Len(); n != 1 {
+		t.Fatalf("rate_limited events = %d", n)
+	}
+	// A verified callback with an unparsable body is rejected the same way.
+	expectError(t, f.send(nil, http.MethodPost, target, `not json`, "x-callback-token", "token-of-a"), http.StatusTooManyRequests, domain.CodeRateLimited)
+	// Accepted callbacks are never limited.
+	w = f.send(nil, http.MethodPost, target, xenditCallbackBody(pa, "inv_ok", "PAID"), "x-callback-token", "token-of-a")
+	if w.Code != http.StatusOK || f.paymentStatus(t, pa) != domain.PaymentStatusPaid {
+		t.Fatalf("valid callback while blocked: %d %s", w.Code, w.Body.String())
 	}
 }

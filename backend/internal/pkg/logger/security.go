@@ -17,8 +17,17 @@ const (
 	EventAuthBadSignature      = "auth.bad_signature"
 	EventAuthReplay            = "auth.replay"
 	EventAuthLookupFailed      = "auth.lookup_failed"
-	EventCallbackInvalidToken  = "callback.invalid_token"
-	EventCallbackMismatch      = "callback.mismatch"
+	// EventAuthRateLimited is a /v1 caller refused because too many of its
+	// recent requests failed authentication.
+	EventAuthRateLimited = "auth.rate_limited"
+	// EventAuthStoreUnavailable is a /v1 request refused because the store
+	// behind replay protection or the failure limits did not answer.
+	EventAuthStoreUnavailable = "auth.store_unavailable"
+	// EventCallbackRateLimited is a rejected callback dropped because the
+	// connection or the sender already had too many rejected ones.
+	EventCallbackRateLimited  = "callback.rate_limited"
+	EventCallbackInvalidToken = "callback.invalid_token"
+	EventCallbackMismatch     = "callback.mismatch"
 	// EventCallbackUnknownConnection is a callback to a URL naming no
 	// connection of that provider: usually a stale dashboard setting.
 	EventCallbackUnknownConnection = "callback.unknown_connection"

@@ -57,6 +57,9 @@ const (
 	CodeProviderUnavailable     ErrorCode = "provider_unavailable"
 	CodeRunInProgress           ErrorCode = "run_in_progress"
 	CodeRunNotSucceeded         ErrorCode = "run_not_succeeded"
+	CodeRequestTooLarge         ErrorCode = "request_too_large"
+	CodeAuthUnavailable         ErrorCode = "auth_unavailable"
+	CodeSetupTokenNotConfigured ErrorCode = "setup_token_not_configured"
 )
 
 // ErrorCodes returns every defined error code.
@@ -73,6 +76,7 @@ func ErrorCodes() []ErrorCode {
 		CodeAPIKeyRevoked, CodeAPIKeyExpired, CodeIdempotencyKeyReused,
 		CodeConnectionInUse, CodeDeliveryNotReplayable, CodeNoEligibleConnection, CodeProviderRejected, CodeProviderUnavailable,
 		CodeRunInProgress, CodeRunNotSucceeded,
+		CodeRequestTooLarge, CodeAuthUnavailable, CodeSetupTokenNotConfigured,
 	}
 }
 
@@ -178,6 +182,14 @@ func ProviderUnavailable(cause error) *Error {
 	return &Error{Code: CodeProviderUnavailable, Message: "the payment provider is unavailable; try again later", Err: cause}
 }
 
+// AuthUnavailable means a /v1 request could not be authenticated because the
+// store behind replay protection or the failure limits did not answer. The
+// request was not processed; the app should retry with the same
+// Idempotency-Key once the server recovers.
+func AuthUnavailable(cause error) *Error {
+	return &Error{Code: CodeAuthUnavailable, Message: "authentication is temporarily unavailable; retry later", Err: cause}
+}
+
 // ConnectionInUse refuses disabling a connection that apps use as their
 // default. apps holds at most MaxInUseApps of them; count is the total.
 func ConnectionInUse(apps []AppSummary, count int) *Error {
@@ -270,4 +282,12 @@ var (
 	// ErrInvalidCallbackToken is a gateway callback that fails its
 	// connection's verification.
 	ErrInvalidCallbackToken = &Error{Code: CodeInvalidCallbackToken, Message: "invalid callback token", Err: ErrUnauthorized}
+	// ErrRequestTooLarge is a request body over the limit of its route.
+	ErrRequestTooLarge = &Error{Code: CodeRequestTooLarge, Message: "request body too large"}
+	// ErrRateLimited matches every rate_limited error whatever its wait.
+	ErrRateLimited = &Error{Code: CodeRateLimited, Message: "too many failed attempts"}
+	// ErrSetupTokenNotConfigured refuses first-run setup on a production
+	// server that has no SETUP_TOKEN: whoever reaches it first would become
+	// the owner.
+	ErrSetupTokenNotConfigured = &Error{Code: CodeSetupTokenNotConfigured, Message: "first-run setup needs SETUP_TOKEN in production; set it and restart the server"}
 )

@@ -18,6 +18,13 @@ import (
 // client.
 const csvFlushEvery = 500
 
+// csvWriteGrace is how long each flush may take to reach the client. The
+// server's write timeout is fixed when the request arrives and would cut a
+// long export off mid-stream, so the stream moves its own deadline forward
+// at every flush: a healthy client can download for as long as it takes,
+// a stalled one still frees the handler within this grace.
+var csvWriteGrace = 60 * time.Second
+
 // wib is Asia/Jakarta. Indonesia has no daylight saving time, so a fixed
 // zone is exact and needs no tzdata in the image.
 var wib = time.FixedZone("WIB", 7*60*60)
@@ -64,6 +71,7 @@ func streamCSV(c *gin.Context, log *zap.Logger, filename string, header []string
 }
 
 func (s *csvStream) start() error {
+	s.extendDeadline()
 	h := s.c.Writer.Header()
 	h.Set("Content-Type", "text/csv; charset=utf-8")
 	h.Set("Content-Disposition", `attachment; filename="`+s.filename+`"`)
@@ -101,12 +109,19 @@ func (s *csvStream) finish() error {
 }
 
 func (s *csvStream) flush() error {
+	s.extendDeadline()
 	s.w.Flush()
 	if err := s.w.Error(); err != nil {
 		return err
 	}
 	s.c.Writer.Flush()
 	return nil
+}
+
+// extendDeadline gives the next chunk csvWriteGrace to reach the client.
+// Writers that have no deadline (test recorders) are left alone.
+func (s *csvStream) extendDeadline() {
+	_ = http.NewResponseController(s.c.Writer).SetWriteDeadline(time.Now().Add(csvWriteGrace))
 }
 
 // csvText guards a text cell against spreadsheet formula injection.

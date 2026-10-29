@@ -64,8 +64,8 @@ func TestLoad_CookieSecure(t *testing.T) {
 		{"auto", "staging", true},
 		{"true", "development", true},
 		{"TRUE", "development", true},
-		{"false", "production", false},
-		{"False", "production", false},
+		{"false", "staging", false},
+		{"False", "staging", false},
 	}
 	for _, tc := range cases {
 		cfg, err := loadWith(t, map[string]string{"COOKIE_SECURE": tc.mode, "APP_ENV": tc.env})
@@ -103,7 +103,7 @@ func TestLoad_HSTSEnabled(t *testing.T) {
 	}{
 		{"auto", "auto", "development", false},
 		{"auto", "auto", "production", true},
-		{"auto", "false", "production", false},
+		{"auto", "false", "staging", false},
 		{"auto", "true", "development", true},
 		{"true", "false", "development", true},
 		{"FALSE", "true", "production", false},

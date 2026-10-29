@@ -23,6 +23,9 @@ type AuthConfig struct {
 	FailureWindow       time.Duration
 	// SetupToken, when set, must accompany first-run setup.
 	SetupToken string
+	// RequireSetupToken refuses first-run setup while SetupToken is empty,
+	// so a production server cannot be claimed by whoever reaches it first.
+	RequireSetupToken bool
 }
 
 // AuthDeps are the ports AuthService uses.
@@ -217,6 +220,9 @@ func (s *AuthService) createOwner(ctx context.Context, email, name string, in Se
 			return domain.ErrSetupCompleted
 		}
 		// Checked only now, so a wrong token cannot probe whether setup happened.
+		if s.cfg.RequireSetupToken && s.cfg.SetupToken == "" {
+			return domain.ErrSetupTokenNotConfigured
+		}
 		if s.cfg.SetupToken != "" && !SecureEqual(in.SetupToken, s.cfg.SetupToken) {
 			return domain.ErrInvalidSetupToken
 		}

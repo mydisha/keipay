@@ -58,6 +58,9 @@ func main() {
 	if cfg.JWTSecretSet {
 		log.Warn("JWT_SECRET is no longer used; admin sessions are server-side. Remove it from the environment.")
 	}
+	for _, w := range cfg.Warnings() {
+		log.Warn(w)
+	}
 
 	log.Info("starting keipay",
 		zap.String("version", Version),
@@ -216,6 +219,7 @@ func main() {
 		MaxFailuresPerEmail: cfg.LoginMaxFailuresPerEmail,
 		FailureWindow:       cfg.LoginFailureWindow,
 		SetupToken:          cfg.SetupToken,
+		RequireSetupToken:   cfg.IsProduction(),
 	})
 	if err != nil {
 		log.Fatal("failed to initialize auth service", zap.Error(err))
@@ -269,10 +273,17 @@ func main() {
 	}
 	router := transport.NewRouter(deps)
 
+	// Bodies are at most 1 MiB, so a request that takes longer than this to
+	// arrive is being trickled in. The write timeout bounds a response that
+	// nobody reads; streaming exports extend their own deadline per chunk.
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
 		Handler:           router,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    64 << 10,
 	}
 
 	// Optional in-process asynq worker, plus the sweeper that re-enqueues

@@ -158,3 +158,52 @@ func TestLoad_WebhookDisableAfterFailures(t *testing.T) {
 		t.Fatalf("-1: %v", err)
 	}
 }
+
+func TestLoad_ProductionRefusesInsecureCookies(t *testing.T) {
+	if _, err := loadWith(t, map[string]string{"APP_ENV": "production", "COOKIE_SECURE": "false"}); err == nil || !strings.Contains(err.Error(), "COOKIE_SECURE") {
+		t.Fatalf("err = %v, want a COOKIE_SECURE error", err)
+	}
+	if _, err := loadWith(t, map[string]string{"APP_ENV": "production", "COOKIE_SECURE": "auto"}); err != nil {
+		t.Fatalf("production with auto: %v", err)
+	}
+	if _, err := loadWith(t, map[string]string{"APP_ENV": "development", "COOKIE_SECURE": "false"}); err != nil {
+		t.Fatalf("development with false: %v", err)
+	}
+}
+
+// Production warnings name what weakens the deployment; development has
+// none, so local setups stay quiet.
+func TestLoad_ProductionWarnings(t *testing.T) {
+	cfg, err := loadWith(t, map[string]string{"APP_ENV": "production", "POSTGRES_DSN": "postgres://keipay:keipay@db:5432/keipay?sslmode=disable"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	warnings := strings.Join(cfg.Warnings(), "\n")
+	for _, want := range []string{"REDIS_PASSWORD", "sslmode=disable", "SETUP_TOKEN"} {
+		if !strings.Contains(warnings, want) {
+			t.Errorf("warnings lack %s: %q", want, warnings)
+		}
+	}
+	cfg, err = loadWith(t, map[string]string{"APP_ENV": "production", "REDIS_PASSWORD": "s3cret", "SETUP_TOKEN": "tok",
+		"POSTGRES_DSN": "host=db user=keipay sslmode=require dbname=keipay"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := cfg.Warnings(); len(w) != 0 {
+		t.Fatalf("warnings = %v, want none", w)
+	}
+	cfg, _ = loadWith(t, map[string]string{"APP_ENV": "development"})
+	if w := cfg.Warnings(); len(w) != 0 {
+		t.Fatalf("development warnings = %v", w)
+	}
+	for dsn, want := range map[string]string{
+		"postgres://u:p@db:5432/keipay?sslmode=disable": "disable",
+		"postgres://u:p@db:5432/keipay":                 "",
+		"host=db sslmode='verify-full' dbname=keipay":   "verify-full",
+		"": "",
+	} {
+		if got := dsnSSLMode(dsn); got != want {
+			t.Errorf("dsnSSLMode(%q) = %q, want %q", dsn, got, want)
+		}
+	}
+}

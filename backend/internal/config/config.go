@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -185,7 +186,43 @@ func (c *Config) validate() error {
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required config: %s", strings.Join(missing, ", "))
 	}
+	if c.IsProduction() && strings.EqualFold(strings.TrimSpace(c.CookieSecureMode), "false") {
+		return fmt.Errorf("COOKIE_SECURE=false is not allowed when APP_ENV=production; serve the console over HTTPS")
+	}
 	return c.validateAuth()
+}
+
+// Warnings lists production settings that work but weaken the deployment.
+// They are logged at startup; none of them stops the server.
+func (c *Config) Warnings() []string {
+	if !c.IsProduction() {
+		return nil
+	}
+	var out []string
+	if c.RedisPassword == "" {
+		out = append(out, "REDIS_PASSWORD is empty: Redis holds sessions, nonces and rate limits, so require AUTH on it")
+	}
+	if dsnSSLMode(c.PostgresDSN) == "disable" {
+		out = append(out, "POSTGRES_DSN has sslmode=disable: payments and encrypted secrets travel in clear to the database")
+	}
+	if c.SetupToken == "" {
+		out = append(out, "SETUP_TOKEN is empty: first-run setup is refused until it is set")
+	}
+	return out
+}
+
+// dsnSSLMode reads sslmode from a URL (postgres://…?sslmode=x) or key=value
+// DSN; "" when it is not set or the DSN cannot be read.
+func dsnSSLMode(dsn string) string {
+	if u, err := url.Parse(dsn); err == nil && u.Scheme != "" {
+		return u.Query().Get("sslmode")
+	}
+	for _, part := range strings.Fields(dsn) {
+		if v, ok := strings.CutPrefix(part, "sslmode="); ok {
+			return strings.Trim(v, "'\"")
+		}
+	}
+	return ""
 }
 
 func (c *Config) validateAuth() error {

@@ -94,27 +94,41 @@ postgres implementation → migration in `backend/migrations/` → wire in main.
    deprecated `XENDIT_*` env (`merchants.legacy_connection_id`). The legacy
    `tenants` table and `tenant_id` columns are read-only leftovers of
    expand/contract.
-2. **Two-layer idempotency**: `WebhookService.Process` checks Redis
-   (`idemp.Seen` on `{xenditID}:{status}`), then runs the durable guard
-   (`CreateEventIfNew`) in the same transaction as the status update, ledger
-   entry and delivery row (`domain.TxManager`). The Redis key is set only after
-   commit. The payment row is locked (`GetByExternalIDForUpdate`); status only
-   moves forward per `PaymentStatus.CanTransitionTo`; a callback whose amount
-   or currency differs is recorded, not applied (`service.ErrCallbackMismatch`).
-   `PaymentService.Create` is idempotent per `(app_id, idempotency_key)`
-   (checked first, with a request fingerprint) and per `(app_id, order_id)`.
+2. **Inbound idempotency is per connection, in the database**: every
+   callback that reaches a known connection gets an `inbound_webhooks` row
+   (`inb_…`, raw body, `signature_valid`, `result`). `WebhookService.Process`
+   claims `(connection_id, event_key, provider_status)` through a partial
+   unique index in the same transaction (`domain.TxManager`) as the payment
+   row lock, the status update, the ledger entry, the `events` row and the
+   delivery rows; a lost claim is recorded as `duplicate`. There is no Redis
+   fast path any more. Status only moves forward per
+   `PaymentStatus.CanTransitionTo`; amount/currency or connection mismatches
+   are recorded (`mismatch`), not applied; unknown gateway statuses are
+   `unmapped`. `PaymentService.Create` is idempotent per
+   `(app_id, idempotency_key)` (checked first, with a request fingerprint)
+   and per `(app_id, order_id)`.
 3. **HMAC both ways, different secrets**: inbound `/v1/*` signs
    `"{timestamp}.{rawBody}"` with the secret of the API key used (+ Redis
-   nonce); outbound forwards sign the raw body as `X-Kei-Signature` with the
-   app's webhook signing secret (for migrated apps, their old `api_secret`),
-   so key rotation never breaks webhook verification. Secrets are AES-256-GCM
-   encrypted at rest and shown in plaintext only at create/rotate. Gateway
-   credentials use envelope encryption (per-connection data key, bound to the
-   connection's public id) and are never returned, only their last 4 chars.
-4. **Delivery durability**: `Process` writes a `pending` `webhook_deliveries`
-   row in the event transaction and enqueues after commit (task ID derived from
-   the delivery id). If enqueue fails, `worker.Sweeper` re-enqueues pending
-   deliveries with `attempts = 0` older than a minute. Admins can replay.
+   nonce). Outbound events are signed per webhook endpoint (`whe_…`) as
+   `X-KeiPay-Signature: t=…,v1=…` over `"{t}.{body}"`, one `v1` per valid
+   secret during a rotation overlap; endpoints migrated from an app's old
+   `webhook_url` also send `X-Kei-Signature` (raw body, current secret) and
+   the `v1` flat body. API key rotation never touches webhook secrets.
+   Secrets are AES-256-GCM encrypted at rest and shown in plaintext only at
+   create/rotate. Gateway credentials use envelope encryption
+   (per-connection data key, bound to the connection's public id) and are
+   never returned, only their last 4 chars.
+4. **Event fan-out and delivery durability**: an applied callback creates
+   one `events` row (`evt_…`) and one `webhook_deliveries` row (`dlv_…`) per
+   active endpoint whose subscriptions match (`domain.MatchSubscription`),
+   with the body rendered for the endpoint's `api_version` at that moment.
+   Deliveries are enqueued after commit with task ID
+   `webhook:forward:{delivery_id}:{attempt}`; the worker sends, logs the
+   attempt in `webhook_delivery_attempts`, and schedules the next attempt
+   itself from the endpoint's retry policy (asynq retries only
+   infrastructure errors). `worker.Sweeper` re-enqueues `PENDING`
+   deliveries whose `next_attempt_at` is overdue. Replay is one more manual
+   attempt of the same delivery (same event id and body).
 5. **Admin sessions**: the session id in the `keipay_session` cookie is only
    a Redis key (stored hashed); every authenticated request still loads the
    user from Postgres, so disabling a user or changing a role takes effect at

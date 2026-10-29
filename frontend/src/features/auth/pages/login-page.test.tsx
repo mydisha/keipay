@@ -95,4 +95,13 @@ describe("Login page", () => {
     await screen.findByRole("button", { name: "Sign in" });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
+
+  it("describes the product beside the form", async () => {
+    mockApi({ "GET /admin/me": signedOut });
+    renderApp("/login");
+    const panel = await screen.findByRole("region", { name: "About KeiPay" });
+    expect(panel).toHaveTextContent("One API for every payment gateway.");
+    expect(panel).toHaveTextContent("KeiPay never holds funds.");
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+  });
 });

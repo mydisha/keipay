@@ -3,6 +3,7 @@ package http
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -29,6 +30,8 @@ type Deps struct {
 	// TrustedProxies may set X-Forwarded-For; empty trusts none, so the client
 	// IP is the TCP peer.
 	TrustedProxies []string
+	// SecurityHeaders configures the headers every response carries.
+	SecurityHeaders middleware.SecurityHeadersConfig
 
 	Payment        *handler.PaymentHandler
 	Webhook        *handler.WebhookHandler
@@ -164,13 +167,14 @@ func NewRouter(d Deps) *gin.Engine {
 		d.Log.Error("invalid trusted proxies; trusting none", zap.Error(err))
 		_ = r.SetTrustedProxies(nil)
 	}
-	r.Use(middleware.RequestID(), middleware.AccessLog(d.Log), middleware.Recover(d.Log))
+	r.Use(middleware.RequestID(), middleware.SecurityHeaders(d.SecurityHeaders), middleware.AccessLog(d.Log), middleware.Recover(d.Log))
 
 	r.GET("/healthz", handler.Health)
 
 	// App-facing API: API key + HMAC + timestamp + nonce replay protection.
 	v1 := r.Group("/v1")
-	v1.Use(middleware.ValidQuery(), middleware.AppAuth(d.AppResolver, d.NonceStore, d.SecretDecryptor, d.Log))
+	v1.Use(middleware.MaxBody(middleware.MaxV1BodyBytes), middleware.ValidQuery(),
+		middleware.AppAuth(d.AppResolver, d.NonceStore, d.SecretDecryptor, d.Log))
 
 	{
 		v1.POST("/payments", d.Payment.Create)
@@ -193,6 +197,7 @@ func NewRouter(d Deps) *gin.Engine {
 	}
 	admin := r.Group("/admin")
 	admin.Use(
+		middleware.MaxBody(middleware.MaxAdminBodyBytes),
 		middleware.ValidQuery(),
 		middleware.AdminContext(d.Cookies, newToken),
 		middleware.LoadSession(d.Sessions, d.Cookies),
@@ -214,6 +219,15 @@ func NewRouter(d Deps) *gin.Engine {
 	}
 
 	return r
+}
+
+// GinMode is the gin mode for an APP_ENV: debug output only in development.
+// It overrides GIN_MODE, which is otherwise read when gin initialises.
+func GinMode(appEnv string) string {
+	if strings.EqualFold(strings.TrimSpace(appEnv), "development") {
+		return gin.DebugMode
+	}
+	return gin.ReleaseMode
 }
 
 // guards returns the middleware that enforces a route's access level.

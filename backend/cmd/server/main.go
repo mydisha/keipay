@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/hibiken/asynq"
 	"go.uber.org/zap"
 
@@ -66,6 +67,8 @@ func main() {
 		zap.String("port", cfg.HTTPPort),
 		zap.Bool("worker_enabled", cfg.RunWorker),
 		zap.Bool("cookie_secure", cfg.CookieSecure()),
+		zap.Bool("hsts", cfg.HSTSEnabled()),
+		zap.String("gin_mode", transport.GinMode(cfg.AppEnv)),
 		zap.Strings("trusted_proxies", cfg.TrustedProxies),
 		zap.Bool("setup_token_set", cfg.SetupToken != ""),
 		zap.Duration("shutdown_timeout", cfg.GetShutdownTimeout()),
@@ -228,9 +231,11 @@ func main() {
 	}
 
 	log.Debug("initializing HTTP router")
+	gin.SetMode(transport.GinMode(cfg.AppEnv))
 	cookies := middleware.CookieConfig{Secure: cfg.CookieSecure()}
 	deps := transport.Deps{
 		Log:             log,
+		SecurityHeaders: middleware.SecurityHeadersConfig{HSTS: cfg.HSTSEnabled()},
 		AppResolver:     appSvc,
 		NonceStore:      nonces,
 		SecretDecryptor: cipher,

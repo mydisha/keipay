@@ -117,3 +117,31 @@ func TestRecoverReturnsEnvelope(t *testing.T) {
 		t.Fatalf("panic text leaked: %s", w.Body.String())
 	}
 }
+
+// A caller's X-Request-ID is kept only when it is short and made of
+// characters that are safe in logs; anything else gets a fresh id.
+func TestRequestID(t *testing.T) {
+	r := newEngine(func(c *gin.Context) { c.AbortWithStatusJSON(http.StatusOK, gin.H{"id": RequestIDFromContext(c)}) })
+	call := func(id string) (echoed, inContext string) {
+		req := httptest.NewRequest(http.MethodGet, "/x", nil)
+		if id != "" {
+			req.Header.Set("X-Request-ID", id)
+		}
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		var body struct{ ID string }
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		return w.Header().Get("X-Request-ID"), body.ID
+	}
+	for _, id := range []string{"4e9b8c7a-1d2e-4f3a-9b8c-7a1d2e4f3a9b", "req.1_b-c", strings.Repeat("x", 128)} {
+		if echoed, inCtx := call(id); echoed != id || inCtx != id {
+			t.Errorf("%q: echoed %q, context %q", id, echoed, inCtx)
+		}
+	}
+	for _, id := range []string{"", strings.Repeat("x", 129), "has space", "line\nbreak", "semi;colon", "ünïcode", "a/b"} {
+		echoed, inCtx := call(id)
+		if echoed == id || echoed == "" || echoed != inCtx || len(echoed) != 36 {
+			t.Errorf("%q: echoed %q, context %q, want a fresh uuid", id, echoed, inCtx)
+		}
+	}
+}

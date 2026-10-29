@@ -4,6 +4,7 @@ package middleware
 import (
 	"net/http"
 	"net/url"
+	"regexp"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -20,13 +21,19 @@ const (
 	ctxAPIKey    = "api_key"
 )
 
+// clientRequestID is what a caller may supply as X-Request-ID: short and
+// made of characters that are safe in logs and headers. Anything else gets
+// a fresh id instead of being echoed and logged as sent.
+var clientRequestID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
+
 // RequestID attaches a unique id to each request, propagates it into the
 // request context (so service/repository layers can correlate logs), and
-// echoes it back in the X-Request-ID response header.
+// echoes it back in the X-Request-ID response header. A caller's own id is
+// kept when it matches clientRequestID.
 func RequestID() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		id := c.GetHeader("X-Request-ID")
-		if id == "" {
+		if !clientRequestID.MatchString(id) {
 			id = uuid.NewString()
 		}
 		c.Set(ctxRequestID, id)

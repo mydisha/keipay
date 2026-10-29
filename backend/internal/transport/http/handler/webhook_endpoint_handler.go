@@ -298,7 +298,7 @@ func decodeOptionalJSON(c *gin.Context, dst any) error {
 	}
 	raw, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		return invalidBody()
+		return readError(err)
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return nil

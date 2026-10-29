@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"reflect"
 	"regexp"
 	"strconv"
@@ -59,19 +60,37 @@ func bindJSON(c *gin.Context, dst any) error {
 }
 
 // decodeJSON decodes the request body into dst without validating it. A
-// field of the wrong JSON type fails with rule type.
+// field of the wrong JSON type fails with rule type; anything after the
+// JSON value other than whitespace, and a body over the route's limit, fail
+// too.
 func decodeJSON(c *gin.Context, dst any) error {
 	if c.Request.Body == nil {
 		return invalidBody()
 	}
-	if err := json.NewDecoder(c.Request.Body).Decode(dst); err != nil {
+	dec := json.NewDecoder(c.Request.Body)
+	if err := dec.Decode(dst); err != nil {
 		var typeErr *json.UnmarshalTypeError
 		if errors.As(err, &typeErr) && typeErr.Field != "" {
 			return invalidBody(domain.FieldError{Field: typeErr.Field, Rule: "type"})
 		}
-		return invalidBody()
+		return readError(err)
+	}
+	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+		// A second value, or garbage after the first one: the decoder would
+		// silently ignore it and the caller would never learn its request
+		// was not what it meant to send.
+		return readError(err)
 	}
 	return nil
+}
+
+// readError maps a failed body read or decode to the client's error: 413
+// over the route's body limit, else invalid_request.
+func readError(err error) error {
+	if middleware.TooLarge(err) {
+		return domain.ErrRequestTooLarge
+	}
+	return invalidBody()
 }
 
 var indexRe = regexp.MustCompile(`\[([^\]]*)\]`)

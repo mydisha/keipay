@@ -194,6 +194,29 @@ func TestAppAuthOrder(t *testing.T) {
 	}
 }
 
+// A body over the route's limit is refused as 413 whatever its signature,
+// without an auth security event: the limit is not an authentication failure.
+func TestAppAuthBodyOverLimitIs413(t *testing.T) {
+	f := newAuthFixture(t)
+	c := f.addKey(t, "acme", domain.EnvLive, nil)
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.Use(RequestID(), Recover(zap.NewNop()), MaxBody(16))
+	r.POST("/x", AppAuth(f.svc, f.nonces, prefixCipher{}, f.log), func(c *gin.Context) {
+		f.seenApp, _ = AppFromContext(c)
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+	req := signed(c.apiKey, c.secret, now(), `{"note":"`+strings.Repeat("x", 32)+`"}`)
+	req.ContentLength = -1 // undeclared, so the limit trips inside AppAuth's read
+	assertEnvelope(t, serve(r, req), 413, domain.CodeRequestTooLarge)
+	if f.seenApp != nil {
+		t.Fatal("the handler ran")
+	}
+	if n := f.logs.FilterField(zap.String("log_type", "security")).Len(); n != 0 {
+		t.Fatalf("security events = %d, want none", n)
+	}
+}
+
 // A replayed signature is refused and does not touch the key again; the app
 // and key reach the handler.
 func TestAppAuthReplayAndContext(t *testing.T) {

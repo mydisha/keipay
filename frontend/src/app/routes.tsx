@@ -115,6 +115,12 @@ export const routes: RouteObject[] = [
         }),
       },
       {
+        path: "reconciliation/runs/:id",
+        lazy: async () => ({
+          Component: (await import("@/features/reconciliation/pages/run-detail-page")).RunDetailPage,
+        }),
+      },
+      {
         path: "settings",
         lazy: async () => ({ Component: (await import("@/features/settings/pages/settings-page")).SettingsPage }),
         children: [

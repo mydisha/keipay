@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, configure } from "@testing-library/react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, vi } from "vitest";
 import { clearCookies } from "./cookies";
 import { mockApi } from "./http";
@@ -17,6 +18,9 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  // Sonner keeps toasts in module state and replays the active ones to the next
+  // Toaster, so a toast from one test would otherwise show up in the next.
+  toast.dismiss();
   window.localStorage.clear();
   window.sessionStorage.clear();
   clearCookies();

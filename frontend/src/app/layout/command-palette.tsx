@@ -3,7 +3,9 @@ import { FlaskConicalIcon, MonitorIcon, MoonIcon, RadioIcon, SearchIcon, SunIcon
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
+import type { Permission } from "@/features/auth/api/auth";
 import { usePermissions } from "@/features/auth/components/can";
+import { runPath } from "@/features/reconciliation/lib/reconciliation-search";
 import { fetchWebhookEndpoint } from "@/features/webhooks/api/endpoints";
 import { deliveryPath, eventDeliveriesPath, inboundPath } from "@/features/webhooks/lib/webhooks-search";
 import { useMode } from "@/shared/lib/mode";
@@ -27,17 +29,25 @@ const themeOptions: { value: Theme; label: string; icon: typeof SunIcon }[] = [
 ];
 
 // Public ids are a prefix and a 26-character ULID; lower case is accepted.
-const RECORD_ID = /^(dlv|inb|evt|whe)_[0-9a-z]{26}$/i;
+const RECORD_ID = /^(dlv|inb|evt|whe|rec)_[0-9a-z]{26}$/i;
 
-type RecordKind = "dlv" | "inb" | "evt" | "whe";
+type RecordKind = "dlv" | "inb" | "evt" | "whe" | "rec";
 
-/** The webhook record a pasted id points to, or null. */
+/** The record (webhook log, endpoint or reconciliation run) a pasted id points to, or null. */
 export function parseRecordId(text: string): { kind: RecordKind; id: string } | null {
   const id = text.trim();
   const match = RECORD_ID.exec(id);
   if (!match) return null;
   return { kind: match[1]!.toLowerCase() as RecordKind, id };
 }
+
+const RECORD_PERMISSION: Record<RecordKind, Permission> = {
+  dlv: "deliveries:read",
+  inb: "deliveries:read",
+  evt: "deliveries:read",
+  whe: "apps:read",
+  rec: "payments:read",
+};
 
 /** Opens on ⌘K / Ctrl+K anywhere in the shell. */
 export function useCommandPaletteShortcut(toggle: () => void) {
@@ -62,7 +72,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const canManageUsers = can("users:manage");
   const [search, setSearch] = useState("");
   const record = parseRecordId(search);
-  const recordAllowed = record !== null && (record.kind === "whe" ? can("apps:read") : can("deliveries:read"));
+  const recordAllowed = record !== null && can(RECORD_PERMISSION[record.kind]);
 
   function run(action: () => void) {
     setSearch("");
@@ -78,6 +88,8 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         return void navigate(inboundPath(target.id));
       case "evt":
         return void navigate(eventDeliveriesPath(target.id));
+      case "rec":
+        return void navigate(runPath(target.id));
       case "whe":
         fetchWebhookEndpoint(queryClient, target.id).then(
           (endpoint) => void navigate(`/apps/${endpoint.app.id}/webhooks`),
@@ -92,6 +104,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
         inb: strings.palette.openInbound,
         evt: strings.palette.openEvent,
         whe: strings.palette.openEndpoint,
+        rec: strings.palette.openRun,
       }[record.kind](record.id)
     : "";
 

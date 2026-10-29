@@ -70,6 +70,25 @@ export function formatDateTimeWIB(date: Date): string {
   return `${absoluteFormat.format(date)} WIB`;
 }
 
+const dateFormat = new Intl.DateTimeFormat(DISPLAY_LOCALE, {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  timeZone: DISPLAY_TIME_ZONE,
+});
+
+const monthFormat = new Intl.DateTimeFormat(DISPLAY_LOCALE, { month: "long", year: "numeric", timeZone: DISPLAY_TIME_ZONE });
+
+/** "1 Okt 2026": the WIB calendar day of an instant. */
+export function formatDateWIB(date: Date): string {
+  return dateFormat.format(date);
+}
+
+/** "Oktober 2026": the WIB month of an instant. */
+export function formatMonthWIB(date: Date): string {
+  return monthFormat.format(date);
+}
+
 const relativeFormat = new Intl.RelativeTimeFormat(RELATIVE_LOCALE, { numeric: "auto" });
 
 const UNITS: [Intl.RelativeTimeFormatUnit, number][] = [

@@ -24,7 +24,7 @@ export function runFormSchema(today: string) {
       }
       const days = daysInRange(values.from, values.to);
       if (days < 1) ctx.addIssue({ code: "custom", path: ["to"], message: strings.reconciliation.field.toAfter });
-      else if (days > MAX_RUN_DAYS) ctx.addIssue({ code: "custom", path: ["to"], message: strings.reconciliation.field.maxRange31 });
+      else if (days > MAX_RUN_DAYS) ctx.addIssue({ code: "custom", path: ["to"], message: strings.reconciliation.rangeTooLong(MAX_RUN_DAYS) });
     });
 }
 
@@ -51,6 +51,6 @@ export const runRuleMessages: Record<string, Record<string, string>> = {
     required: strings.reconciliation.rangeToRequired,
     datetime: strings.reconciliation.rangeToRequired,
     after: strings.reconciliation.field.toAfter,
-    max_range: strings.reconciliation.field.maxRange31,
+    max_range: strings.reconciliation.rangeTooLong(MAX_RUN_DAYS),
   },
 };

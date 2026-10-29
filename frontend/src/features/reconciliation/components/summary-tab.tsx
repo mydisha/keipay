@@ -1,5 +1,5 @@
 import { CalendarRangeIcon, DownloadIcon } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { AppFilterSelect } from "@/features/apps/components/app-filter-select";
 import { AppLabel } from "@/features/apps/components/app-label";
@@ -29,9 +29,8 @@ import { SUMMARY_FILTER_KEYS, type ReconciliationSearch } from "../lib/reconcili
 import { serverRangeError, summaryRangeError } from "../lib/summary-range";
 import { DateRangeFilter, IntervalControl } from "./period-controls";
 
-/** The summary and list filters for a valid range; null while the range can't be sent. */
-export function summaryFilters(search: ReconciliationSearch, environment: ReportFilters["environment"]): ReportFilters | null {
-  if (summaryRangeError(search.range, search.interval)) return null;
+/** The summary and list filters of a range the server accepts. */
+function summaryFilters(search: ReconciliationSearch, environment: ReportFilters["environment"]): ReportFilters {
   return {
     ...wibRange(search.range.from, search.range.to),
     environment,
@@ -139,19 +138,25 @@ const summaryRowId = (row: SummaryRow) => [row.period_start, row.app.id, row.con
 
 /** Currencies seen in the totals; the chip group shows only when there is a choice. */
 function useCurrencyOptions(rows: SummaryRow[] | undefined, selected: string | null): string[] {
-  const known = useRef<string[]>([]);
-  // While one currency is chosen the totals only show that one; keep the full set.
-  if (rows && selected === null) known.current = [...new Set(rows.map((row) => row.currency))];
-  const options = new Set(known.current);
+  // While one currency is chosen the totals only show that one, so the set
+  // seen without a choice is kept. Updating state during render is React's
+  // pattern for state derived from props: it re-renders before committing.
+  const [known, setKnown] = useState<string[]>([]);
+  if (rows && selected === null) {
+    const seen = [...new Set(rows.map((row) => row.currency))].sort();
+    if (seen.join() !== known.join()) setKnown(seen);
+  }
+  const options = new Set(known);
   if (selected) options.add(selected);
   return [...options].sort();
 }
 
 export function SummaryTab({ search }: { search: ReconciliationSearch }) {
   const { mode } = useMode();
-  const filters = summaryFilters(search, mode);
+  const localRangeProblem = summaryRangeError(search.range, search.interval);
+  const filters = localRangeProblem ? null : summaryFilters(search, mode);
   const summary = usePaymentReportSummary(filters, search.interval);
-  const rangeProblem = summaryRangeError(search.range, search.interval) ?? serverRangeError(summary.error, search.interval);
+  const rangeProblem = localRangeProblem ?? serverRangeError(summary.error, search.interval);
   const blocked = rangeProblem !== null;
   const rows = blocked ? [] : summary.data?.data;
   const isEmpty = !blocked && rows !== undefined && rows.length === 0;

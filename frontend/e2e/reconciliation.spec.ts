@@ -14,7 +14,7 @@ async function useTestMode(page: Page) {
 }
 
 async function expectRunFailed(page: Page) {
-  // The worker retries a gateway that can't be reached before giving up.
+  // A page of gateway transactions is retried a few times before the run fails.
   const failed = page.getByTestId("run-failed");
   await expect(failed).toBeVisible({ timeout: 45_000 });
   await expect(failed).toContainText("This run failed");

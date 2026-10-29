@@ -205,6 +205,26 @@ describe("Summary tab", () => {
     expect(screen.getByRole("link", { name: "Export CSV" })).toHaveAttribute("download");
   });
 
+  it("keeps every currency chip while one currency is chosen", async () => {
+    const api = routes({
+      [`GET ${SUMMARY}`]: (request: Request) => {
+        const currency = new URL(request.url).searchParams.get("currency");
+        const rows = [summaryRow(), summaryRow({ currency: "USD" })].filter((row) => !currency || row.currency === currency);
+        return json(200, { interval: "total", from: MONTH_FROM, to: MONTH_TO, data: rows });
+      },
+    });
+    const { user } = renderApp("/reconciliation");
+    const chips = await screen.findByRole("group", { name: "Filter by currency" });
+    await user.click(within(chips).getByRole("button", { name: "USD" }));
+    await waitFor(() => expect(lastQuery(api, SUMMARY).currency).toBe("USD"));
+    // The totals now hold only USD rows.
+    await waitFor(() => expect(within(screen.getByRole("table", { name: "Totals" })).queryByText(/Rp/)).toBeNull());
+    const names = within(screen.getByRole("group", { name: "Filter by currency" }))
+      .getAllByRole("button")
+      .map((b) => b.textContent);
+    expect(names).toEqual(expect.arrayContaining(["IDR", "USD"]));
+  });
+
   it("hides the currency chips when only one currency appears", async () => {
     routes();
     renderApp("/reconciliation");

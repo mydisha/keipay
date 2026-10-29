@@ -30,7 +30,7 @@ import { runFormSchema, runRuleMessages, toCreateRunRequest, type RunFormValues 
 const FIELD_NAMES = ["connection_id", "from", "to"] as const;
 
 /** Connections of the mode whose provider can list its transactions; disabled ones included. */
-export function eligibleConnections(
+function eligibleConnections(
   connections: ConnectionListItem[],
   providers: Provider[],
   environment: Mode,

@@ -109,10 +109,15 @@ info:
     callers that signed with the key's secret.
 
     Only failed authentications count against the limits: unknown keys
-    against the sender's IP, bad signatures and replays against both
-    the IP and the key (by default 100 per IP and 50 per key in 15
-    minutes). Successful requests never count, so a correct
-    integration is never limited however busy it is.
+    against the sender's IP, bad signatures and replays against the
+    sender's IP and against the pair of that IP and the key (by default
+    100 per IP and 50 per IP and key in 15 minutes). The key counter is
+    per sender on purpose: someone who knows an app's key but not its
+    secret exhausts only their own allowance and cannot lock the app
+    out. Successful requests never count, so a correct integration is
+    never limited however busy it is. Behind a reverse proxy, set
+    `TRUSTED_PROXIES`, or every caller shares the proxy's address and
+    the per-IP limits apply to all apps at once.
 
     Outbound webhooks are signed with the secret of each webhook endpoint
     (see Webhooks to apps), never with an API secret, so rotating keys
@@ -651,8 +656,9 @@ paths:
         When the server has `SETUP_TOKEN` set, `setup_token` must equal it;
         otherwise the call returns `403 invalid_setup_token` and counts as a
         failed attempt for the client IP. Checks run in this order: body
-        (`400`), IP rate limit (`429`), already set up (`409`), setup token
-        (`403`).
+        (`400`), IP rate limit (`429`), already set up (`409`), a
+        production server without `SETUP_TOKEN` (`503
+        setup_token_not_configured`, not counted), setup token (`403`).
       security:
         - csrfToken: []
       requestBody:
@@ -3031,8 +3037,6 @@ webhooks:
       responses:
         '200':
           description: Acknowledged. Any 2xx status works.
-        '413':
-          $ref: '#/components/responses/PayloadTooLarge'
   paymentEventV1:
     post:
       operationId: paymentEventWebhookV1
@@ -3080,8 +3084,6 @@ webhooks:
       responses:
         '200':
           description: Acknowledged. Any 2xx status works.
-        '413':
-          $ref: '#/components/responses/PayloadTooLarge'
 
 components:
   securitySchemes:

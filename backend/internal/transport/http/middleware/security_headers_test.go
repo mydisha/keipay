@@ -8,7 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func TestSecurityHeaders_Defaults(t *testing.T) {
+func TestSecurityHeadersDefaults(t *testing.T) {
 	w := serve(newEngine(SecurityHeaders(SecurityHeadersConfig{})), httptest.NewRequest(http.MethodGet, "/x", nil))
 	want := map[string]string{
 		"X-Content-Type-Options":     "nosniff",
@@ -29,7 +29,7 @@ func TestSecurityHeaders_Defaults(t *testing.T) {
 	}
 }
 
-func TestSecurityHeaders_HSTSOnlyWhenEnabled(t *testing.T) {
+func TestSecurityHeadersHSTSOnlyWhenEnabled(t *testing.T) {
 	w := serve(newEngine(SecurityHeaders(SecurityHeadersConfig{HSTS: true})), httptest.NewRequest(http.MethodGet, "/x", nil))
 	if got := w.Header().Get("Strict-Transport-Security"); got != "max-age=31536000; includeSubDomains" {
 		t.Fatalf("HSTS = %q", got)
@@ -38,7 +38,7 @@ func TestSecurityHeaders_HSTSOnlyWhenEnabled(t *testing.T) {
 
 // A handler that serves something cacheable or renderable replaces the
 // defaults for its own response only.
-func TestSecurityHeaders_HandlerOverrides(t *testing.T) {
+func TestSecurityHeadersHandlerOverrides(t *testing.T) {
 	r := newEngine(SecurityHeaders(SecurityHeadersConfig{}), func(c *gin.Context) {
 		c.Header("Cache-Control", "public, max-age=60")
 		c.Header("Content-Security-Policy", ConsoleContentSecurityPolicy)

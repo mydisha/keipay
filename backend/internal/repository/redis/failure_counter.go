@@ -16,13 +16,14 @@ const loginScope = "loginfail"
 // failureKeyPrefix builds the Redis key prefix of a scope.
 func failureKeyPrefix(scope string) string { return "keipay:" + scope + ":" }
 
-// reserveAttempt checks every counter against its maximum (ARGV[i+1]) and,
-// only when none is exceeded, increments them all. It returns -1 when the
-// attempt was counted, else the longest PTTL among the exceeded counters.
-// Running check and increment in one script is what makes the limit hold
-// under concurrency. Any counter it touches without an expiry gets one, so a
-// crash can never lock a key forever.
-var reserveAttempt = redis.NewScript(`
+// The failure scripts are built from two fragments so the check and the
+// count never drift apart. checkLua sets `wait` to the longest PTTL among
+// the counters at or over their maximum (ARGV[i+1]), or -1 when none is;
+// a counter it finds without an expiry gets one of ARGV[1] milliseconds, so
+// a crash can never lock a key forever. countLua increments every counter
+// and starts the window of a counter that has none.
+const (
+	checkLua = `
 local window = tonumber(ARGV[1])
 local wait = -1
 for i, key in ipairs(KEYS) do
@@ -35,49 +36,27 @@ for i, key in ipairs(KEYS) do
     end
     if ttl > wait then wait = ttl end
   end
-end
-if wait >= 0 then
-  return wait
-end
+end`
+	countLua = `
 for _, key in ipairs(KEYS) do
   redis.call('INCR', key)
   if redis.call('PTTL', key) < 0 then
-    redis.call('PEXPIRE', key, window)
+    redis.call('PEXPIRE', key, tonumber(ARGV[1]))
   end
-end
-return -1
-`)
+end`
+)
 
-// blockedAttempt is the check half of reserveAttempt: it returns the longest
-// PTTL among the counters at or over their maximum (ARGV[i]), or -1 when
-// none is, and counts nothing.
-var blockedAttempt = redis.NewScript(`
-local window = tonumber(ARGV[1])
-local wait = -1
-for i, key in ipairs(KEYS) do
-  local n = tonumber(redis.call('GET', key) or '0')
-  if n >= tonumber(ARGV[i + 1]) then
-    local ttl = redis.call('PTTL', key)
-    if ttl < 0 then
-      redis.call('PEXPIRE', key, window)
-      ttl = window
-    end
-    if ttl > wait then wait = ttl end
-  end
-end
-return wait
-`)
-
-// countFailure is the increment half of reserveAttempt.
-var countFailure = redis.NewScript(`
-for _, key in ipairs(KEYS) do
-  redis.call('INCR', key)
-  if redis.call('PTTL', key) < 0 then
-    redis.call('PEXPIRE', key, ARGV[1])
-  end
-end
-return 0
-`)
+var (
+	// reserveAttempt counts one attempt under every counter, or none when
+	// one is at its maximum, in one script so the limit holds under
+	// concurrency. It returns -1 when the attempt was counted, else the
+	// longest wait.
+	reserveAttempt = redis.NewScript(checkLua + "\nif wait >= 0 then return wait end" + countLua + "\nreturn -1")
+	// blockedAttempt is the check alone.
+	blockedAttempt = redis.NewScript(checkLua + "\nreturn wait")
+	// countFailure is the count alone.
+	countFailure = redis.NewScript(countLua + "\nreturn 0")
+)
 
 // releaseAttempt decrements existing counters and deletes those that reach
 // zero. A counter whose window already ended is left alone rather than being
@@ -153,10 +132,10 @@ func (f *FailureCounter) Release(ctx context.Context, keys ...string) error {
 }
 
 // Blocked reports whether any limit is reached, counting nothing. A counter
-// found without an expiry is given one of a window, so it cannot block
-// forever; the window only matters in that case.
-func (f *FailureCounter) Blocked(ctx context.Context, limits ...domain.FailureLimit) (bool, time.Duration, error) {
-	keys, args := f.limitArgs(blockedWindow, limits)
+// found without an expiry is given one of window, so it cannot block
+// forever; the window matters only in that case.
+func (f *FailureCounter) Blocked(ctx context.Context, window time.Duration, limits ...domain.FailureLimit) (bool, time.Duration, error) {
+	keys, args := f.limitArgs(window, limits)
 	wait, err := blockedAttempt.Run(ctx, f.rdb, keys, args...).Int64()
 	if err != nil {
 		return false, 0, fmt.Errorf("check limits: %w", err)
@@ -166,9 +145,6 @@ func (f *FailureCounter) Blocked(ctx context.Context, limits ...domain.FailureLi
 	}
 	return true, time.Duration(wait) * time.Millisecond, nil
 }
-
-// blockedWindow is the expiry Blocked gives a counter that has none.
-const blockedWindow = 15 * time.Minute
 
 // Fail counts one failure under every key.
 func (f *FailureCounter) Fail(ctx context.Context, window time.Duration, keys ...string) error {

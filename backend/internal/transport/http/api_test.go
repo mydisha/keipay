@@ -124,14 +124,21 @@ func (directTx) WithinTx(ctx context.Context, fn func(context.Context) error) er
 // testPassword is the password of every user the fixture creates.
 const testPassword = "correct-horse-1"
 
+// testCallbackLimit is the fixture's rejected-callback limit per IP and per
+// connection; testAuthLimits are its /v1 failure limits.
+const testCallbackLimit = 60
+
+var testAuthLimits = middleware.AuthLimits{MaxFailuresPerIP: 100, MaxFailuresPerKey: 50, Window: 15 * time.Minute}
+
 type apiFixture struct {
 	router   *gin.Engine
 	deps     Deps
 	users    *memstore.Users
 	sessions *memstore.Sessions
 	failures *memstore.Failures
-	// callbackFailures is the rejected-callback limiter: 60 per IP and per
-	// connection in 15 minutes. Seed it with Inc to reach a limit.
+	// authFailures and callbackFailures back the /v1 and callback limits
+	// (testAuthLimits, testCallbackLimit). Seed them with Inc to reach one.
+	authFailures     *memstore.Failures
 	callbackFailures *memstore.Failures
 	audit            *auditRepo
 	auth             *service.AuthService
@@ -183,7 +190,8 @@ func newAPI(t *testing.T, frontendDir string, opts ...apiOption) *apiFixture {
 		MaxFailuresPerIP: 20, MaxFailuresPerEmail: 5, FailureWindow: 15 * time.Minute,
 	}
 	auditSvc := service.NewAuditService(f.audit)
-	f.deps = Deps{Log: log, FrontendDir: frontendDir}
+	f.authFailures = memstore.NewFailures(time.Now)
+	f.deps = Deps{Log: log, FrontendDir: frontendDir, AuthLimiter: f.authFailures, AuthLimits: testAuthLimits}
 	for _, opt := range opts {
 		opt(&cfg, &f.deps)
 	}
@@ -222,7 +230,7 @@ func newAPI(t *testing.T, frontendDir string, opts ...apiOption) *apiFixture {
 	webhookSvc := service.NewWebhookService(service.WebhookDeps{
 		Payments: f.payments, Reports: f.reports, Inbound: f.hooks.Inbound(), Events: f.hooks.Events(),
 		Endpoints: f.hooks.Endpoints(), Deliveries: f.hooks.Deliveries(), Tx: tx, Enqueuer: f.queue, Log: log,
-		Limiter: f.callbackFailures, Limits: service.CallbackLimits{MaxRejectedPerIP: 60, MaxRejectedPerConnection: 60, Window: 15 * time.Minute},
+		Limiter: f.callbackFailures, Limits: service.CallbackLimits{MaxRejectedPerIP: testCallbackLimit, MaxRejectedPerConnection: testCallbackLimit, Window: 15 * time.Minute},
 	})
 	endpointSvc := service.NewWebhookEndpointService(service.WebhookEndpointDeps{
 		Apps: f.apps, Endpoints: f.hooks.Endpoints(), Events: f.hooks.Events(), Deliveries: f.hooks.Deliveries(),

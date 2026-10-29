@@ -634,15 +634,16 @@ func TestAppDefaultConnectionOverHTTP(t *testing.T) {
 	}
 }
 
-// Rejected callbacks are limited per sender and per connection: at the
-// limit they are refused with 429 and not recorded, while a valid callback
-// from the same sender still goes through.
+// Rejected callbacks are limited per sender and, for failed verification,
+// per connection: at the limit they are refused with 429 and not recorded,
+// while a verified callback from the same sender still goes through, parsed
+// or not.
 func TestCallbackRateLimitOverHTTP(t *testing.T) {
 	f := newAPI(t, "")
 	a := f.addXendit(t, "xendit-a", "xnd_development_aaa", "token-of-a")
 	pa := f.addPayment(t, a, 5000)
 	target := "/webhooks/xendit/" + a.PublicID
-	for i := 0; i < 58; i++ {
+	for i := 0; i < testCallbackLimit-2; i++ {
 		f.callbackFailures.Inc("con:"+a.PublicID, 15*time.Minute)
 	}
 	for i := 0; i < 2; i++ {
@@ -657,8 +658,12 @@ func TestCallbackRateLimitOverHTTP(t *testing.T) {
 	if n := f.logs.FilterField(stringField("event", "callback.rate_limited")).Len(); n != 1 {
 		t.Fatalf("rate_limited events = %d", n)
 	}
-	// A verified callback with an unparsable body is rejected the same way.
-	expectError(t, f.send(nil, http.MethodPost, target, `not json`, "x-callback-token", "token-of-a"), http.StatusTooManyRequests, domain.CodeRateLimited)
+	// A verified callback with an unparsable body is still recorded: the
+	// connection's limit only counts failed verifications.
+	expectError(t, f.send(nil, http.MethodPost, target, `not json`, "x-callback-token", "token-of-a"), http.StatusBadRequest, domain.CodeInvalidRequest)
+	if len(f.hooks.AllInbound()) != rows+1 {
+		t.Fatal("the unparsable verified callback was not recorded")
+	}
 	// Accepted callbacks are never limited.
 	w = f.send(nil, http.MethodPost, target, xenditCallbackBody(pa, "inv_ok", "PAID"), "x-callback-token", "token-of-a")
 	if w.Code != http.StatusOK || f.paymentStatus(t, pa) != domain.PaymentStatusPaid {

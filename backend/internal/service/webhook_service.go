@@ -176,24 +176,26 @@ func (s *WebhookService) Process(ctx context.Context, conn *domain.Connection, e
 // RecordRejected logs a callback that failed before processing: verification
 // (InboundInvalidSignature; the body is cut to MaxRejectedBodyBytes, since
 // anyone can send it) or parsing (InboundInvalidPayload, cut to
-// MaxUnappliedBodyBytes). It counts against the sender's and the
-// connection's rejected-callback limits, read from the ClientMeta in ctx;
-// once a limit is reached it records nothing and returns rate_limited.
-// Failing to write is logged, not returned, and so is a limiter that does
-// not answer: a gateway's retries matter more than the limit.
+// MaxUnappliedBodyBytes). Rejected callbacks count against the sender's
+// limit, read from the ClientMeta in ctx, and failed verifications also
+// against the connection's, so a stranger who knows the URL cannot use up
+// the limit that a verified but unparsable callback from the gateway would
+// then hit. Once a limit is reached nothing is recorded and rate_limited is
+// returned. Failing to write is logged, not returned, and so is a limiter
+// that does not answer: a gateway's retries matter more than the limit.
 func (s *WebhookService) RecordRejected(ctx context.Context, conn *domain.Connection, raw []byte, result domain.InboundResult, detail string) error {
 	meta := ClientMetaFromContext(ctx)
-	ipKey, connKey := "ip:"+meta.IP, "con:"+conn.PublicID
+	keys := []string{"ip:" + meta.IP}
+	limits := []domain.FailureLimit{{Key: keys[0], Max: s.limits.MaxRejectedPerIP}}
+	if result == domain.InboundInvalidSignature {
+		keys = append(keys, "con:"+conn.PublicID)
+		limits = append(limits, domain.FailureLimit{Key: keys[1], Max: s.limits.MaxRejectedPerConnection})
+	}
 	if s.limiter != nil {
-		blocked, wait, err := s.limiter.Blocked(ctx,
-			domain.FailureLimit{Key: ipKey, Max: s.limits.MaxRejectedPerIP},
-			domain.FailureLimit{Key: connKey, Max: s.limits.MaxRejectedPerConnection})
+		blocked, wait, err := s.limiter.Blocked(ctx, s.limits.Window, limits...)
 		switch {
 		case err != nil:
-			logger.Ctx(ctx, s.log).Warn("callback limiter unavailable",
-				zap.String(logger.FieldLogType, logger.LogTypeWebhook),
-				zap.String(logger.FieldEvent, "webhook.inbound.limiter_unavailable"),
-				zap.String("connection_id", conn.PublicID), zap.Error(err))
+			s.limiterUnavailable(ctx, conn, "callback limiter unavailable", err)
 		case blocked:
 			logger.Security(s.log, logger.EventCallbackRateLimited, logger.SeverityMedium, meta.IP, meta.RequestID,
 				"too many rejected callbacks", zap.String("connection_id", conn.PublicID), zap.String("provider", conn.Provider),
@@ -203,14 +205,18 @@ func (s *WebhookService) RecordRejected(ctx context.Context, conn *domain.Connec
 	}
 	s.record(ctx, s.newInbound(conn, raw, result, detail))
 	if s.limiter != nil {
-		if err := s.limiter.Fail(context.WithoutCancel(ctx), s.limits.Window, ipKey, connKey); err != nil {
-			logger.Ctx(ctx, s.log).Warn("rejected callback not counted",
-				zap.String(logger.FieldLogType, logger.LogTypeWebhook),
-				zap.String(logger.FieldEvent, "webhook.inbound.limiter_unavailable"),
-				zap.String("connection_id", conn.PublicID), zap.Error(err))
+		if err := s.limiter.Fail(context.WithoutCancel(ctx), s.limits.Window, keys...); err != nil {
+			s.limiterUnavailable(ctx, conn, "rejected callback not counted", err)
 		}
 	}
 	return nil
+}
+
+func (s *WebhookService) limiterUnavailable(ctx context.Context, conn *domain.Connection, msg string, err error) {
+	logger.Ctx(ctx, s.log).Warn(msg,
+		zap.String(logger.FieldLogType, logger.LogTypeWebhook),
+		zap.String(logger.FieldEvent, "webhook.inbound.limiter_unavailable"),
+		zap.String("connection_id", conn.PublicID), zap.Error(err))
 }
 
 func (s *WebhookService) newInbound(conn *domain.Connection, raw []byte, result domain.InboundResult, detail string) *domain.InboundWebhook {

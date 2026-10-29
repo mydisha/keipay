@@ -518,7 +518,7 @@ func (f *Failures) Release(_ context.Context, keys ...string) error {
 }
 
 // Blocked reports whether any limit is reached, counting nothing.
-func (f *Failures) Blocked(_ context.Context, limits ...domain.FailureLimit) (bool, time.Duration, error) {
+func (f *Failures) Blocked(_ context.Context, _ time.Duration, limits ...domain.FailureLimit) (bool, time.Duration, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.Err != nil {

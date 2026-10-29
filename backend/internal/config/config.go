@@ -206,7 +206,10 @@ func (c *Config) Warnings() []string {
 		out = append(out, "POSTGRES_DSN has sslmode=disable: payments and encrypted secrets travel in clear to the database")
 	}
 	if c.SetupToken == "" {
-		out = append(out, "SETUP_TOKEN is empty: first-run setup is refused until it is set")
+		out = append(out, "SETUP_TOKEN is empty: first-run setup is refused until it is set (harmless once the owner exists)")
+	}
+	if len(c.TrustedProxies) == 0 {
+		out = append(out, "TRUSTED_PROXIES is empty: behind a reverse proxy every client shares the proxy's address, so the per-IP sign-in, /v1 and callback limits apply to all of them at once")
 	}
 	return out
 }
@@ -251,18 +254,23 @@ func (c *Config) validateAuth() error {
 	if c.LoginFailureWindow <= 0 {
 		return fmt.Errorf("LOGIN_FAILURE_WINDOW must be greater than zero")
 	}
-	for name, n := range map[string]int{
-		"V1_AUTH_MAX_FAILURES_PER_IP": c.V1AuthMaxFailuresPerIP, "V1_AUTH_MAX_FAILURES_PER_KEY": c.V1AuthMaxFailuresPerKey,
-		"CALLBACK_MAX_REJECTED_PER_IP": c.CallbackMaxRejectedPerIP, "CALLBACK_MAX_REJECTED_PER_CONNECTION": c.CallbackMaxRejectedPerConnection,
-	} {
-		if n < 1 {
-			return fmt.Errorf("%s must be at least 1", name)
-		}
+	if c.V1AuthMaxFailuresPerIP < 1 {
+		return fmt.Errorf("V1_AUTH_MAX_FAILURES_PER_IP must be at least 1")
 	}
-	for name, d := range map[string]time.Duration{"V1_AUTH_FAILURE_WINDOW": c.V1AuthFailureWindow, "CALLBACK_REJECTED_WINDOW": c.CallbackRejectedWindow} {
-		if d <= 0 {
-			return fmt.Errorf("%s must be greater than zero", name)
-		}
+	if c.V1AuthMaxFailuresPerKey < 1 {
+		return fmt.Errorf("V1_AUTH_MAX_FAILURES_PER_KEY must be at least 1")
+	}
+	if c.V1AuthFailureWindow <= 0 {
+		return fmt.Errorf("V1_AUTH_FAILURE_WINDOW must be greater than zero")
+	}
+	if c.CallbackMaxRejectedPerIP < 1 {
+		return fmt.Errorf("CALLBACK_MAX_REJECTED_PER_IP must be at least 1")
+	}
+	if c.CallbackMaxRejectedPerConnection < 1 {
+		return fmt.Errorf("CALLBACK_MAX_REJECTED_PER_CONNECTION must be at least 1")
+	}
+	if c.CallbackRejectedWindow <= 0 {
+		return fmt.Errorf("CALLBACK_REJECTED_WINDOW must be greater than zero")
 	}
 	proxies, err := parseTrustedProxies(c.TrustedProxiesRaw)
 	if err != nil {

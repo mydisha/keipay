@@ -25,7 +25,7 @@ func readAll(c *gin.Context) {
 	}
 }
 
-func TestMaxBody_DeclaredLengthOverLimitIsRefusedUnread(t *testing.T) {
+func TestMaxBodyDeclaredLengthOverLimitIsRefusedUnread(t *testing.T) {
 	handled := false
 	r := newEngine(MaxBody(16), func(c *gin.Context) { handled = true; c.Next() }, readAll)
 	req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(strings.Repeat("a", 17)))
@@ -40,7 +40,7 @@ func TestMaxBody_DeclaredLengthOverLimitIsRefusedUnread(t *testing.T) {
 }
 
 // Without a Content-Length the limit holds while the body is read.
-func TestMaxBody_UndeclaredLengthFailsOnRead(t *testing.T) {
+func TestMaxBodyUndeclaredLengthFailsOnRead(t *testing.T) {
 	r := newEngine(MaxBody(16), readAll)
 	req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(strings.Repeat("a", 17)))
 	req.ContentLength = -1
@@ -49,7 +49,7 @@ func TestMaxBody_UndeclaredLengthFailsOnRead(t *testing.T) {
 	}
 }
 
-func TestMaxBody_UnderLimitAndNoBodyPass(t *testing.T) {
+func TestMaxBodyUnderLimitAndNoBodyPass(t *testing.T) {
 	r := newEngine(MaxBody(16), readAll)
 	if w := serve(r, httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(strings.Repeat("a", 16)))); w.Code != http.StatusOK {
 		t.Fatalf("at the limit: %d %s", w.Code, w.Body.String())

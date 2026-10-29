@@ -16,7 +16,7 @@ import (
 func newTestRouter(t *testing.T, frontendDir string) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	return NewRouter(Deps{Log: zap.NewNop(), FrontendDir: frontendDir})
+	return NewRouter(Deps{Log: zap.NewNop(), FrontendDir: frontendDir, NonceStore: &memNonces{seen: map[string]bool{}}})
 }
 
 func get(r http.Handler, target string) *httptest.ResponseRecorder {
@@ -54,8 +54,9 @@ func TestRouter_SecurityHeadersOnEveryResponse(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dist, "index.html"), []byte("<html>console</html>"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	withConsole := NewRouter(Deps{Log: zap.NewNop(), FrontendDir: dist, SecurityHeaders: middleware.SecurityHeadersConfig{HSTS: true}})
-	plain := NewRouter(Deps{Log: zap.NewNop()})
+	nonces := &memNonces{seen: map[string]bool{}}
+	withConsole := NewRouter(Deps{Log: zap.NewNop(), FrontendDir: dist, NonceStore: nonces, SecurityHeaders: middleware.SecurityHeadersConfig{HSTS: true}})
+	plain := NewRouter(Deps{Log: zap.NewNop(), NonceStore: nonces})
 	cases := []struct {
 		r      http.Handler
 		target string

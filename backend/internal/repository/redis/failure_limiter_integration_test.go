@@ -21,7 +21,7 @@ func TestIntegrationFailureLimiter(t *testing.T) {
 	window := time.Minute
 	limits := []domain.FailureLimit{{Key: key, Max: 2}, {Key: other, Max: 10}}
 
-	if blocked, _, err := fc.Blocked(ctx, limits...); err != nil || blocked {
+	if blocked, _, err := fc.Blocked(ctx, window, limits...); err != nil || blocked {
 		t.Fatalf("fresh: blocked %v, %v", blocked, err)
 	}
 	for i := 0; i < 2; i++ {
@@ -36,7 +36,7 @@ func TestIntegrationFailureLimiter(t *testing.T) {
 	if ttl := rdb.PTTL(ctx, full).Val(); ttl <= 0 || ttl > window {
 		t.Fatalf("ttl = %v", ttl)
 	}
-	blocked, wait, err := fc.Blocked(ctx, limits...)
+	blocked, wait, err := fc.Blocked(ctx, window, limits...)
 	if err != nil || !blocked || wait <= 0 || wait > window {
 		t.Fatalf("at the limit: blocked %v, wait %v, %v", blocked, wait, err)
 	}
@@ -44,7 +44,7 @@ func TestIntegrationFailureLimiter(t *testing.T) {
 	if n := rdb.Get(ctx, full).Val(); n != "2" {
 		t.Fatalf("Blocked changed the counter to %q", n)
 	}
-	if blocked, _, _ := fc.Blocked(ctx, domain.FailureLimit{Key: other, Max: 10}); blocked {
+	if blocked, _, _ := fc.Blocked(ctx, window, domain.FailureLimit{Key: other, Max: 10}); blocked {
 		t.Fatal("the other key is blocked")
 	}
 
@@ -52,7 +52,7 @@ func TestIntegrationFailureLimiter(t *testing.T) {
 	if err := rdb.Persist(ctx, full).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := fc.Blocked(ctx, limits...); err != nil {
+	if _, _, err := fc.Blocked(ctx, window, limits...); err != nil {
 		t.Fatal(err)
 	}
 	if ttl := rdb.PTTL(ctx, full).Val(); ttl <= 0 {
@@ -60,7 +60,7 @@ func TestIntegrationFailureLimiter(t *testing.T) {
 	}
 
 	// The login counter lives under its own prefix: the same key is free there.
-	if blocked, _, _ := NewFailureCounter(rdb).Blocked(ctx, domain.FailureLimit{Key: key, Max: 1}); blocked {
+	if blocked, _, _ := NewFailureCounter(rdb).Blocked(ctx, window, domain.FailureLimit{Key: key, Max: 1}); blocked {
 		t.Fatal("scopes share counters")
 	}
 	if err := fc.Fail(ctx, window); err != nil {

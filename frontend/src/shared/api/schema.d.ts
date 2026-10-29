@@ -192,8 +192,9 @@ export interface paths {
          *     When the server has `SETUP_TOKEN` set, `setup_token` must equal it;
          *     otherwise the call returns `403 invalid_setup_token` and counts as a
          *     failed attempt for the client IP. Checks run in this order: body
-         *     (`400`), IP rate limit (`429`), already set up (`409`), setup token
-         *     (`403`).
+         *     (`400`), IP rate limit (`429`), already set up (`409`), a
+         *     production server without `SETUP_TOKEN` (`503
+         *     setup_token_not_configured`, not counted), setup token (`403`).
          */
         post: operations["completeSetup"];
         delete?: never;
@@ -5544,7 +5545,6 @@ export interface operations {
                 };
                 content?: never;
             };
-            413: components["responses"]["PayloadTooLarge"];
         };
     };
     paymentEventWebhookV1: {
@@ -5573,7 +5573,6 @@ export interface operations {
                 };
                 content?: never;
             };
-            413: components["responses"]["PayloadTooLarge"];
         };
     };
 }

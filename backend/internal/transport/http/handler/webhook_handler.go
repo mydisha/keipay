@@ -15,6 +15,7 @@ import (
 	"github.com/mydisha/keipay/backend/internal/pkg/logger"
 	"github.com/mydisha/keipay/backend/internal/service"
 	"github.com/mydisha/keipay/backend/internal/transport/http/dto"
+	"github.com/mydisha/keipay/backend/internal/transport/http/middleware"
 	"github.com/mydisha/keipay/backend/internal/transport/http/response"
 )
 
@@ -77,9 +78,8 @@ func (h *WebhookHandler) receive(c *gin.Context, resolve resolver) {
 
 	raw, err := io.ReadAll(http.MaxBytesReader(c.Writer, c.Request.Body, MaxCallbackBytes))
 	if err != nil {
-		var tooLarge *http.MaxBytesError
 		event, apiErr := "webhook.inbound.read_error", invalidBody()
-		if errors.As(err, &tooLarge) {
+		if middleware.TooLarge(err) {
 			event, apiErr = "webhook.inbound.too_large", domain.ErrRequestTooLarge
 		}
 		log.Warn("webhook inbound read failed",

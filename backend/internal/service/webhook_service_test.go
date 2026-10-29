@@ -528,12 +528,13 @@ func (f *webhookFixture) withCallbackLimits(perIP, perConn int) *memstore.Failur
 	return limiter
 }
 
-// Rejected callbacks count per sender and per connection; at a limit they
-// are refused without a row, while accepted callbacks are untouched.
+// Rejected callbacks count per sender, and failed verifications also per
+// connection; at a limit they are refused without a row. A verified but
+// unparsable callback is not held back by the connection's limit, and
+// accepted callbacks are untouched.
 func TestRecordRejectedBlockedAfterLimit(t *testing.T) {
 	f := newWebhookFixture(t)
 	limiter := f.withCallbackLimits(10, 2)
-	other := f.addConnection(t, "xendit-b")
 	ctx := WithClientMeta(context.Background(), ClientMeta{IP: "203.0.113.9", RequestID: "req-1"})
 	for i := 0; i < 2; i++ {
 		if err := f.svc.RecordRejected(ctx, f.conn, []byte(`x`), domain.InboundInvalidSignature, "bad token"); err != nil {
@@ -551,18 +552,31 @@ func TestRecordRejectedBlockedAfterLimit(t *testing.T) {
 	if n := len(f.hooks.AllInbound()); n != 2 {
 		t.Fatalf("rows = %d, the refused callback was recorded", n)
 	}
-	// The connection's limit is its own: another connection from the same
-	// sender is still recorded, and a missing reference goes the same way.
-	if err := f.svc.RecordRejected(ctx, other, []byte(`x`), domain.InboundInvalidPayload, "bad body"); err != nil {
+	// The gateway's own unparsable callback is still recorded and counts
+	// only against the sender, not the connection.
+	if err := f.svc.RecordRejected(ctx, f.conn, []byte(`x`), domain.InboundInvalidPayload, "bad body"); err != nil {
 		t.Fatal(err)
 	}
 	unkeyed := xenditCallback{ID: "", ExternalID: "", Status: "PAID", Amount: 5000, Currency: "IDR"}
-	if err := f.process(t, f.conn, unkeyed); !errors.Is(err, domain.ErrRateLimited) {
-		t.Fatalf("missing key on a blocked connection: %v", err)
+	if err := f.svc.Process(ctx, f.conn, unkeyed.event(), unkeyed.raw()); !errors.Is(err, domain.ErrInvalidInput) {
+		t.Fatalf("missing key on a connection at its limit: %v", err)
+	}
+	if n, c := len(f.hooks.AllInbound()), limiter.Value("con:"+f.conn.PublicID); n != 4 || c != 2 {
+		t.Fatalf("rows = %d, connection counter = %d", n, c)
 	}
 	// Accepted callbacks are never limited.
 	if err := f.svc.Process(ctx, f.conn, paid(f.payment.ExternalID, 5000).event(), paid(f.payment.ExternalID, 5000).raw()); err != nil {
-		t.Fatalf("accepted callback on a blocked connection: %v", err)
+		t.Fatalf("accepted callback on a connection at its limit: %v", err)
+	}
+
+	// The sender's limit covers every kind of rejection.
+	f = newWebhookFixture(t)
+	f.withCallbackLimits(1, 10)
+	if err := f.svc.RecordRejected(ctx, f.conn, []byte(`x`), domain.InboundInvalidPayload, "bad body"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.RecordRejected(ctx, f.conn, []byte(`x`), domain.InboundInvalidPayload, "bad body"); !errors.Is(err, domain.ErrRateLimited) {
+		t.Fatalf("sender over its limit: %v", err)
 	}
 }
 

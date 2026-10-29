@@ -35,6 +35,8 @@ func deleteApp(pool *pgxpool.Pool, a *domain.App) {
 			OR event_id IN (SELECT id FROM events WHERE app_id=$1)`,
 		`DELETE FROM events WHERE app_id=$1`,
 		`DELETE FROM webhook_endpoints WHERE app_id=$1`,
+		`DELETE FROM reconciliation_items WHERE payment_id IN (SELECT id FROM payments WHERE app_id=$1)`,
+		`DELETE FROM payment_reports WHERE app_id=$1`,
 		`DELETE FROM ledger_entries WHERE app_id=$1`,
 		`DELETE FROM payments WHERE app_id=$1`,
 		`DELETE FROM app_api_keys WHERE app_id=$1`,
@@ -72,6 +74,8 @@ func deleteConnection(pool *pgxpool.Pool, id int64, publicID string) {
 		`UPDATE apps SET default_connection_id = NULL WHERE default_connection_id = $1`,
 		`UPDATE payments SET connection_id = NULL WHERE connection_id = $1`,
 		`UPDATE merchants SET legacy_connection_id = NULL WHERE legacy_connection_id = $1`,
+		`DELETE FROM reconciliation_runs WHERE connection_id = $1`,
+		`UPDATE payment_reports SET connection_id = NULL WHERE connection_id = $1`,
 		`DELETE FROM inbound_webhooks WHERE connection_id = $1`,
 		`DELETE FROM connections WHERE id = $1`,
 	} {

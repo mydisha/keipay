@@ -15,7 +15,6 @@ func named(n provider.Name) *providertest.Fake {
 	return f
 }
 
-// T-2 / AC-1
 func TestRegistry(t *testing.T) {
 	if _, err := provider.NewRegistry(named("a"), named("a")); err == nil {
 		t.Fatal("duplicate name accepted")
@@ -39,6 +38,29 @@ func TestRegistry(t *testing.T) {
 	}
 	if !r.Has("alpha") || r.Has("nope") {
 		t.Fatal("Has")
+	}
+}
+
+// withoutLister hides the fake's ListTransactions: only the Provider methods
+// are promoted from the embedded interface.
+type withoutLister struct{ provider.Provider }
+
+// An adapter declaring list_transactions must implement it.
+func TestRegistryRequiresTransactionListerForCapability(t *testing.T) {
+	declares := named("declares")
+	if _, err := provider.NewRegistry(withoutLister{declares}); err == nil {
+		t.Fatal("adapter declaring list_transactions without ListTransactions was accepted")
+	}
+	plain := named("plain")
+	plain.Caps.ListTransactions = false
+	if _, err := provider.NewRegistry(withoutLister{plain}); err != nil {
+		t.Fatalf("adapter without the capability: %v", err)
+	}
+	if _, err := provider.NewRegistry(declares, xendit.New()); err != nil {
+		t.Fatalf("adapters that list transactions: %v", err)
+	}
+	if !xendit.New().Capabilities().ListTransactions {
+		t.Fatal("xendit does not declare list_transactions")
 	}
 }
 

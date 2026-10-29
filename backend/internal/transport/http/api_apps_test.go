@@ -78,7 +78,7 @@ func (f *apiFixture) createApp(t *testing.T, b *browser, body string) createdApp
 	}
 }
 
-// T-16 / AC-8: response shapes of App, ApiKey and AppCreatedResponse.
+// Response shapes of App, ApiKey and AppCreatedResponse.
 func TestAppResponseShapes(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
@@ -86,7 +86,7 @@ func TestAppResponseShapes(t *testing.T) {
 	m := decode(t, f.send(owner, http.MethodPost, "/admin/apps",
 		`{"name":"Acme","slug":"acme","environment":"test","metadata":{"tier":12345678901234567890,"note":"ü"}}`),
 		http.StatusCreated)
-	// T-B33 / AC-18: no webhook_url or webhook_secret any more.
+	// No webhook_url or webhook_secret any more.
 	keysOf(t, "created", m, "app", "key", "api_key", "api_secret")
 	app := keysOf(t, "app", m["app"], appKeys...)
 	key := keysOf(t, "key", m["key"], apiKeyKeys...)
@@ -147,7 +147,6 @@ func TestAppResponseShapes(t *testing.T) {
 	decode(t, f.send(owner, http.MethodGet, "/admin/apps/"+lower, ""), http.StatusOK)
 }
 
-// T-16: path and query errors.
 func TestAppRequestErrors(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
@@ -180,11 +179,11 @@ func TestAppRequestErrors(t *testing.T) {
 		expectFields(t, expectError(t, f.send(owner, http.MethodGet, "/admin/payments?"+q, ""), 400, domain.CodeInvalidRequest), want)
 	}
 	decode(t, f.send(owner, http.MethodGet, "/admin/payments?app_id="+strings.ToLower(app.id[:4])+app.id[4:]+"&status=PAID&from=2026-01-01T00:00:00Z&to=2026-12-31T00:00:00%2B07:00", ""), http.StatusOK)
-	// The legacy offset ledger ignores a malformed app_id.
-	decode(t, f.send(owner, http.MethodGet, "/admin/ledger?app_id=1", ""), http.StatusOK)
+	// The offset ledger is gone; payment reports replace it.
+	expectError(t, f.send(owner, http.MethodGet, "/admin/ledger?app_id=1", ""), http.StatusNotFound, domain.CodeNotFound)
 }
 
-// AC-9: PATCH refuses slug and environment and needs an updatable field.
+// PATCH refuses slug and environment and needs an updatable field.
 func TestAppPatch(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
@@ -230,9 +229,8 @@ func TestAppPatch(t *testing.T) {
 	f.createApp(t, owner, `{"name":"Acme Test","slug":"acme","environment":"test"}`)
 }
 
-// AC-12 at the HTTP layer: app and key mutations record the signed-in user
-// with the request origin; a failing audit insert answers 500 and keeps
-// nothing.
+// At the HTTP layer, app and key mutations record the signed-in user with the
+// request origin; a failing audit insert answers 500 and keeps nothing.
 func TestAppMutationsAuditAndRollback(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
@@ -300,7 +298,7 @@ func decodeRaw(t *testing.T, w *httptest.ResponseRecorder, want int) []byte {
 	return w.Body.Bytes()
 }
 
-// AC-8: viewers read apps and keys but every write is 403.
+// Viewers read apps and keys but every write is 403.
 func TestViewerCannotWriteApps(t *testing.T) {
 	f := newAPI(t, "")
 	app := f.createApp(t, f.signIn(t, f.owner), `{"name":"Acme","slug":"acme","environment":"live"}`)
@@ -332,7 +330,7 @@ func (c v1Client) do(method, target, body string, headers ...string) *httptest.R
 	return c.f.send(nil, method, target, body, h...)
 }
 
-// T-16 / AC-14, AC-15: /v1 payments with metadata and Idempotency-Key.
+// /v1 payments with metadata and Idempotency-Key.
 func TestV1PaymentsOverHTTP(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
@@ -406,8 +404,8 @@ func TestV1PaymentsOverHTTP(t *testing.T) {
 	}
 }
 
-// AC-5, AC-6 over HTTP: rotation keeps both keys working until the old one
-// is revoked; a disabled app gets tenant_inactive until it is enabled.
+// Over HTTP, rotation keeps both keys working until the old one is revoked; a
+// disabled app gets tenant_inactive until it is enabled.
 func TestV1KeyLifecycleOverHTTP(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
@@ -445,8 +443,8 @@ func TestV1KeyLifecycleOverHTTP(t *testing.T) {
 	}
 }
 
-// T-18 / AC-11: no log line, audit snapshot or list response carries a full
-// key, key hash, API secret, webhook secret or ciphertext.
+// No log line, audit snapshot or list response carries a full key, key hash,
+// API secret, webhook secret or ciphertext.
 func TestAppSecretsNeverLeak(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)

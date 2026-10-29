@@ -30,17 +30,6 @@ import (
 	"github.com/mydisha/keipay/backend/internal/transport/http/middleware"
 )
 
-// --- fakes: every list is empty unless a test fills it ---
-
-type emptyLedger struct{ domain.LedgerRepository }
-
-func (emptyLedger) List(context.Context, domain.LedgerFilter) ([]domain.LedgerEntry, error) {
-	return nil, nil
-}
-func (emptyLedger) Summary(context.Context, domain.LedgerFilter) ([]domain.LedgerSummary, error) {
-	return nil, nil
-}
-
 type plainCipher struct{}
 
 func (plainCipher) Encrypt(s string) (string, error) { return "enc:" + s, nil }
@@ -67,12 +56,23 @@ type queued struct {
 	manual  bool
 }
 
-// recordingQueue records the delivery attempts the services enqueue; set err
-// to make the queue unavailable.
+// recordingQueue records the delivery attempts and reconciliation runs the
+// services enqueue; set err to make the queue unavailable.
 type recordingQueue struct {
 	mu    sync.Mutex
 	calls []queued
+	runs  []queued
 	err   error
+}
+
+func (q *recordingQueue) EnqueueReconciliation(_ context.Context, runID int64, runCount int) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.err != nil {
+		return q.err
+	}
+	q.runs = append(q.runs, queued{id: runID, attempt: runCount})
+	return nil
 }
 
 func (q *recordingQueue) EnqueueDelivery(_ context.Context, id int64, attempt int, manual bool, _ time.Time) error {
@@ -144,7 +144,9 @@ type apiFixture struct {
 	// xenditAPI stands in for the Xendit API the xendit adapter calls.
 	xenditAPI *fakeXenditAPI
 	hooks     *memstore.Webhooks
-	ledger    *memstore.Ledger
+	reports   *memstore.Reports
+	recon     *memstore.Reconciliations
+	reconSvc  *service.ReconciliationService
 	queue     *recordingQueue
 }
 
@@ -199,9 +201,10 @@ func newAPI(t *testing.T, frontendDir string, opts ...apiOption) *apiFixture {
 		t.Fatal(err)
 	}
 	f.hooks = memstore.NewWebhooks(f.apps, f.payments, f.conns, time.Now)
-	f.ledger = &memstore.Ledger{}
+	f.reports = memstore.NewReports()
+	f.recon = memstore.NewReconciliations(f.conns, f.payments, f.reports, f.users, time.Now)
 	f.queue = &recordingQueue{}
-	tx := memstore.NewTx(f.apps, f.keys, f.conns, f.payments, f.hooks, f.ledger)
+	tx := memstore.NewTx(f.apps, f.keys, f.conns, f.payments, f.hooks, f.reports, f.recon)
 	f.appSvc = service.NewAppService(f.apps, f.keys, f.conns, plainCipher{}, tx, auditSvc)
 	f.connSvc = service.NewConnectionService(service.ConnectionDeps{
 		Connections: f.conns, Merchants: f.conns.Merchants(), Apps: f.apps, Payments: f.payments, Registry: registry,
@@ -209,7 +212,7 @@ func newAPI(t *testing.T, frontendDir string, opts ...apiOption) *apiFixture {
 	})
 	paymentSvc := service.NewPaymentService(f.payments, f.conns, registry, sealer, log)
 	webhookSvc := service.NewWebhookService(service.WebhookDeps{
-		Payments: f.payments, Ledger: f.ledger, Inbound: f.hooks.Inbound(), Events: f.hooks.Events(),
+		Payments: f.payments, Reports: f.reports, Inbound: f.hooks.Inbound(), Events: f.hooks.Events(),
 		Endpoints: f.hooks.Endpoints(), Deliveries: f.hooks.Deliveries(), Tx: tx, Enqueuer: f.queue, Log: log,
 	})
 	endpointSvc := service.NewWebhookEndpointService(service.WebhookEndpointDeps{
@@ -228,7 +231,13 @@ func newAPI(t *testing.T, frontendDir string, opts ...apiOption) *apiFixture {
 	f.deps.AppResolver = f.appSvc
 	f.deps.NonceStore = &memNonces{seen: map[string]bool{}}
 	f.deps.SecretDecryptor = plainCipher{}
-	f.deps.Admin = handler.NewAdminHandler(paymentSvc, service.NewLedgerService(emptyLedger{}), auditSvc)
+	f.deps.Admin = handler.NewAdminHandler(paymentSvc, auditSvc)
+	f.deps.Reports = handler.NewReportHandler(service.NewPaymentReportService(f.reports), log)
+	f.reconSvc = service.NewReconciliationService(service.ReconciliationDeps{
+		Runs: f.recon, Connections: f.conns, Registry: registry, Source: service.NewProviderSource(registry, sealer),
+		Tx: tx, Enqueuer: f.queue, Audit: auditSvc, Log: log,
+	})
+	f.deps.Reconciliation = handler.NewReconciliationHandler(f.reconSvc, log)
 	f.router = NewRouter(f.deps)
 	f.owner = f.addUser(t, "owner@example.com", domain.RoleOwner)
 	ctx := domain.WithActor(context.Background(), domain.SystemActor("test"))
@@ -387,18 +396,17 @@ func expectFields(t *testing.T, env errorEnvelope, want ...domain.FieldError) {
 	}
 }
 
-// --- empty lists ---
-
 func TestEmptyListsEncodeAsArrays(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
 	cases := map[string][]string{
-		"/admin/apps":               {`"data":[]`, `"next_cursor":null`},
-		"/admin/payments":           {`"data":[]`, `"next_cursor":null`},
-		"/admin/ledger":             {`"entries":[]`, `"summary":[]`},
-		"/admin/webhook-deliveries": {`"data":[]`, `"next_cursor":null`},
-		"/admin/inbound-webhooks":   {`"data":[]`, `"next_cursor":null`},
-		"/admin/audit-logs":         {`"data":[]`, `"next_cursor":null`},
+		"/admin/apps":                {`"data":[]`, `"next_cursor":null`},
+		"/admin/payments":            {`"data":[]`, `"next_cursor":null`},
+		"/admin/payment-reports":     {`"data":[]`, `"next_cursor":null`},
+		"/admin/reconciliation-runs": {`"data":[]`, `"next_cursor":null`},
+		"/admin/webhook-deliveries":  {`"data":[]`, `"next_cursor":null`},
+		"/admin/inbound-webhooks":    {`"data":[]`, `"next_cursor":null`},
+		"/admin/audit-logs":          {`"data":[]`, `"next_cursor":null`},
 	}
 	for path, wants := range cases {
 		w := f.send(owner, http.MethodGet, path, "")
@@ -412,8 +420,6 @@ func TestEmptyListsEncodeAsArrays(t *testing.T) {
 		}
 	}
 }
-
-// --- audit log list ---
 
 func TestAuditLogsShapeAndPaging(t *testing.T) {
 	f := newAPI(t, "")
@@ -486,8 +492,6 @@ func TestAuditLogsQueryErrors(t *testing.T) {
 	expectError(t, f.send(owner, http.MethodGet, "/admin/audit-logs?cursor=nope", ""), 400, domain.CodeInvalidCursor)
 	expectError(t, f.send(nil, http.MethodGet, "/admin/audit-logs", ""), 401, domain.CodeSessionRequired)
 }
-
-// --- unknown routes ---
 
 func TestUnknownAPIRoutesReturnNotFoundEnvelope(t *testing.T) {
 	dist := t.TempDir()

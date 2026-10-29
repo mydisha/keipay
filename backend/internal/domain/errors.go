@@ -55,6 +55,7 @@ const (
 	CodeNoEligibleConnection    ErrorCode = "no_eligible_connection"
 	CodeProviderRejected        ErrorCode = "provider_rejected"
 	CodeProviderUnavailable     ErrorCode = "provider_unavailable"
+	CodeRunInProgress           ErrorCode = "run_in_progress"
 )
 
 // ErrorCodes returns every defined error code.
@@ -70,6 +71,7 @@ func ErrorCodes() []ErrorCode {
 		CodeSetupCompleted, CodeLastOwner, CodeCannotModifySelf, CodeRateLimited,
 		CodeAPIKeyRevoked, CodeAPIKeyExpired, CodeIdempotencyKeyReused,
 		CodeConnectionInUse, CodeDeliveryNotReplayable, CodeNoEligibleConnection, CodeProviderRejected, CodeProviderUnavailable,
+		CodeRunInProgress,
 	}
 }
 
@@ -204,6 +206,16 @@ func DeliveryNotReplayable(reason string) *Error {
 		Code:    CodeDeliveryNotReplayable,
 		Message: "the delivery cannot be replayed now",
 		Details: map[string]any{"reason": reason},
+		Err:     ErrConflict,
+	}
+}
+
+// RunInProgress refuses changing a reconciliation run, or its items, while
+// the run is queued or running.
+func RunInProgress() *Error {
+	return &Error{
+		Code:    CodeRunInProgress,
+		Message: "the reconciliation run is queued or running",
 		Err:     ErrConflict,
 	}
 }

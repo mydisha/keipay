@@ -107,7 +107,7 @@ func xenditCallbackBody(p *domain.Payment, invoiceID, status string) string {
 		invoiceID, p.ExternalID, status, p.Amount, p.Amount)
 }
 
-// T-3 / AC-3: the Xendit descriptor exactly as the requirements give it.
+// The Xendit descriptor GET /admin/providers must serve, field for field.
 const xenditDescriptor = `{
   "name": "xendit",
   "display_name": "Xendit",
@@ -140,7 +140,8 @@ const xenditDescriptor = `{
       {"code": "EWALLET_LINKAJA", "label": "LinkAja"}, {"code": "CARD", "label": "Credit or debit card"},
       {"code": "RETAIL_ALFAMART", "label": "Alfamart"}, {"code": "RETAIL_INDOMARET", "label": "Indomaret"}
     ],
-    "currencies": ["IDR"], "can_restrict_channels": true, "can_cancel": true, "reports_fee": true
+    "currencies": ["IDR"], "can_restrict_channels": true, "can_cancel": true, "reports_fee": true,
+    "list_transactions": true
   },
   "webhook_setup": {
     "instructions": [
@@ -178,7 +179,7 @@ var connectionListKeys = []string{"id", "name", "provider", "environment", "stat
 var connectionKeys = []string{"id", "name", "provider", "environment", "status", "legacy_webhook_alias", "last_tested_at",
 	"last_test_status", "created_at", "updated_at", "credentials", "settings", "channels", "webhook_url", "last_test_error"}
 
-// T-31 / AC-5, AC-8 to AC-12: the admin flow end to end, checking shapes.
+// The admin flow end to end, checking shapes.
 func TestConnectionAdminFlow(t *testing.T) {
 	f := newAPI(t, "")
 	_, admin := f.as(t, domain.RoleAdmin)
@@ -308,7 +309,7 @@ func TestConnectionAdminFlow(t *testing.T) {
 	}
 }
 
-// T-30 / AC-13: viewers read, admins and owners write.
+// Viewers read, admins and owners write.
 func TestConnectionPermissions(t *testing.T) {
 	f := newAPI(t, "")
 	_, viewer := f.as(t, domain.RoleViewer)
@@ -332,8 +333,8 @@ func TestConnectionPermissions(t *testing.T) {
 	}
 }
 
-// T-32 / AC-6: credential values never appear in responses, audit entries or
-// logs, in any casing or base64-encoded.
+// Credential values never appear in responses, audit entries or logs, in any
+// casing or base64-encoded.
 func TestConnectionCredentialsNeverLeak(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
@@ -376,7 +377,7 @@ func TestConnectionCredentialsNeverLeak(t *testing.T) {
 
 var regexpConnID = regexp.MustCompile(`^con_[0-9A-HJKMNP-TV-Z]{26}$`)
 
-// T-33 / AC-18 to AC-21: each connection verifies its own callbacks.
+// Each connection verifies its own callbacks.
 func TestConnectionCallbacks(t *testing.T) {
 	f := newAPI(t, "")
 	a := f.addXendit(t, "xendit-a", "xnd_development_aaa", "token-of-a")
@@ -518,7 +519,7 @@ func TestCallbackBodyLimit(t *testing.T) {
 	}
 }
 
-// T-34 / AC-22: /webhooks/xendit is the imported connection's URL.
+// /webhooks/xendit is the imported connection's URL.
 func TestLegacyCallbackAlias(t *testing.T) {
 	f := newAPI(t, "")
 	legacy := f.addPayment(t, nil, 5000)
@@ -547,7 +548,7 @@ func TestLegacyCallbackAlias(t *testing.T) {
 	}
 }
 
-// T-35 / AC-15, AC-16: /v1/payments errors keep the envelope; replays win.
+// /v1/payments errors keep the envelope; replays win.
 func TestV1PaymentsConnectionErrors(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
@@ -595,7 +596,7 @@ func TestV1PaymentsConnectionErrors(t *testing.T) {
 	}
 }
 
-// T-36 / AC-14: PATCH /admin/apps sets and clears default_connection_id.
+// PATCH /admin/apps sets and clears default_connection_id.
 func TestAppDefaultConnectionOverHTTP(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -44,7 +45,48 @@ func newEngine(mw ...gin.HandlerFunc) *gin.Engine {
 	return r
 }
 
-// --- Recover ---
+// A handler that cuts its stream off panics with http.ErrAbortHandler;
+// Recover passes it on to the server instead of writing a 500 into the
+// half-sent response.
+func TestRecoverRepanicsAbortHandler(t *testing.T) {
+	r := newEngine(func(c *gin.Context) {
+		c.Writer.WriteHeader(http.StatusOK)
+		_, _ = c.Writer.WriteString("partial,")
+		panic(http.ErrAbortHandler)
+	})
+	w := httptest.NewRecorder()
+	defer func() {
+		if got := recover(); got != http.ErrAbortHandler {
+			t.Fatalf("recovered %v, want http.ErrAbortHandler", got)
+		}
+		if strings.Contains(w.Body.String(), "internal_error") {
+			t.Fatalf("an error envelope was written: %s", w.Body.String())
+		}
+	}()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x", nil))
+	t.Fatal("the abort did not reach the server")
+}
+
+// Over a real server the aborted response is cut off: the client sees an
+// error, not a complete body.
+func TestAbortHandlerCutsTheConnection(t *testing.T) {
+	r := newEngine(func(c *gin.Context) {
+		c.Writer.WriteHeader(http.StatusOK)
+		_, _ = c.Writer.WriteString("partial,")
+		c.Writer.Flush()
+		panic(http.ErrAbortHandler)
+	})
+	srv := httptest.NewServer(r)
+	defer srv.Close()
+	resp, err := http.Get(srv.URL + "/x")
+	if err != nil {
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if _, err := io.ReadAll(resp.Body); err == nil {
+		t.Fatal("the truncated body read as complete")
+	}
+}
 
 func TestRecoverReturnsEnvelope(t *testing.T) {
 	r := newEngine(func(*gin.Context) { panic("boom: secret detail") })

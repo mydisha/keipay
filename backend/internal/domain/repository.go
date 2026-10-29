@@ -14,15 +14,6 @@ type PaymentFilter struct {
 	To          *time.Time
 }
 
-// LedgerFilter narrows ledger queries. AppPublicID is a canonical app_ id.
-type LedgerFilter struct {
-	AppPublicID *string
-	From        *time.Time
-	To          *time.Time
-	Limit       int
-	Offset      int
-}
-
 // Payment insert conflicts the service tells apart, so it can re-read the
 // payment that won a race. Both match ErrConflict.
 var (
@@ -45,16 +36,6 @@ type PaymentRepository interface {
 	GetByIdempotencyKey(ctx context.Context, appID int64, key string) (*Payment, error)
 	// List returns payments newest first (created_at, then public id).
 	List(ctx context.Context, f PaymentFilter, p Page) (PageResult[Payment], error)
-}
-
-// LedgerRepository persists ledger entries. List and Summary rows carry the
-// app summary and the payment's public id.
-type LedgerRepository interface {
-	Create(ctx context.Context, e *LedgerEntry) error
-	// MarkSettled sets settled_at on a payment's PAYMENT entry if not already set.
-	MarkSettled(ctx context.Context, paymentID int64, settledAt time.Time) error
-	List(ctx context.Context, f LedgerFilter) ([]LedgerEntry, error)
-	Summary(ctx context.Context, f LedgerFilter) ([]LedgerSummary, error)
 }
 
 // WebhookEndpointRepository persists webhook endpoints. Every method joins

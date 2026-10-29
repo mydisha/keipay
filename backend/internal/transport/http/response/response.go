@@ -9,7 +9,7 @@
 //	    response.Error(c, err)
 //	    return
 //	}
-//	response.JSON(c, http.StatusOK, data)
+//	response.Success(c, data)
 package response
 
 import (
@@ -74,6 +74,7 @@ var statusByCode = map[domain.ErrorCode]int{
 	domain.CodeNoEligibleConnection:    http.StatusUnprocessableEntity,
 	domain.CodeProviderRejected:        http.StatusUnprocessableEntity,
 	domain.CodeProviderUnavailable:     http.StatusServiceUnavailable,
+	domain.CodeRunInProgress:           http.StatusConflict,
 }
 
 // passThrough are the 5xx codes sent as they are; every other 5xx collapses

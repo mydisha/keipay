@@ -46,8 +46,15 @@ func TestErrorCodesAreUnique(t *testing.T) {
 		}
 		seen[c] = true
 	}
-	if len(seen) != 36 {
-		t.Fatalf("got %d codes, want 36", len(seen))
+	if len(seen) != 37 {
+		t.Fatalf("got %d codes, want 37", len(seen))
+	}
+}
+
+func TestRunInProgress(t *testing.T) {
+	err := RunInProgress()
+	if err.Code != "run_in_progress" || !errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %+v", err)
 	}
 }
 

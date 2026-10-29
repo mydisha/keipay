@@ -47,10 +47,11 @@ func (n runNonces) Acquire(ctx context.Context, key string) bool {
 	return n.inner.Acquire(ctx, n.prefix+key)
 }
 
-// e2e is the real router over Postgres and Redis on a database migrated
-// from phase 1 with one legacy tenant that had a webhook URL. The deprecated
-// XENDIT_* settings are imported as on an upgraded server, so the legacy app
-// pays through the real Xendit adapter, pointed at a fake Xendit API.
+// e2e is the real router over Postgres and Redis on a database migrated to
+// 000006 (before apps replaced tenants) with one legacy tenant that had a
+// webhook URL. The deprecated XENDIT_* settings are imported as on an
+// upgraded server, so the legacy app pays through the real Xendit adapter,
+// pointed at a fake Xendit API.
 type e2e struct {
 	router     *gin.Engine
 	appSvc     *service.AppService
@@ -134,7 +135,7 @@ func newE2E(t *testing.T) *e2e {
 	}
 	e.legacy = imported.Connection
 	e.webhook = service.NewWebhookService(service.WebhookDeps{
-		Payments: e.payments, Ledger: postgres.NewLedgerRepo(pool), Inbound: postgres.NewInboundWebhookRepo(pool),
+		Payments: e.payments, Reports: postgres.NewPaymentReportRepo(pool), Inbound: postgres.NewInboundWebhookRepo(pool),
 		Events: postgres.NewEventRepo(pool), Endpoints: e.endpoints, Deliveries: e.deliveries, Tx: tx, Enqueuer: &recordingQueue{},
 	})
 	gin.SetMode(gin.TestMode)
@@ -191,8 +192,8 @@ func (e *e2e) call(method, target, apiKey, secret, body string, headers ...strin
 	return w
 }
 
-// T-28 / AC-2, AC-7, AC-14, AC-15: a migrated integration keeps working end
-// to end, and references route callbacks to the right app.
+// A migrated integration keeps working end to end, and references route
+// callbacks to the right app.
 func TestIntegrationEndToEndMigratedApp(t *testing.T) {
 	e := newE2E(t)
 	ctx := context.Background()
@@ -272,8 +273,8 @@ func TestIntegrationEndToEndMigratedApp(t *testing.T) {
 		t.Fatalf("new delivery = %+v %s", d.App, d.Payload)
 	}
 
-	// T-B32 / AC-8: the migrated endpoint sends the v1 body, signed as before
-	// with the app's original api_secret.
+	// The migrated endpoint sends the v1 body, signed as before with the
+	// app's original api_secret.
 	var mu sync.Mutex
 	var got []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -323,8 +324,8 @@ func TestIntegrationEndToEndMigratedApp(t *testing.T) {
 	}
 }
 
-// T-29 / AC-10, AC-15: concurrent duplicates make one payment, and
-// concurrent key creation never passes the limit.
+// Concurrent duplicates make one payment, and concurrent key creation never
+// passes the limit.
 func TestIntegrationConcurrency(t *testing.T) {
 	e := newE2E(t)
 	ctx := context.Background()

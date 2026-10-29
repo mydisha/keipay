@@ -19,22 +19,23 @@ type Prefix string
 
 // Known prefixes. Parse rejects any other prefix.
 const (
-	App             Prefix = "app"
-	Payment         Prefix = "pay"
-	Connection      Prefix = "con"
-	WebhookEndpoint Prefix = "whe"
-	Event           Prefix = "evt"
-	Delivery        Prefix = "dlv"
-	Inbound         Prefix = "inb"
-	User            Prefix = "usr"
-	APIKey          Prefix = "key"
-	Reconciliation  Prefix = "rec"
-	Audit           Prefix = "aud"
+	App                Prefix = "app"
+	Payment            Prefix = "pay"
+	Connection         Prefix = "con"
+	WebhookEndpoint    Prefix = "whe"
+	Event              Prefix = "evt"
+	Delivery           Prefix = "dlv"
+	Inbound            Prefix = "inb"
+	User               Prefix = "usr"
+	APIKey             Prefix = "key"
+	Reconciliation     Prefix = "rec"
+	ReconciliationItem Prefix = "rci"
+	Audit              Prefix = "aud"
 )
 
 var known = map[Prefix]bool{
 	App: true, Payment: true, Connection: true, WebhookEndpoint: true, Event: true,
-	Delivery: true, Inbound: true, User: true, APIKey: true, Reconciliation: true, Audit: true,
+	Delivery: true, Inbound: true, User: true, APIKey: true, Reconciliation: true, ReconciliationItem: true, Audit: true,
 }
 
 const ulidLen = 26

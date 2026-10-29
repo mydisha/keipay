@@ -51,6 +51,7 @@ type ProviderCapabilities struct {
 	CanRestrictChannels bool          `json:"can_restrict_channels"`
 	CanCancel           bool          `json:"can_cancel"`
 	ReportsFee          bool          `json:"reports_fee"`
+	ListTransactions    bool          `json:"list_transactions"`
 }
 
 // ProviderWebhookSetup are the steps to paste a callback URL into the gateway.
@@ -93,6 +94,7 @@ func ProviderFromDomain(p provider.Provider) Provider {
 			CanRestrictChannels: caps.CanRestrictChannels,
 			CanCancel:           caps.CanCancel,
 			ReportsFee:          caps.ReportsFee,
+			ListTransactions:    caps.ListTransactions,
 		},
 		WebhookSetup: ProviderWebhookSetup{
 			Instructions: append([]string{}, d.Webhook.Instructions...),

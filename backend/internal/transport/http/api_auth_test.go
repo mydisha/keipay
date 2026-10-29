@@ -52,8 +52,6 @@ func meBody(t *testing.T, w *httptest.ResponseRecorder) (map[string]any, []strin
 	return body.User, body.Permissions
 }
 
-// --- setup (AC-2, AC-3) ---
-
 func TestSetupOverHTTP(t *testing.T) {
 	f := newAPI(t, "")
 	f.users.Remove(f.owner.PublicID)
@@ -72,7 +70,7 @@ func TestSetupOverHTTP(t *testing.T) {
 		t.Fatalf("setup: %d %s", w.Code, w.Body.String())
 	}
 	user, perms := meBody(t, w)
-	if user["email"] != "owner@example.com" || user["role"] != "owner" || user["status"] != "active" || len(perms) != 9 {
+	if user["email"] != "owner@example.com" || user["role"] != "owner" || user["status"] != "active" || len(perms) != 10 {
 		t.Fatalf("me = %v %v", user, perms)
 	}
 	cookies := setCookies(t, w)
@@ -125,8 +123,6 @@ func TestSetupValidationAndToken(t *testing.T) {
 		t.Fatalf("right token: %d %s", w.Code, w.Body.String())
 	}
 }
-
-// --- login (AC-11, AC-12, AC-14) ---
 
 func TestLoginOverHTTP(t *testing.T) {
 	f := newAPI(t, "")
@@ -191,7 +187,6 @@ func TestLoginRateLimitOverHTTP(t *testing.T) {
 	}
 }
 
-// T-19 / AC-13
 func TestClientIPAndTrustedProxies(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -217,8 +212,6 @@ func TestClientIPAndTrustedProxies(t *testing.T) {
 		})
 	}
 }
-
-// --- cookies (AC-5, T-15) ---
 
 func TestCookieAttributes(t *testing.T) {
 	for _, secure := range []bool{false, true} {
@@ -299,8 +292,6 @@ func assertNoTokensInBody(t *testing.T, w *httptest.ResponseRecorder, b *browser
 		}
 	}
 }
-
-// --- sessions (AC-6, AC-7, AC-8, AC-10) ---
 
 func TestSessionLifecycleOverHTTP(t *testing.T) {
 	f := newAPI(t, "")
@@ -425,8 +416,6 @@ func TestMustChangePasswordGateLifts(t *testing.T) {
 	}
 }
 
-// --- CSRF (AC-9) ---
-
 func TestCSRFOverHTTP(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
@@ -479,8 +468,6 @@ func TestCSRFOverHTTP(t *testing.T) {
 	}
 }
 
-// --- response shapes (AC-16, T-18) ---
-
 func TestMeShape(t *testing.T) {
 	f := newAPI(t, "")
 	b := f.signIn(t, f.owner)
@@ -502,7 +489,7 @@ func TestMeShape(t *testing.T) {
 	if user["disabled_at"] != nil || user["status"] != "active" || user["id"] != f.owner.PublicID {
 		t.Fatalf("user = %v", user)
 	}
-	if !slices.IsSorted(perms) || len(perms) != 9 {
+	if !slices.IsSorted(perms) || len(perms) != 10 {
 		t.Fatalf("permissions = %v", perms)
 	}
 	if strings.Contains(w.Body.String(), "password_hash") || strings.Contains(w.Body.String(), "$2a$") {

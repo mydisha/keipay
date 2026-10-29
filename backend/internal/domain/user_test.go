@@ -6,13 +6,13 @@ import (
 	"time"
 )
 
-// T-2: the table from the "Roles and permissions" section of the contract.
+// The table from the "Roles and permissions" section of api/openapi.yaml.
 func TestRolePermissionsTable(t *testing.T) {
 	want := map[Role][]Permission{
 		RoleOwner: {"apps:read", "apps:write", "audit:read", "connections:read", "connections:write", "deliveries:read",
-			"deliveries:replay", "payments:read", "users:manage"},
+			"deliveries:replay", "payments:read", "reconciliation:write", "users:manage"},
 		RoleAdmin: {"apps:read", "apps:write", "audit:read", "connections:read", "connections:write", "deliveries:read",
-			"deliveries:replay", "payments:read"},
+			"deliveries:replay", "payments:read", "reconciliation:write"},
 		RoleViewer: {"apps:read", "connections:read", "deliveries:read", "payments:read"},
 	}
 	if len(RolePermissions) != len(want) {
@@ -48,6 +48,10 @@ func TestRoleCan(t *testing.T) {
 		{RoleViewer, PermConnectionsRead, true},
 		{RoleViewer, PermConnectionsWrite, false},
 		{RoleAdmin, PermConnectionsWrite, true},
+		{RoleOwner, PermReconciliationWrite, true},
+		{RoleAdmin, PermReconciliationWrite, true},
+		{RoleViewer, PermReconciliationWrite, false},
+		{RoleViewer, PermPaymentsRead, true},
 		{Role("root"), PermAppsRead, false},
 		{"", PermAppsRead, false},
 	}

@@ -74,53 +74,6 @@ func PaymentListFromDomain(page domain.PageResult[domain.Payment]) PaymentListRe
 	return out
 }
 
-// LedgerEntry is a ledger entry with its app and the payment's public id.
-type LedgerEntry struct {
-	ID        int64                  `json:"id"`
-	App       AppSummary             `json:"app"`
-	PaymentID string                 `json:"payment_id"`
-	Amount    int64                  `json:"amount"`
-	XenditFee int64                  `json:"xendit_fee"`
-	NetAmount int64                  `json:"net_amount"`
-	Type      domain.LedgerEntryType `json:"type"`
-	SettledAt *time.Time             `json:"settled_at,omitempty"`
-	CreatedAt time.Time              `json:"created_at"`
-}
-
-// LedgerSummary is the per-app ledger total.
-type LedgerSummary struct {
-	App         AppSummary `json:"app"`
-	Count       int64      `json:"count"`
-	GrossAmount int64      `json:"gross_amount"`
-	TotalFee    int64      `json:"total_fee"`
-	NetAmount   int64      `json:"net_amount"`
-}
-
-// LedgerListResponse is the response for GET /admin/ledger.
-type LedgerListResponse struct {
-	Entries []LedgerEntry   `json:"entries"`
-	Summary []LedgerSummary `json:"summary"`
-}
-
-// LedgerListFromDomain converts ledger rows; both lists are [] when empty.
-func LedgerListFromDomain(entries []domain.LedgerEntry, summary []domain.LedgerSummary) LedgerListResponse {
-	out := LedgerListResponse{Entries: make([]LedgerEntry, 0, len(entries)), Summary: make([]LedgerSummary, 0, len(summary))}
-	for _, e := range entries {
-		out.Entries = append(out.Entries, LedgerEntry{
-			ID: e.ID, App: AppSummaryFromDomain(e.App), PaymentID: e.PaymentPublicID, Amount: e.Amount,
-			XenditFee: e.XenditFee, NetAmount: e.NetAmount, Type: e.Type, SettledAt: utcPtr(e.SettledAt),
-			CreatedAt: e.CreatedAt.UTC(),
-		})
-	}
-	for _, s := range summary {
-		out.Summary = append(out.Summary, LedgerSummary{
-			App: AppSummaryFromDomain(s.App), Count: s.Count, GrossAmount: s.GrossAmount,
-			TotalFee: s.TotalFee, NetAmount: s.NetAmount,
-		})
-	}
-	return out
-}
-
 // MessageResponse is a generic message response.
 type MessageResponse struct {
 	Message string `json:"message"`

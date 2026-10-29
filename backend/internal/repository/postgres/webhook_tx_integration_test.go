@@ -29,7 +29,7 @@ import (
 type fixture struct {
 	pool       *pgxpool.Pool
 	payments   *postgres.PaymentRepo
-	ledger     *postgres.LedgerRepo
+	reports    *postgres.PaymentReportRepo
 	inbound    *postgres.InboundWebhookRepo
 	events     *postgres.EventRepo
 	endpoints  *postgres.WebhookEndpointRepo
@@ -57,7 +57,7 @@ func newFixture(t *testing.T) *fixture {
 	f := &fixture{
 		pool:       pool,
 		payments:   postgres.NewPaymentRepo(pool),
-		ledger:     postgres.NewLedgerRepo(pool),
+		reports:    postgres.NewPaymentReportRepo(pool),
 		inbound:    postgres.NewInboundWebhookRepo(pool),
 		events:     postgres.NewEventRepo(pool),
 		endpoints:  postgres.NewWebhookEndpointRepo(pool),
@@ -88,7 +88,7 @@ func (f *fixture) svc(enq service.Enqueuer) *service.WebhookService {
 
 func (f *fixture) svcWith(deliveries domain.DeliveryRepository, enq service.Enqueuer) *service.WebhookService {
 	return service.NewWebhookService(service.WebhookDeps{
-		Payments: f.payments, Ledger: f.ledger, Inbound: f.inbound, Events: f.events, Endpoints: f.endpoints,
+		Payments: f.payments, Reports: f.reports, Inbound: f.inbound, Events: f.events, Endpoints: f.endpoints,
 		Deliveries: deliveries, Tx: f.tx, Enqueuer: enq,
 	})
 }
@@ -106,13 +106,13 @@ func (f *fixture) addEndpoint(t *testing.T, events ...string) *domain.WebhookEnd
 }
 
 // counts returns the claimed inbound rows of the fixture's connection and the
-// payment's ledger entries, events and deliveries.
-func (f *fixture) counts(t *testing.T, p *domain.Payment) (claims, ledger, events, deliveries int) {
+// payment's reports, events and deliveries.
+func (f *fixture) counts(t *testing.T, p *domain.Payment) (claims, reports, events, deliveries int) {
 	t.Helper()
 	ctx := context.Background()
 	_ = f.pool.QueryRow(ctx, `SELECT count(*) FROM inbound_webhooks WHERE reference=$1
 		AND result IN ('applied','stale','mismatch','unmapped')`, p.ExternalID).Scan(&claims)
-	_ = f.pool.QueryRow(ctx, `SELECT count(*) FROM ledger_entries WHERE payment_id=$1`, p.ID).Scan(&ledger)
+	_ = f.pool.QueryRow(ctx, `SELECT count(*) FROM payment_reports WHERE payment_id=$1`, p.ID).Scan(&reports)
 	_ = f.pool.QueryRow(ctx, `SELECT count(*) FROM events WHERE payment_id=$1`, p.ID).Scan(&events)
 	_ = f.pool.QueryRow(ctx, `SELECT count(*) FROM webhook_deliveries WHERE payment_id=$1`, p.ID).Scan(&deliveries)
 	return
@@ -135,20 +135,29 @@ func (f *fixture) results(t *testing.T, ref string) []string {
 }
 
 func callback(p *domain.Payment, status string) xenditCallback {
-	return xenditCallback{ID: p.XenditInvoiceID, ExternalID: p.ExternalID, Status: status, PaidAmount: p.Amount, FeesPaid: 100}
+	fee := int64(100)
+	return xenditCallback{ID: p.XenditInvoiceID, ExternalID: p.ExternalID, Status: status, PaidAmount: p.Amount, Fee: &fee}
 }
 
 // xenditCallback is a Xendit invoice callback; event parses it with the
 // adapter, as the webhook handler does.
 type xenditCallback struct {
 	ID, ExternalID, Status string
-	PaidAmount, FeesPaid   int64
-	SettlementDate         string
+	PaidAmount             int64
+	// Fee is the merchant fee, sent as adjusted_received_amount; the body
+	// has no such field when Fee is nil.
+	Fee            *int64
+	SettlementDate string
+	PaidAt         string
 }
 
 func (cb xenditCallback) raw() []byte {
-	raw, _ := json.Marshal(map[string]any{"id": cb.ID, "external_id": cb.ExternalID, "status": cb.Status,
-		"paid_amount": cb.PaidAmount, "fees_paid_amount": cb.FeesPaid, "settlement_date": cb.SettlementDate})
+	body := map[string]any{"id": cb.ID, "external_id": cb.ExternalID, "status": cb.Status,
+		"paid_amount": cb.PaidAmount, "settlement_date": cb.SettlementDate, "paid_at": cb.PaidAt, "fees_paid_amount": 0}
+	if cb.Fee != nil {
+		body["adjusted_received_amount"] = cb.PaidAmount - *cb.Fee
+	}
+	raw, _ := json.Marshal(body)
 	return raw
 }
 
@@ -194,8 +203,8 @@ func TestIntegrationWithinTxRollsBackAllWrites(t *testing.T) {
 		if err := f.payments.UpdateStatus(ctx, f.payment.ID, domain.PaymentStatusPaid, nil, nil, nil); err != nil {
 			return err
 		}
-		if err := f.ledger.Create(ctx, &domain.LedgerEntry{AppID: f.payment.AppID, PaymentID: f.payment.ID,
-			Amount: 5000, NetAmount: 5000, Type: domain.LedgerEntryTypePayment}); err != nil {
+		if err := f.reports.Upsert(ctx, &domain.PaymentReport{PaymentID: f.payment.ID, AppID: f.payment.AppID,
+			Currency: "IDR", Gross: 5000, Status: domain.PaymentStatusPaid, PaidAt: time.Now()}); err != nil {
 			return err
 		}
 		return boom
@@ -204,7 +213,7 @@ func TestIntegrationWithinTxRollsBackAllWrites(t *testing.T) {
 		t.Fatalf("expected boom, got %v", err)
 	}
 	if claims, led, _, _ := f.counts(t, f.payment); claims != 0 || led != 0 {
-		t.Fatalf("rollback left rows: claims=%d ledger=%d", claims, led)
+		t.Fatalf("rollback left rows: claims=%d reports=%d", claims, led)
 	}
 	p, err := f.payments.GetByID(ctx, f.payment.AppID, f.payment.ID)
 	if err != nil || p.Status != domain.PaymentStatusPending {
@@ -219,8 +228,8 @@ func (failingDeliveries) Create(context.Context, *domain.WebhookDelivery) error 
 	return errors.New("insert delivery failed")
 }
 
-// T-B16 / AC-15: a failure after the claim rolls the claim back; one error row
-// is written; the gateway's retry is applied in full.
+// A failure after the claim rolls the claim back; one error row is written;
+// the gateway's retry is applied in full.
 func TestIntegrationProcessRollbackReleasesClaim(t *testing.T) {
 	f := newFixture(t)
 	f.addEndpoint(t, "*")
@@ -229,13 +238,13 @@ func TestIntegrationProcessRollbackReleasesClaim(t *testing.T) {
 		t.Fatal("expected the first attempt to fail")
 	}
 	if claims, led, ev, del := f.counts(t, f.payment); claims+led+ev+del != 0 {
-		t.Fatalf("failed attempt left rows: claims=%d ledger=%d events=%d deliveries=%d", claims, led, ev, del)
+		t.Fatalf("failed attempt left rows: claims=%d reports=%d events=%d deliveries=%d", claims, led, ev, del)
 	}
 	if err := f.process(f.svc(enq), f.conn, callback(f.payment, "PAID")); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
 	if claims, led, ev, del := f.counts(t, f.payment); claims != 1 || led != 1 || ev != 1 || del != 1 || len(enq.calls) != 1 {
-		t.Fatalf("retry: claims=%d ledger=%d events=%d deliveries=%d enqueued=%d", claims, led, ev, del, len(enq.calls))
+		t.Fatalf("retry: claims=%d reports=%d events=%d deliveries=%d enqueued=%d", claims, led, ev, del, len(enq.calls))
 	}
 	var detail string
 	if err := f.pool.QueryRow(context.Background(), `SELECT result_detail FROM inbound_webhooks WHERE reference=$1 AND result='error'`,
@@ -247,8 +256,8 @@ func TestIntegrationProcessRollbackReleasesClaim(t *testing.T) {
 	}
 }
 
-// AC-15: concurrent duplicates without Redis: the claim index makes exactly
-// one of them do the work; the others are recorded as duplicates.
+// Concurrent duplicates without Redis: the claim index makes exactly one of
+// them do the work; the others are recorded as duplicates.
 func TestIntegrationProcessConcurrentDuplicates(t *testing.T) {
 	f := newFixture(t)
 	f.addEndpoint(t, "*")
@@ -271,7 +280,7 @@ func TestIntegrationProcessConcurrentDuplicates(t *testing.T) {
 		}
 	}
 	if claims, led, ev, del := f.counts(t, f.payment); claims != 1 || led != 1 || ev != 1 || del != 1 || len(enq.calls) != 1 {
-		t.Fatalf("duplicates: claims=%d ledger=%d events=%d deliveries=%d enqueued=%d", claims, led, ev, del, len(enq.calls))
+		t.Fatalf("duplicates: claims=%d reports=%d events=%d deliveries=%d enqueued=%d", claims, led, ev, del, len(enq.calls))
 	}
 	var dups int
 	_ = f.pool.QueryRow(context.Background(), `SELECT count(*) FROM inbound_webhooks WHERE reference=$1 AND result='duplicate'`,
@@ -281,8 +290,8 @@ func TestIntegrationProcessConcurrentDuplicates(t *testing.T) {
 	}
 }
 
-// T-B15 / AC-15: dedupe is per connection. The same key at another connection
-// for this payment is a mismatch there and does not block the real callback.
+// Dedupe is per connection. The same key at another connection for this
+// payment is a mismatch there and does not block the real callback.
 func TestIntegrationDedupePerConnection(t *testing.T) {
 	f := newFixture(t)
 	f.addEndpoint(t, "*")
@@ -293,7 +302,7 @@ func TestIntegrationDedupePerConnection(t *testing.T) {
 		t.Fatalf("foreign callback: %v", err)
 	}
 	if _, led, ev, del := f.counts(t, f.payment); led+ev+del != 0 {
-		t.Fatalf("foreign callback applied: ledger=%d events=%d deliveries=%d", led, ev, del)
+		t.Fatalf("foreign callback applied: reports=%d events=%d deliveries=%d", led, ev, del)
 	}
 	for range 2 {
 		if err := f.process(svc, f.conn, callback(f.payment, "PAID")); err != nil {
@@ -307,7 +316,7 @@ func TestIntegrationDedupePerConnection(t *testing.T) {
 		t.Fatalf("results = %v", got)
 	}
 	if _, led, ev, del := f.counts(t, f.payment); led != 1 || ev != 1 || del != 1 || len(enq.calls) != 1 {
-		t.Fatalf("own callback: ledger=%d events=%d deliveries=%d enqueued=%d", led, ev, del, len(enq.calls))
+		t.Fatalf("own callback: reports=%d events=%d deliveries=%d enqueued=%d", led, ev, del, len(enq.calls))
 	}
 	var paymentID *int64
 	if err := f.pool.QueryRow(context.Background(), `SELECT payment_id FROM inbound_webhooks WHERE connection_id=$1 AND result='mismatch'`,
@@ -316,8 +325,8 @@ func TestIntegrationDedupePerConnection(t *testing.T) {
 	}
 }
 
-// T-B11 over Postgres: one event, one delivery per matching active endpoint,
-// bodies stored as JSONB.
+// One event, one delivery per matching active endpoint, bodies stored as
+// JSONB.
 func TestIntegrationProcessFansOut(t *testing.T) {
 	f := newFixture(t)
 	all := f.addEndpoint(t, "*")
@@ -386,9 +395,9 @@ func (f *fixture) status(t *testing.T) domain.PaymentStatus {
 	return p.Status
 }
 
-// Regression: SETTLED after PAID must record the settlement time on the ledger
-// entry created by PAID, not leave it empty.
-func TestIntegrationSettledAfterPaidSetsLedgerSettledAt(t *testing.T) {
+// Regression: SETTLED after PAID must record the settlement time on the
+// payment report created by PAID, not leave it empty or add a second row.
+func TestIntegrationSettledAfterPaidSetsReportSettledAt(t *testing.T) {
 	f := newFixture(t)
 	svc := f.svc(&stubEnqueuer{})
 	ctx := context.Background()
@@ -400,12 +409,15 @@ func TestIntegrationSettledAfterPaidSetsLedgerSettledAt(t *testing.T) {
 		}
 	}
 	var settledAt *time.Time
-	if err := f.pool.QueryRow(ctx, `SELECT settled_at FROM ledger_entries WHERE payment_id=$1`, f.payment.ID).Scan(&settledAt); err != nil {
-		t.Fatalf("ledger: %v", err)
+	var status string
+	var n int
+	if err := f.pool.QueryRow(ctx, `SELECT settled_at, status, count(*) OVER () FROM payment_reports WHERE payment_id=$1`,
+		f.payment.ID).Scan(&settledAt, &status, &n); err != nil {
+		t.Fatalf("report: %v", err)
 	}
 	want := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	if settledAt == nil || !settledAt.Equal(want) {
-		t.Fatalf("ledger settled_at = %v, want %v", settledAt, want)
+	if n != 1 || status != "SETTLED" || settledAt == nil || !settledAt.Equal(want) {
+		t.Fatalf("report rows=%d status=%s settled_at=%v, want one SETTLED row settled at %v", n, status, settledAt, want)
 	}
 }
 

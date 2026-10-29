@@ -1066,7 +1066,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/admin/ledger": {
+    "/admin/payment-reports": {
         parameters: {
             query?: never;
             header?: never;
@@ -1074,15 +1074,267 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * List ledger entries with a per-app summary
-         * @description Offset-paginated, newest first. Unparseable filters are ignored, and
-         *     an out-of-range `limit` falls back to the default. A well-formed
-         *     `app_id` that matches no app returns no entries and an empty
-         *     summary.
+         * List payment reports
+         * @description One row per payment that reached `PAID` or `SETTLED`.
+         *     Cursor-paginated, newest payment first (`paid_at` descending, then
+         *     payment id descending). Every filter is optional and they combine
+         *     with AND. An invalid value returns `400 invalid_request`: `app_id`
+         *     or `connection_id` rule `public_id`; `environment` or `currency`
+         *     rule `oneof` / `format` (three upper-case letters); `from` or `to`
+         *     rule `datetime`; `to` not after `from` rule `after`. A well-formed
+         *     id that matches nothing returns an empty page.
          */
-        get: operations["listLedger"];
+        get: operations["listPaymentReports"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/payment-reports/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Total payment reports per app, connection, currency and period
+         * @description Groups the payment reports with `from <= paid_at < to` by period,
+         *     app, connection and currency. Amounts of different currencies are
+         *     never added together. `interval` picks the period: `total` (one
+         *     period, the whole range), `day` or `month`, both cut at midnight
+         *     Asia/Jakarta (WIB). Rows are ordered by `period_start`, then app
+         *     slug, then connection name (no connection last), then currency.
+         *     Not paginated.
+         *
+         *     `from` and `to` are required. The range may span at most 366 days
+         *     (`interval` `total` or `month`) or 92 days (`day`). Errors:
+         *     `400 invalid_request` with `from`/`to` rule `required` or
+         *     `datetime`, `to` rule `after` (not after `from`) or `max_range`;
+         *     `interval`, `environment` rule `oneof`; `currency` rule `format`;
+         *     `app_id`, `connection_id` rule `public_id`.
+         */
+        get: operations["summarizePaymentReports"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/payment-reports/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export payment reports as CSV
+         * @description Every payment report matching the filters (same filters and errors
+         *     as `GET /admin/payment-reports`, without paging), newest first,
+         *     streamed as CSV (see "Payment reports and reconciliation"). The
+         *     download is named `keipay-payment-reports-<from>-<to>.csv` (dates
+         *     in WIB, `all` for an open bound). Columns, in order:
+         *     `payment_id`, `reference`, `order_id`, `app_id`, `app_slug`,
+         *     `app_environment`, `connection_id`, `connection_name`, `provider`,
+         *     `currency`, `gross`, `fee`, `net`, `status`, `paid_at`,
+         *     `settled_at`. `fee`, `net` and the connection columns are empty
+         *     when unknown.
+         */
+        get: operations["exportPaymentReports"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/reconciliation-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List reconciliation runs
+         * @description Cursor-paginated, newest first (`created_at` descending, then `id`
+         *     descending). Every filter is optional. An invalid value returns
+         *     `400 invalid_request`: `connection_id` rule `public_id`; `status`
+         *     or `environment` rule `oneof`. A well-formed id that matches
+         *     nothing returns an empty page.
+         */
+        get: operations["listReconciliationRuns"];
+        put?: never;
+        /**
+         * Start a reconciliation run
+         * @description Stores a `queued` run for one connection and range and queues it
+         *     for the worker. Disabled connections can be reconciled. Errors
+         *     (`400 invalid_request`, `details.fields`): `connection_id` rule
+         *     `required`, `public_id`, `exists` (no such connection) or
+         *     `unsupported` (its provider cannot list transactions, see
+         *     `ProviderCapabilities.list_transactions`); `from`/`to` rule
+         *     `required` or `datetime`; `to` rule `after` (not after `from`) or
+         *     `max_range` (more than 31 days); `from` rule `past` (`from` is
+         *     not before now). If the run cannot be queued it is returned `failed` with
+         *     error code `not_queued`; re-run it. Records
+         *     `reconciliation_run.create`.
+         */
+        post: operations["createReconciliationRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/reconciliation-runs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a reconciliation run */
+        get: operations["getReconciliationRun"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/reconciliation-runs/{id}/rerun": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-run a reconciliation run
+         * @description Queues the same run again (same connection and range; `run_count`
+         *     goes up by one, `summary` and `error` are cleared until it
+         *     finishes). Items are recomputed in place (see "Payment reports and
+         *     reconciliation"). A run that is `queued` or `running` returns
+         *     `409 run_in_progress`, unless it has not changed for 15 minutes
+         *     (a stalled run), which can be re-run. Records
+         *     `reconciliation_run.rerun` (`before` and `after`:
+         *     `{status, run_count}`).
+         */
+        post: operations["rerunReconciliationRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/reconciliation-runs/{id}/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the items of a reconciliation run
+         * @description Cursor-paginated (`created_at` descending, then `id` descending).
+         *     Filters combine with AND. An invalid value returns
+         *     `400 invalid_request`: `result` rule `oneof`, `resolved` rule
+         *     `bool`. Unknown run: `404 not_found`. A run that never finished has
+         *     no items.
+         */
+        get: operations["listReconciliationItems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/reconciliation-runs/{id}/items/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Export the items of a reconciliation run as CSV
+         * @description Every item matching the filters (same filters and errors as the
+         *     item list, without paging), streamed as CSV (see "Payment reports
+         *     and reconciliation"). The download is named
+         *     `keipay-reconciliation-<rec id>.csv`. Columns, in order:
+         *     `item_id`, `reference`, `result`, `resolved`, `resolution_note`,
+         *     `resolved_at`, `payment_id`, `app_slug`, `keipay_status`,
+         *     `keipay_amount`, `keipay_currency`, `keipay_fee`, `keipay_paid_at`,
+         *     `gateway_payment_id`, `gateway_status`, `gateway_provider_status`,
+         *     `gateway_amount`, `gateway_currency`, `gateway_fee`,
+         *     `gateway_occurred_at`. A side that is missing leaves its columns
+         *     empty; `resolved` is `true` or `false`.
+         */
+        get: operations["exportReconciliationItems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/reconciliation-items/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get a reconciliation item
+         * @description One item by id, whatever its run's filters, so a link to an item
+         *     (the console's `?item=rci_…`) opens without paging through the
+         *     run's item list. Unknown item: `404 not_found`.
+         */
+        get: operations["getReconciliationItem"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/reconciliation-items/{id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve a reconciliation item with a note
+         * @description Marks a non-`matched` item as resolved by the caller, with a note.
+         *     Errors: `400 invalid_request` with `note` rule `required` (empty
+         *     after trimming), `max` (more than 1000 characters) or
+         *     `invalid_character` (contains U+0000, which cannot be stored);
+         *     `400 validation_failed` for a `matched` item; `409 conflict` when
+         *     the item is already resolved; `409 run_in_progress` while its run
+         *     is queued or running. Records `reconciliation_item.resolve`
+         *     (`before`: `{result, resolved: false}`, `after`:
+         *     `{result, resolved: true, note}`), in the same transaction.
+         */
+        post: operations["resolveReconciliationItem"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1292,7 +1544,7 @@ export interface components {
          *
          *     | code | status | meaning |
          *     |---|---|---|
-         *     | `invalid_request` | 400 | Malformed JSON, failed field validation, a non-integer path id, or a bad `limit` on a cursor-paginated list. `details.fields` is a list of `{field, rule}`. The legacy offset-paginated lists ignore unparseable query filters instead of rejecting them. |
+         *     | `invalid_request` | 400 | Malformed JSON, failed field validation, a non-integer path id, or a bad `limit` on a cursor-paginated list. `details.fields` is a list of `{field, rule}`. |
          *     | `validation_failed` | 400 | The request is well-formed but breaks a business rule. |
          *     | `invalid_cursor` | 400 | The `cursor` is malformed or was not issued by this endpoint. |
          *     | `unauthorized` | 401 | Authentication failed for a reason not listed below. |
@@ -1322,6 +1574,7 @@ export interface components {
          *     | `last_owner` | 409 | The change would leave no active owner. |
          *     | `cannot_modify_self` | 409 | Owners cannot disable themselves or reset their own password through the users API. |
          *     | `delivery_not_replayable` | 409 | The delivery cannot be replayed now. `details.reason`: `in_progress` (still `PENDING`), `no_endpoint`, `endpoint_deleted` or `endpoint_disabled`. |
+         *     | `run_in_progress` | 409 | The reconciliation run is `queued` or `running`: it cannot be re-run, and its items cannot be resolved, until it finishes. |
          *     | `connection_in_use` | 409 | The connection is some app's default connection. `details.apps` lists up to 10 (`AppSummary`), `details.app_count` counts them. |
          *     | `no_eligible_connection` | 422 | No connection can take the payment. `details.reasons` is a list of strings: `no_default_connection`, `connection_disabled`. More reasons may be added. |
          *     | `provider_rejected` | 422 | The gateway refused the request (validation, limits, credentials). `details.provider` names the provider. The message is generic; the gateway's own text is only logged. |
@@ -1330,7 +1583,7 @@ export interface components {
          *     | `provider_unavailable` | 503 | The gateway could not be reached, timed out, or answered with a server error. Retry with the same `order_id`. |
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "validation_failed" | "invalid_cursor" | "unauthorized" | "invalid_credentials" | "missing_token" | "invalid_token" | "missing_signature_headers" | "invalid_timestamp" | "timestamp_out_of_range" | "unknown_api_key" | "invalid_signature" | "replayed_request" | "invalid_callback_token" | "tenant_inactive" | "not_found" | "conflict" | "internal_error" | "session_required" | "session_expired" | "forbidden" | "password_change_required" | "invalid_csrf_token" | "invalid_setup_token" | "setup_completed" | "last_owner" | "cannot_modify_self" | "rate_limited" | "api_key_revoked" | "api_key_expired" | "idempotency_key_reused" | "connection_in_use" | "delivery_not_replayable" | "no_eligible_connection" | "provider_rejected" | "provider_unavailable";
+        ErrorCode: "invalid_request" | "validation_failed" | "invalid_cursor" | "unauthorized" | "invalid_credentials" | "missing_token" | "invalid_token" | "missing_signature_headers" | "invalid_timestamp" | "timestamp_out_of_range" | "unknown_api_key" | "invalid_signature" | "replayed_request" | "invalid_callback_token" | "tenant_inactive" | "not_found" | "conflict" | "internal_error" | "session_required" | "session_expired" | "forbidden" | "password_change_required" | "invalid_csrf_token" | "invalid_setup_token" | "setup_completed" | "last_owner" | "cannot_modify_self" | "rate_limited" | "api_key_revoked" | "api_key_expired" | "idempotency_key_reused" | "connection_in_use" | "delivery_not_replayable" | "run_in_progress" | "no_eligible_connection" | "provider_rejected" | "provider_unavailable";
         /**
          * @example {
          *       "error": {
@@ -1488,8 +1741,11 @@ export interface components {
             currency?: string;
             /** Format: int64 */
             paid_amount?: number;
-            /** Format: int64 */
-            fees_paid_amount?: number;
+            /**
+             * Format: int64
+             * @description What the merchant receives after Xendit's fee. KeiPay records the fee as `paid_amount` (or `amount`) minus this value, and leaves it unknown when the field is absent. `fees_paid_amount`, the fee charged to the customer, is not read.
+             */
+            adjusted_received_amount?: number;
             paid_at?: string;
             settlement_date?: string;
             updated?: string;
@@ -1516,7 +1772,7 @@ export interface components {
          * @description See "Roles and permissions" above. New permissions may be added.
          * @enum {string}
          */
-        Permission: "apps:read" | "apps:write" | "connections:read" | "connections:write" | "payments:read" | "deliveries:read" | "deliveries:replay" | "audit:read" | "users:manage";
+        Permission: "apps:read" | "apps:write" | "connections:read" | "connections:write" | "payments:read" | "reconciliation:write" | "deliveries:read" | "deliveries:replay" | "audit:read" | "users:manage";
         /**
          * Format: email
          * @description One address without a display name, for example `ops@example.com`.
@@ -1883,6 +2139,8 @@ export interface components {
             can_cancel: boolean;
             /** @description Callbacks carry the gateway fee. */
             reports_fee: boolean;
+            /** @description KeiPay can pull the gateway's transactions for a period, so connections of this provider can be reconciled. */
+            list_transactions: boolean;
         };
         ProviderWebhookSetup: {
             /** @description Plain-text steps, in order, for pasting the connection's `webhook_url` into the gateway dashboard. */
@@ -2066,38 +2324,296 @@ export interface components {
             /** @description Pass as `cursor` to get the next page; `null` on the last page. */
             next_cursor: string | null;
         };
-        LedgerEntry: {
-            /** Format: int64 */
-            id: number;
-            app: components["schemas"]["AppSummary"];
+        /**
+         * @description The payment's status as far as reporting goes; only successful payments have a report.
+         * @enum {string}
+         */
+        PaymentReportStatus: "PAID" | "SETTLED";
+        /** @description The report of one successful payment. */
+        PaymentReport: {
+            /** @example pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C */
             payment_id: string;
-            /** Format: int64 */
-            amount: number;
-            /** Format: int64 */
-            xendit_fee: number;
-            /** Format: int64 */
-            net_amount: number;
-            /** @enum {string} */
-            type: "PAYMENT" | "REFUND";
-            /** Format: date-time */
-            settled_at?: string;
-            /** Format: date-time */
-            created_at: string;
-        };
-        LedgerSummary: {
+            /** @description The gateway reference reconciliation matches on. */
+            reference: string;
+            order_id: string;
             app: components["schemas"]["AppSummary"];
-            /** Format: int64 */
+            /** @description The connection the payment was made through; `null` for payments older than connections. */
+            connection: components["schemas"]["ConnectionSummary"] | null;
+            /** @description `null` when `connection` is. */
+            provider: components["schemas"]["ProviderName"] | null;
+            /** @example IDR */
+            currency: string;
+            /**
+             * Format: int64
+             * @description Amount paid, in minor units.
+             */
+            gross: number;
+            /**
+             * Format: int64
+             * @description Gateway fee in minor units; `null` when the gateway did not report one.
+             */
+            fee: number | null;
+            /**
+             * Format: int64
+             * @description `gross - fee`; `null` when `fee` is.
+             */
+            net: number | null;
+            status: components["schemas"]["PaymentReportStatus"];
+            /** Format: date-time */
+            paid_at: string;
+            /** Format: date-time */
+            settled_at: string | null;
+        };
+        PaymentReportListResponse: {
+            data: components["schemas"]["PaymentReport"][];
+            /** @description Pass as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        /**
+         * @description `total`: one row group for the whole range (default); `day` and `month`: one per WIB day or month.
+         * @default total
+         * @enum {string}
+         */
+        ReportInterval: "total" | "day" | "month";
+        PaymentReportSummaryRow: {
+            /**
+             * Format: date-time
+             * @description Inclusive start of the period, in UTC. For `total` it equals the request's `from`.
+             */
+            period_start: string;
+            /**
+             * Format: date-time
+             * @description Exclusive end of the period, in UTC, clipped to the request's `to`.
+             */
+            period_end: string;
+            app: components["schemas"]["AppSummary"];
+            connection: components["schemas"]["ConnectionSummary"] | null;
+            currency: string;
+            /**
+             * Format: int64
+             * @description Number of payments.
+             */
             count: number;
             /** Format: int64 */
-            gross_amount: number;
-            /** Format: int64 */
-            total_fee: number;
-            /** Format: int64 */
-            net_amount: number;
+            gross: number;
+            /**
+             * Format: int64
+             * @description Sum of the known fees.
+             */
+            fee: number;
+            /**
+             * Format: int64
+             * @description `gross - fee`: payments with an unknown fee count with their full gross.
+             */
+            net: number;
+            /**
+             * Format: int64
+             * @description Payments in the row whose fee is unknown.
+             */
+            fee_unknown_count: number;
         };
-        LedgerListResponse: {
-            entries: components["schemas"]["LedgerEntry"][];
-            summary: components["schemas"]["LedgerSummary"][];
+        PaymentReportSummaryResponse: {
+            interval: components["schemas"]["ReportInterval"];
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            data: components["schemas"]["PaymentReportSummaryRow"][];
+        };
+        /**
+         * @description `queued` (waiting for the worker), `running`, `succeeded` (items
+         *     are stored) or `failed` (see `error`; re-run it).
+         * @enum {string}
+         */
+        ReconciliationRunStatus: "queued" | "running" | "succeeded" | "failed";
+        /**
+         * @description Outcome of comparing one reference. When several apply, the first
+         *     in this order wins.
+         *
+         *     | result | meaning |
+         *     |---|---|
+         *     | `missing_in_keipay` | The gateway has a successful transaction whose reference matches no payment of this connection. |
+         *     | `missing_in_gateway` | KeiPay has the payment as `PAID` or `SETTLED`; the gateway has no transaction for it. |
+         *     | `amount_mismatch` | Both have it, but the currency or the amount differs (several gateway transactions for one reference are added up). |
+         *     | `status_mismatch` | Both have it, but only one side says it was paid (e.g. KeiPay `EXPIRED`, gateway paid). `PAID` and `SETTLED` count as the same. |
+         *     | `fee_mismatch` | Both have it as paid, both know the fee, and the fees differ. |
+         *     | `matched` | Everything above agrees. |
+         * @enum {string}
+         */
+        ReconciliationResult: "matched" | "missing_in_keipay" | "missing_in_gateway" | "amount_mismatch" | "status_mismatch" | "fee_mismatch";
+        /** @description Item counts of the last finished run. */
+        ReconciliationRunSummary: {
+            /** @description Number of items. */
+            total: number;
+            /** @description Items that are not `matched` and not resolved. Goes down as items are resolved. */
+            unresolved: number;
+            /** @description Number of items per result; every result is present, 0 when none. */
+            results: {
+                matched: number;
+                missing_in_keipay: number;
+                missing_in_gateway: number;
+                amount_mismatch: number;
+                status_mismatch: number;
+                fee_mismatch: number;
+            };
+        };
+        /** @description Why the last run failed. The message is generic; gateway text is only logged. */
+        ReconciliationRunError: {
+            /**
+             * @description `provider_rejected` (the gateway refused the credentials or the
+             *     request), `provider_unavailable` (unreachable, timed out or a
+             *     server error, after retries), `too_many_transactions` (more
+             *     than 100000 gateway transactions; use a shorter range),
+             *     `not_queued` (the run could not be queued), `internal_error`.
+             *     More codes may be added.
+             * @example provider_unavailable
+             */
+            code: string;
+            message: string;
+        };
+        /** @description A console user referenced by a record. */
+        UserRef: {
+            id: string;
+            name: string;
+        };
+        ReconciliationRun: {
+            /** @example rec_01JBKQ7Z8M4X2Y6V3N9T5R1W0C */
+            id: string;
+            connection: components["schemas"]["ConnectionSummary"];
+            /**
+             * Format: date-time
+             * @description Inclusive start of the range, UTC.
+             */
+            from: string;
+            /**
+             * Format: date-time
+             * @description Exclusive end of the range, UTC.
+             */
+            to: string;
+            status: components["schemas"]["ReconciliationRunStatus"];
+            /** @description How many times the run was started (1 + re-runs). */
+            run_count: number;
+            /** @description Set once the run succeeded; `null` before that and while it is re-run. */
+            summary: components["schemas"]["ReconciliationRunSummary"] | null;
+            /** @description Set when `status` is `failed`. */
+            error: components["schemas"]["ReconciliationRunError"] | null;
+            /** @description Who started the run. */
+            created_by: components["schemas"]["UserRef"] | null;
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: date-time
+             * @description When the worker last started it.
+             */
+            started_at: string | null;
+            /**
+             * Format: date-time
+             * @description When it last succeeded or failed; `null` while queued or running.
+             */
+            finished_at: string | null;
+        };
+        ReconciliationRunResponse: {
+            run: components["schemas"]["ReconciliationRun"];
+        };
+        ReconciliationRunListResponse: {
+            data: components["schemas"]["ReconciliationRun"][];
+            /** @description Pass as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        CreateReconciliationRunRequest: {
+            connection_id: string;
+            /**
+             * Format: date-time
+             * @description Inclusive start (RFC 3339, any offset; stored in UTC). Must be before now.
+             * @example 2026-10-01T00:00:00+07:00
+             */
+            from: string;
+            /**
+             * Format: date-time
+             * @description Exclusive end; after `from` and at most 31 days later.
+             * @example 2026-10-08T00:00:00+07:00
+             */
+            to: string;
+        };
+        /** @description KeiPay's record of the payment when the run computed the item. */
+        ReconciliationKeipaySide: {
+            payment_id: string;
+            app: components["schemas"]["AppSummary"];
+            status: components["schemas"]["PaymentStatus"];
+            /** Format: int64 */
+            amount: number;
+            currency: string;
+            /**
+             * Format: int64
+             * @description From the payment report; `null` when unknown or the payment has no report.
+             */
+            fee: number | null;
+            /** Format: date-time */
+            paid_at: string | null;
+        };
+        /** @description The gateway's record for the reference when the run computed the item. */
+        ReconciliationGatewaySide: {
+            /** @description The gateway's id of the (first) transaction. */
+            provider_payment_id: string;
+            /** @description The gateway's own status value. */
+            provider_status: string;
+            /**
+             * @description The gateway status mapped to a KeiPay status; `null` when the
+             *     gateway status is one KeiPay does not know (`provider_status`
+             *     has the raw value). The CSV export leaves `gateway_status`
+             *     empty in that case.
+             */
+            status: components["schemas"]["PaymentStatus"] | null;
+            /**
+             * Format: int64
+             * @description Sum over the reference's successful transactions (all of them when none succeeded).
+             */
+            amount: number;
+            currency: string;
+            /** Format: int64 */
+            fee: number | null;
+            /**
+             * Format: date-time
+             * @description The earliest transaction time.
+             */
+            occurred_at: string;
+            /** @description Gateway transactions with this reference; more than 1 usually means a double payment. */
+            transaction_count: number;
+        };
+        ReconciliationResolution: {
+            note: string;
+            resolved_by: components["schemas"]["UserRef"] | null;
+            /** Format: date-time */
+            resolved_at: string;
+        };
+        ReconciliationItem: {
+            /** @example rci_01JBKQ7Z8M4X2Y6V3N9T5R1W0C */
+            id: string;
+            run_id: string;
+            reference: string;
+            result: components["schemas"]["ReconciliationResult"];
+            /** @description `null` for `missing_in_keipay`. */
+            keipay: components["schemas"]["ReconciliationKeipaySide"] | null;
+            /** @description `null` for `missing_in_gateway`. */
+            gateway: components["schemas"]["ReconciliationGatewaySide"] | null;
+            /** @description Set when the item was resolved. */
+            resolution: components["schemas"]["ReconciliationResolution"] | null;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        ReconciliationItemResponse: {
+            item: components["schemas"]["ReconciliationItem"];
+        };
+        ReconciliationItemListResponse: {
+            data: components["schemas"]["ReconciliationItem"][];
+            /** @description Pass as `cursor` to get the next page; `null` on the last page. */
+            next_cursor: string | null;
+        };
+        ResolveReconciliationItemRequest: {
+            /** @description Why the difference is acceptable or how it was fixed. Trimmed; 1-1000 characters. */
+            note: string;
         };
         EventTypeInfo: {
             type: components["schemas"]["EventType"];
@@ -2522,9 +3038,11 @@ export interface components {
              * @example user
              * @example webhook_endpoint
              * @example webhook_delivery
+             * @example reconciliation_run
+             * @example reconciliation_item
              */
             type: string;
-            /** @description The target's identifier as a string (`app_…`, `key_…`, `usr_…`, `whe_…`, `dlv_…`). Empty for a failed sign-in with an unknown email. Replays recorded before deliveries had public ids carry the integer delivery id. */
+            /** @description The target's identifier as a string (`app_…`, `key_…`, `usr_…`, `whe_…`, `dlv_…`, `rec_…`, `rci_…`). Empty for a failed sign-in with an unknown email. Replays recorded before deliveries had public ids carry the integer delivery id. */
             id: string;
         };
         AuditLog: {
@@ -2545,6 +3063,8 @@ export interface components {
              *     `webhook_endpoint.disable`, `webhook_endpoint.enable`,
              *     `webhook_endpoint.auto_disable` (actor `system:worker`),
              *     `webhook_endpoint.test`, `webhook_delivery.replay`,
+             *     `reconciliation_run.create`, `reconciliation_run.rerun`,
+             *     `reconciliation_item.resolve`,
              *     `user.setup`, `user.create`, `user.update`, `user.disable`,
              *     `user.enable`, `user.reset_password`, `user.change_password`,
              *     `user.login`, `user.login_failed`, `user.logout`. Older entries
@@ -2579,8 +3099,7 @@ export interface components {
          * @description `invalid_request` (malformed body, failed field validation, a
          *     non-integer path id, or a bad `limit` on a cursor-paginated list;
          *     `details.fields` lists offending fields), `validation_failed`
-         *     (business validation), or `invalid_cursor`. The legacy
-         *     offset-paginated lists ignore unparseable filters instead.
+         *     (business validation), or `invalid_cursor`.
          */
         BadRequest: {
             headers: {
@@ -2632,8 +3151,8 @@ export interface components {
          * @description `conflict` (duplicate slug within an environment, duplicate
          *     connection name or email, or an `order_id` reused with a different
          *     amount or currency), `idempotency_key_reused`, `setup_completed`,
-         *     `last_owner`, `cannot_modify_self`, `connection_in_use`, or
-         *     `delivery_not_replayable`.
+         *     `last_owner`, `cannot_modify_self`, `connection_in_use`,
+         *     `delivery_not_replayable`, or `run_in_progress`.
          */
         Conflict: {
             headers: {
@@ -2738,8 +3257,33 @@ export interface components {
          *     `[{"field": "id", "rule": "public_id"}]`.
          */
         InboundWebhookIdPath: string;
-        /** @description Only rows of this app (`app_…`). On these legacy offset lists an unparseable value is ignored; a well-formed id that matches no app still filters, so no rows are returned. */
-        AppIdFilter: string;
+        /**
+         * @description Reconciliation run id (`rec_…`; lower case is accepted). Any other
+         *     format returns `400 invalid_request` with `details.fields`
+         *     `[{"field": "id", "rule": "public_id"}]`.
+         */
+        ReconciliationRunIdPath: string;
+        /**
+         * @description Reconciliation item id (`rci_…`; lower case is accepted). Any other
+         *     format returns `400 invalid_request` with `details.fields`
+         *     `[{"field": "id", "rule": "public_id"}]`.
+         */
+        ReconciliationItemIdPath: string;
+        /** @description Only payments of this app. */
+        ReportAppFilter: string;
+        /** @description Only payments made through this connection. */
+        ReportConnectionFilter: string;
+        /** @description Only payments of apps in this environment. */
+        ReportEnvironmentFilter: components["schemas"]["AppEnvironment"];
+        /** @description Only payments in this ISO 4217 currency (three upper-case letters; rule `format`). */
+        ReportCurrencyFilter: string;
+        /** @description Inclusive lower bound on `paid_at` (RFC 3339). */
+        PaidFromFilter: string;
+        /** @description Exclusive upper bound on `paid_at` (RFC 3339); must be after `from` (rule `after`). */
+        PaidToFilter: string;
+        ReconciliationResultFilter: components["schemas"]["ReconciliationResult"];
+        /** @description `true`: only resolved items; `false`: only unresolved ones (including `matched`). Anything else: rule `bool`. */
+        ReconciliationResolvedFilter: boolean;
         /**
          * @description Optional retry key, unique per app (see Idempotency). 1-255
          *     printable ASCII characters without spaces; an empty header counts as
@@ -2751,7 +3295,6 @@ export interface components {
         FromFilter: string;
         /** @description Inclusive upper bound on `created_at` (RFC 3339). */
         ToFilter: string;
-        Offset: number;
         /** @description Page size. Outside 1-200 returns `400 invalid_request`. */
         Limit: number;
         /** @description Opaque `next_cursor` from the previous page. A malformed cursor returns `400 invalid_cursor`. */
@@ -2766,6 +3309,8 @@ export interface components {
          *     is expired (`Max-Age=0`).
          */
         SessionCookies: string;
+        /** @description `attachment; filename="…"`, named as the operation says. */
+        CsvAttachment: string;
         /** @description Seconds until the rate limit window ends. */
         RetryAfter: number;
         /** @description `true` when the response is an existing payment returned for a repeated `order_id` or `Idempotency-Key`; absent on a newly created payment. */
@@ -4321,18 +4866,25 @@ export interface operations {
             500: components["responses"]["InternalError"];
         };
     };
-    listLedger: {
+    listPaymentReports: {
         parameters: {
             query?: {
-                /** @description Only rows of this app (`app_…`). On these legacy offset lists an unparseable value is ignored; a well-formed id that matches no app still filters, so no rows are returned. */
-                app_id?: components["parameters"]["AppIdFilter"];
-                /** @description Inclusive lower bound on `created_at` (RFC 3339). */
-                from?: components["parameters"]["FromFilter"];
-                /** @description Inclusive upper bound on `created_at` (RFC 3339). */
-                to?: components["parameters"]["ToFilter"];
-                /** @description 1-500, default 100. */
-                limit?: number;
-                offset?: components["parameters"]["Offset"];
+                /** @description Only payments of this app. */
+                app_id?: components["parameters"]["ReportAppFilter"];
+                /** @description Only payments made through this connection. */
+                connection_id?: components["parameters"]["ReportConnectionFilter"];
+                /** @description Only payments of apps in this environment. */
+                environment?: components["parameters"]["ReportEnvironmentFilter"];
+                /** @description Only payments in this ISO 4217 currency (three upper-case letters; rule `format`). */
+                currency?: components["parameters"]["ReportCurrencyFilter"];
+                /** @description Inclusive lower bound on `paid_at` (RFC 3339). */
+                from?: components["parameters"]["PaidFromFilter"];
+                /** @description Exclusive upper bound on `paid_at` (RFC 3339); must be after `from` (rule `after`). */
+                to?: components["parameters"]["PaidToFilter"];
+                /** @description Page size. Outside 1-200 returns `400 invalid_request`. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Opaque `next_cursor` from the previous page. A malformed cursor returns `400 invalid_cursor`. */
+                cursor?: components["parameters"]["Cursor"];
             };
             header?: never;
             path?: never;
@@ -4340,17 +4892,371 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Ledger entries and per-app totals for the same filter. */
+            /** @description A page of payment reports. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LedgerListResponse"];
+                    "application/json": components["schemas"]["PaymentReportListResponse"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    summarizePaymentReports: {
+        parameters: {
+            query: {
+                /** @description Inclusive lower bound on `paid_at` (RFC 3339). */
+                from: string;
+                /** @description Exclusive upper bound on `paid_at` (RFC 3339). */
+                to: string;
+                interval?: components["schemas"]["ReportInterval"];
+                /** @description Only payments of this app. */
+                app_id?: components["parameters"]["ReportAppFilter"];
+                /** @description Only payments made through this connection. */
+                connection_id?: components["parameters"]["ReportConnectionFilter"];
+                /** @description Only payments of apps in this environment. */
+                environment?: components["parameters"]["ReportEnvironmentFilter"];
+                /** @description Only payments in this ISO 4217 currency (three upper-case letters; rule `format`). */
+                currency?: components["parameters"]["ReportCurrencyFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The totals. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PaymentReportSummaryResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    exportPaymentReports: {
+        parameters: {
+            query?: {
+                /** @description Only payments of this app. */
+                app_id?: components["parameters"]["ReportAppFilter"];
+                /** @description Only payments made through this connection. */
+                connection_id?: components["parameters"]["ReportConnectionFilter"];
+                /** @description Only payments of apps in this environment. */
+                environment?: components["parameters"]["ReportEnvironmentFilter"];
+                /** @description Only payments in this ISO 4217 currency (three upper-case letters; rule `format`). */
+                currency?: components["parameters"]["ReportCurrencyFilter"];
+                /** @description Inclusive lower bound on `paid_at` (RFC 3339). */
+                from?: components["parameters"]["PaidFromFilter"];
+                /** @description Exclusive upper bound on `paid_at` (RFC 3339); must be after `from` (rule `after`). */
+                to?: components["parameters"]["PaidToFilter"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The CSV file. */
+            200: {
+                headers: {
+                    "Content-Disposition": components["headers"]["CsvAttachment"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    /**
+                     * @example payment_id,reference,order_id,app_id,app_slug,app_environment,connection_id,connection_name,provider,currency,gross,fee,net,status,paid_at,settled_at
+                     *     pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C,kp_pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C,ORDER-1001,app_01JBKQ7Z8M4X2Y6V3N9T5R1W0D,acme,live,con_01JBKQ7Z8M4X2Y6V3N9T5R1W0E,xendit-live,xendit,IDR,150000,4995,145005,PAID,2026-10-01T10:15:00+07:00,
+                     */
+                    "text/csv": string;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listReconciliationRuns: {
+        parameters: {
+            query?: {
+                /** @description Only runs of this connection. */
+                connection_id?: string;
+                status?: components["schemas"]["ReconciliationRunStatus"];
+                /** @description Only runs of connections in this environment. */
+                environment?: components["schemas"]["AppEnvironment"];
+                /** @description Page size. Outside 1-200 returns `400 invalid_request`. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Opaque `next_cursor` from the previous page. A malformed cursor returns `400 invalid_cursor`. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of runs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationRunListResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createReconciliationRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateReconciliationRunRequest"];
+            };
+        };
+        responses: {
+            /** @description The run. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationRunResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getReconciliationRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Reconciliation run id (`rec_…`; lower case is accepted). Any other
+                 *     format returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["ReconciliationRunIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationRunResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    rerunReconciliationRun: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Reconciliation run id (`rec_…`; lower case is accepted). Any other
+                 *     format returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["ReconciliationRunIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The run, `queued` again. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationRunResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listReconciliationItems: {
+        parameters: {
+            query?: {
+                result?: components["parameters"]["ReconciliationResultFilter"];
+                /** @description `true`: only resolved items; `false`: only unresolved ones (including `matched`). Anything else: rule `bool`. */
+                resolved?: components["parameters"]["ReconciliationResolvedFilter"];
+                /** @description Page size. Outside 1-200 returns `400 invalid_request`. */
+                limit?: components["parameters"]["Limit"];
+                /** @description Opaque `next_cursor` from the previous page. A malformed cursor returns `400 invalid_cursor`. */
+                cursor?: components["parameters"]["Cursor"];
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description Reconciliation run id (`rec_…`; lower case is accepted). Any other
+                 *     format returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["ReconciliationRunIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of items. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationItemListResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    exportReconciliationItems: {
+        parameters: {
+            query?: {
+                result?: components["parameters"]["ReconciliationResultFilter"];
+                /** @description `true`: only resolved items; `false`: only unresolved ones (including `matched`). Anything else: rule `bool`. */
+                resolved?: components["parameters"]["ReconciliationResolvedFilter"];
+            };
+            header?: never;
+            path: {
+                /**
+                 * @description Reconciliation run id (`rec_…`; lower case is accepted). Any other
+                 *     format returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["ReconciliationRunIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The CSV file. */
+            200: {
+                headers: {
+                    "Content-Disposition": components["headers"]["CsvAttachment"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": string;
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getReconciliationItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Reconciliation item id (`rci_…`; lower case is accepted). Any other
+                 *     format returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["ReconciliationItemIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The item. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationItemResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    resolveReconciliationItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /**
+                 * @description Reconciliation item id (`rci_…`; lower case is accepted). Any other
+                 *     format returns `400 invalid_request` with `details.fields`
+                 *     `[{"field": "id", "rule": "public_id"}]`.
+                 */
+                id: components["parameters"]["ReconciliationItemIdPath"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveReconciliationItemRequest"];
+            };
+        };
+        responses: {
+            /** @description The resolved item. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReconciliationItemResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
         };
     };

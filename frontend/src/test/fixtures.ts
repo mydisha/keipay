@@ -272,6 +272,7 @@ export const ROLE_PERMISSIONS: Record<Schemas["UserRole"], Schemas["Permission"]
     "deliveries:read",
     "deliveries:replay",
     "payments:read",
+    "reconciliation:write",
     "users:manage",
   ],
   admin: [
@@ -283,6 +284,7 @@ export const ROLE_PERMISSIONS: Record<Schemas["UserRole"], Schemas["Permission"]
     "deliveries:read",
     "deliveries:replay",
     "payments:read",
+    "reconciliation:write",
   ],
   viewer: ["apps:read", "connections:read", "deliveries:read", "payments:read"],
 };
@@ -385,6 +387,7 @@ export function provider(overrides: Partial<Schemas["Provider"]> = {}): Schemas[
       can_restrict_channels: true,
       can_cancel: true,
       reports_fee: true,
+      list_transactions: true,
     },
     webhook_setup: {
       instructions: ["Open Settings → Webhooks.", "Paste the URL into Invoices paid.", "Save."],
@@ -437,4 +440,120 @@ export function connectionSummary(
 ): Schemas["ConnectionSummary"] {
   const { id, name, provider: providerName, environment, status } = connection();
   return { id, name, provider: providerName, environment, status, ...overrides };
+}
+
+export const REC_ID = "rec_01JBKQ7Z8M4X2Y6V3N9T5R1W0N";
+export const RCI_ID = "rci_01JBKQ7Z8M4X2Y6V3N9T5R1W0P";
+export const USR_ID = "usr_01JBKQ7Z8M4X2Y6V3N9T5R1W0C";
+
+export function paymentReport(overrides: Partial<Schemas["PaymentReport"]> = {}): Schemas["PaymentReport"] {
+  return {
+    payment_id: PAY_ID,
+    reference: `kp_${PAY_ID}`,
+    order_id: "order-001",
+    app: appSummary(),
+    connection: connectionSummary(),
+    provider: "xendit",
+    currency: "IDR",
+    gross: 150000,
+    fee: 4995,
+    net: 145005,
+    status: "PAID",
+    paid_at: "2026-10-01T03:15:00Z",
+    settled_at: null,
+    ...overrides,
+  };
+}
+
+export function summaryRow(overrides: Partial<Schemas["PaymentReportSummaryRow"]> = {}): Schemas["PaymentReportSummaryRow"] {
+  return {
+    period_start: "2026-09-30T17:00:00Z",
+    period_end: "2026-10-31T17:00:00Z",
+    app: appSummary(),
+    connection: connectionSummary(),
+    currency: "IDR",
+    count: 2,
+    gross: 300000,
+    fee: 4995,
+    net: 295005,
+    fee_unknown_count: 0,
+    ...overrides,
+  };
+}
+
+export function reconciliationRun(overrides: Partial<Schemas["ReconciliationRun"]> = {}): Schemas["ReconciliationRun"] {
+  return {
+    id: REC_ID,
+    connection: connectionSummary(),
+    from: "2026-09-30T17:00:00Z",
+    to: "2026-10-07T17:00:00Z",
+    status: "succeeded",
+    run_count: 1,
+    summary: {
+      total: 3,
+      unresolved: 2,
+      results: {
+        matched: 1,
+        missing_in_keipay: 0,
+        missing_in_gateway: 1,
+        amount_mismatch: 1,
+        status_mismatch: 0,
+        fee_mismatch: 0,
+      },
+    },
+    error: null,
+    created_by: { id: USR_ID, name: "Olivia Owner" },
+    created_at: "2026-10-08T01:00:00Z",
+    started_at: "2026-10-08T01:00:01Z",
+    finished_at: "2026-10-08T01:00:05Z",
+    ...overrides,
+  };
+}
+
+export function keipaySide(
+  overrides: Partial<Schemas["ReconciliationKeipaySide"]> = {},
+): Schemas["ReconciliationKeipaySide"] {
+  return {
+    payment_id: PAY_ID,
+    app: appSummary(),
+    status: "PAID",
+    amount: 150000,
+    currency: "IDR",
+    fee: 4995,
+    paid_at: "2026-10-01T03:15:00Z",
+    ...overrides,
+  };
+}
+
+export function gatewaySide(
+  overrides: Partial<Schemas["ReconciliationGatewaySide"]> = {},
+): Schemas["ReconciliationGatewaySide"] {
+  return {
+    provider_payment_id: "txn_123",
+    provider_status: "SUCCESS",
+    status: "PAID",
+    amount: 150000,
+    currency: "IDR",
+    fee: 4995,
+    occurred_at: "2026-10-01T03:15:04Z",
+    transaction_count: 1,
+    ...overrides,
+  };
+}
+
+export function reconciliationItem(
+  overrides: Partial<Schemas["ReconciliationItem"]> = {},
+): Schemas["ReconciliationItem"] {
+  return {
+    id: RCI_ID,
+    run_id: REC_ID,
+    reference: `kp_${PAY_ID}`,
+    result: "amount_mismatch",
+    keipay: keipaySide(),
+    gateway: gatewaySide({ amount: 300000, transaction_count: 2 }),
+    resolution: null,
+    created_at: "2026-10-08T01:00:05Z",
+    updated_at: "2026-10-08T01:00:05Z",
+    ...overrides,
+  };
 }

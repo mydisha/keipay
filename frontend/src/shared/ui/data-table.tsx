@@ -5,6 +5,7 @@ import { strings } from "@/shared/lib/strings";
 import { useIsMobile } from "@/shared/lib/use-media-query";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "./button";
+import { Chip } from "./chip";
 import { ErrorState } from "./error-state";
 import { Skeleton } from "./skeleton";
 
@@ -233,25 +234,11 @@ export function DataTable<T>({
           {filters?.map((group) => (
             <div key={group.id} role="group" aria-label={strings.common.filterBy(group.label)} className="flex flex-wrap items-center gap-1.5">
               <span className="text-xs font-medium text-muted-foreground">{group.label}</span>
-              {group.options.map((option) => {
-                const selected = group.value === option.value;
-                return (
-                  <button
-                    key={option.value}
-                    type="button"
-                    aria-pressed={selected}
-                    onClick={() => toggleChip(group, option.value)}
-                    className={cn(
-                      "inline-flex h-7 items-center rounded-full border px-3 text-xs font-medium transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 max-md:h-11 max-md:px-4",
-                      selected
-                        ? "border-primary bg-primary text-primary-foreground"
-                        : "border-input bg-card text-foreground hover:bg-accent",
-                    )}
-                  >
-                    {option.label}
-                  </button>
-                );
-              })}
+              {group.options.map((option) => (
+                <Chip key={option.value} pressed={group.value === option.value} onClick={() => toggleChip(group, option.value)}>
+                  {option.label}
+                </Chip>
+              ))}
             </div>
           ))}
           {toolbar}

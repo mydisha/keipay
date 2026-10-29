@@ -13,7 +13,7 @@ beforeEach(() => {
   setViewport("desktop");
 });
 
-describe("App shell (T-29)", () => {
+describe("App shell", () => {
   it("shows the final navigation in the sidebar", async () => {
     renderApp("/");
     const nav = await screen.findByRole("navigation", { name: "Main" });
@@ -40,6 +40,8 @@ describe("App shell (T-29)", () => {
     const banner = screen.getByTestId("test-mode-banner");
     expect(banner).toHaveTextContent("Test mode");
     expect(banner).not.toHaveTextContent(/filtered|only test data|showing test/i);
+    expect(banner).toHaveTextContent("Reconciliation");
+    expect(banner).toHaveTextContent("Payments still show every environment");
     expect(window.localStorage.getItem(storageKeys.mode)).toBe("test");
 
     unmount();
@@ -95,7 +97,7 @@ describe("App shell (T-29)", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
-  it("shows the user's name, email and role in the user menu (T-50)", async () => {
+  it("shows the user's name, email and role in the user menu", async () => {
     mockApi({ "GET /admin/me": me({ name: "Vera Viewer", email: "vera@example.com", role: "viewer" }) });
     const { user } = renderApp("/");
     await user.click(await screen.findByRole("button", { name: "Account menu" }));
@@ -105,7 +107,7 @@ describe("App shell (T-29)", () => {
     expect(identity).toHaveTextContent("Role: Viewer");
   });
 
-  it("signs out through POST /admin/logout, clears the cache and goes to sign-in (T-50)", async () => {
+  it("signs out through POST /admin/logout, clears the cache and goes to sign-in", async () => {
     setTestCookie("keipay_csrf", "csrf-1");
     let signedIn = true;
     const api = mockApi({
@@ -126,7 +128,7 @@ describe("App shell (T-29)", () => {
     expect(queryClient.getQueryData(["me"])).toBeUndefined();
   });
 
-  it("stays signed in with a toast when sign-out fails (T-50)", async () => {
+  it("stays signed in with a toast when sign-out fails", async () => {
     setTestCookie("keipay_csrf", "csrf-1");
     mockApi({
       "POST /admin/logout": () => {
@@ -167,7 +169,7 @@ describe("Routing", () => {
     mockApi({
       "GET /admin/apps": { data: [], next_cursor: null },
       "GET /admin/webhook-deliveries": { data: [], next_cursor: null },
-      "GET /admin/ledger": { entries: [], summary: [] },
+      "GET /admin/payment-reports/summary": { interval: "total", from: "", to: "", data: [] },
     });
     const { router } = renderApp(from);
     await waitFor(() => expect(router.state.location.pathname).toBe(to));
@@ -180,7 +182,7 @@ describe("Routing", () => {
     expect(screen.queryByText("Your session has expired. Sign in again.")).not.toBeInTheDocument();
   });
 
-  it("ends an expired session with the session-expired message and a cleared cache (T-41)", async () => {
+  it("ends an expired session with the session-expired message and a cleared cache", async () => {
     let expired = false;
     mockApi({
       "GET /admin/me": () => (expired ? signedOut() : json(200, me())),
@@ -196,7 +198,7 @@ describe("Routing", () => {
     expect(queryClient.getQueryData(["apps", "list", { environment: "live", status: null }])).toBeUndefined();
   });
 
-  it("sends a missing session to sign-in without the message (T-41)", async () => {
+  it("sends a missing session to sign-in without the message", async () => {
     let gone = false;
     mockApi({
       "GET /admin/me": () => (gone ? signedOut() : json(200, me())),
@@ -212,7 +214,7 @@ describe("Routing", () => {
     expect(screen.queryByText("Your session has expired. Sign in again.")).not.toBeInTheDocument();
   });
 
-  it("sends a pending password change to the change-password page (T-41)", async () => {
+  it("sends a pending password change to the change-password page", async () => {
     let pending = false;
     mockApi({
       "GET /admin/me": () => json(200, me({ must_change_password: pending })),

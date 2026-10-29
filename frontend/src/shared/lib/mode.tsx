@@ -4,8 +4,8 @@ import { readStorage, storageKeys, writeStorage } from "./storage";
 // The Test/Live switch. Its values match an app's and a connection's
 // `environment`: it sets the starting environment filter of the Apps and
 // Connections lists and the default of the create-app dialog and the
-// add-connection wizard. Other pages ignore it until they can filter by
-// environment.
+// add-connection wizard, and filters Reconciliation. Payments ignore it
+// until they can filter by environment.
 export type Mode = "live" | "test";
 
 interface ModeContextValue {

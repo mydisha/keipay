@@ -1,12 +1,12 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
-import { app, APP_ID, DLV_ID, EVT_ID, INB_ID, me, page, webhookEndpoint, WHE_ID } from "@/test/fixtures";
+import { app, APP_ID, DLV_ID, EVT_ID, INB_ID, me, page, REC_ID, reconciliationRun, webhookEndpoint, WHE_ID } from "@/test/fixtures";
 import { errorBody, json, mockApi } from "@/test/http";
 import { setViewport } from "@/test/media";
 import { renderApp } from "@/test/render";
 import { parseRecordId } from "./command-palette";
 
-// F-11: pasting a webhook record id into the palette opens it.
+// Pasting a webhook or reconciliation record id into the palette opens it.
 
 beforeEach(() => setViewport("desktop"));
 
@@ -24,6 +24,7 @@ describe("parseRecordId", () => {
     [` ${INB_ID} `, "inb"],
     [EVT_ID.toLowerCase(), "evt"],
     [WHE_ID, "whe"],
+    [REC_ID.toLowerCase(), "rec"],
   ])("recognises %s", (text, kind) => {
     expect(parseRecordId(text)?.kind).toBe(kind);
   });
@@ -33,7 +34,7 @@ describe("parseRecordId", () => {
   });
 });
 
-describe("Command palette ids (F-11)", () => {
+describe("Command palette ids", () => {
   it.each([
     [DLV_ID, `Open delivery ${DLV_ID}`, `?tab=outbound&id=${DLV_ID}`],
     [INB_ID, `Open inbound webhook ${INB_ID}`, `?tab=inbound&id=${INB_ID}`],
@@ -67,6 +68,25 @@ describe("Command palette ids (F-11)", () => {
     await user.click(await within(dialog).findByRole("option", { name: `Open webhook endpoint ${WHE_ID}` }));
     expect(await screen.findByText("Couldn't open that webhook endpoint. It may have been deleted.")).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("opens a pasted rec_ id as a reconciliation run", async () => {
+    mockApi({
+      [`GET /admin/reconciliation-runs/${REC_ID}`]: { run: reconciliationRun({ status: "failed", summary: null }) },
+    });
+    const { user, dialog, router } = await openPalette();
+    expect(dialog).toHaveTextContent(/rec_ id/);
+    await user.type(within(dialog).getByRole("combobox"), ` ${REC_ID} `);
+    await user.click(await within(dialog).findByRole("option", { name: `Open reconciliation run ${REC_ID}` }));
+    await waitFor(() => expect(router.state.location.pathname).toBe(`/reconciliation/runs/${REC_ID}`));
+    expect(await screen.findByRole("heading", { level: 1, name: REC_ID })).toBeInTheDocument();
+  });
+
+  it("offers a run only with payments:read", async () => {
+    mockApi({ "GET /admin/me": me({}, ["apps:read", "deliveries:read"]) });
+    const { user, dialog } = await openPalette();
+    await user.type(within(dialog).getByRole("combobox"), REC_ID);
+    expect(within(dialog).queryByRole("option", { name: /Open reconciliation run/ })).not.toBeInTheDocument();
   });
 
   it("offers no record without the permission and nothing for other text", async () => {

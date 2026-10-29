@@ -40,7 +40,7 @@ async function keyAction(page: Page, label: string, apiKey: string, action: "Rot
   await page.getByRole("menuitem", { name: action }).click();
 }
 
-test.describe("apps lifecycle (T-61)", () => {
+test.describe("apps lifecycle", () => {
   test.use({ viewport: { width: 1280, height: 800 } });
 
   test("create, edit, keys, disable and enable are each audited", async ({ page }) => {
@@ -159,7 +159,9 @@ test.describe("shell", () => {
 
   test("test mode, theme and sidebar state persist; the palette navigates", async ({ page }) => {
     await signInToDashboard(page);
-    const banner = page.getByText(/The Apps, Connections and Webhooks lists, new apps and new connections follow this switch/);
+    const banner = page.getByText(
+      /The Apps, Connections and Webhooks lists, Reconciliation, new apps and new connections follow this switch/,
+    );
     await expect(banner).toHaveCount(0);
 
     await page.getByRole("switch", { name: "Test mode" }).click();

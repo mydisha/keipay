@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
+	"github.com/mydisha/keipay/backend/internal/transport/http/middleware"
 	"github.com/mydisha/keipay/backend/internal/transport/http/response"
 )
 
@@ -29,6 +30,11 @@ func SPA(dir string, apiPrefixes ...string) gin.HandlerFunc {
 			NotFound(c)
 			return
 		}
+
+		// The console is the one thing this server serves that a browser
+		// renders, so it gets its own content security policy in place of
+		// the API's.
+		c.Header("Content-Security-Policy", middleware.ConsoleContentSecurityPolicy)
 
 		// http.Dir rejects paths that resolve outside dir.
 		name := path.Clean("/" + p)

@@ -78,6 +78,30 @@ func TestLoad_CookieSecure(t *testing.T) {
 	}
 }
 
+// HSTS follows the Secure cookie decision unless set explicitly.
+func TestLoad_HSTSEnabled(t *testing.T) {
+	cases := []struct {
+		hsts, cookie, env string
+		want              bool
+	}{
+		{"auto", "auto", "development", false},
+		{"auto", "auto", "production", true},
+		{"auto", "false", "production", false},
+		{"auto", "true", "development", true},
+		{"true", "false", "development", true},
+		{"FALSE", "true", "production", false},
+	}
+	for _, tc := range cases {
+		cfg, err := loadWith(t, map[string]string{"HSTS_ENABLED": tc.hsts, "COOKIE_SECURE": tc.cookie, "APP_ENV": tc.env})
+		if err != nil {
+			t.Fatalf("%s/%s/%s: %v", tc.hsts, tc.cookie, tc.env, err)
+		}
+		if got := cfg.HSTSEnabled(); got != tc.want {
+			t.Errorf("HSTS_ENABLED=%s COOKIE_SECURE=%s APP_ENV=%s: hsts = %v, want %v", tc.hsts, tc.cookie, tc.env, got, tc.want)
+		}
+	}
+}
+
 func TestLoad_AuthValidationErrors(t *testing.T) {
 	cases := []struct {
 		name string
@@ -85,6 +109,7 @@ func TestLoad_AuthValidationErrors(t *testing.T) {
 		want string
 	}{
 		{"cookie maybe", map[string]string{"COOKIE_SECURE": "maybe"}, "COOKIE_SECURE"},
+		{"hsts maybe", map[string]string{"HSTS_ENABLED": "maybe"}, "HSTS_ENABLED"},
 		{"idle zero", map[string]string{"SESSION_IDLE_TIMEOUT": "0s"}, "SESSION_IDLE_TIMEOUT"},
 		{"idle negative", map[string]string{"SESSION_IDLE_TIMEOUT": "-1m"}, "SESSION_IDLE_TIMEOUT"},
 		{"absolute below idle", map[string]string{"SESSION_IDLE_TIMEOUT": "2h", "SESSION_ABSOLUTE_TIMEOUT": "1h"}, "SESSION_ABSOLUTE_TIMEOUT"},

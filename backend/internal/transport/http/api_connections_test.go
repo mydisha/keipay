@@ -503,9 +503,7 @@ func TestCallbackBodyLimit(t *testing.T) {
 
 	p := f.addPayment(t, a, 5000)
 	w, read := post("/webhooks/xendit/"+a.PublicID, pad(xenditCallbackBody(p, "inv_big", "PAID"), handler.MaxCallbackBytes+1))
-	if env := expectError(t, w, 400, domain.CodeInvalidRequest); env.Error.Message != "request body too large" {
-		t.Fatalf("message = %q", env.Error.Message)
-	}
+	expectError(t, w, http.StatusRequestEntityTooLarge, domain.CodeRequestTooLarge)
 	if read > handler.MaxCallbackBytes+1 || f.paymentStatus(t, p) != domain.PaymentStatusPending {
 		t.Fatalf("over the limit: read %d bytes, status %s", read, f.paymentStatus(t, p))
 	}

@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"github.com/mydisha/keipay/backend/internal/transport/http/middleware"
 )
 
 func newSPAEngine(t *testing.T) *gin.Engine {
@@ -50,6 +52,20 @@ func TestSPA_ServesBuiltAssetWithLongCache(t *testing.T) {
 	}
 	if cc := w.Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {
 		t.Fatalf("Cache-Control = %q, want immutable", cc)
+	}
+}
+
+// The console gets its own content security policy; API 404s under the
+// reserved prefixes keep whatever the router set.
+func TestSPA_ConsolePolicy(t *testing.T) {
+	r := newSPAEngine(t)
+	for _, target := range []string{"/", "/apps", "/assets/app-1a2b.js"} {
+		if got := serve(r, http.MethodGet, target).Header().Get("Content-Security-Policy"); got != middleware.ConsoleContentSecurityPolicy {
+			t.Errorf("%s: policy %q", target, got)
+		}
+	}
+	if got := serve(r, http.MethodGet, "/v1/nope").Header().Get("Content-Security-Policy"); got != "" {
+		t.Fatalf("API 404 got the console policy: %q", got)
 	}
 }
 

@@ -103,7 +103,11 @@ func AppAuth(resolver AppResolver, nonces NonceStore, cipher SecretDecryptor, lo
 
 		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
-			abort(c, domain.CodeUnauthorized, "cannot read body")
+			if TooLarge(err) {
+				response.Error(c, domain.ErrRequestTooLarge)
+				return
+			}
+			abort(c, domain.CodeInvalidRequest, "cannot read body")
 			return
 		}
 		c.Request.Body = io.NopCloser(bytes.NewReader(body)) // restore for handler

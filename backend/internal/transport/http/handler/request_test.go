@@ -95,6 +95,45 @@ func TestBindJSONAcceptsValidBody(t *testing.T) {
 	}
 }
 
+// Anything after the JSON value (except whitespace) means the client sent
+// something other than one document; silently reading only the first value
+// would hide that.
+func TestDecodeJSONRejectsTrailingData(t *testing.T) {
+	for _, body := range []string{`{"a":1}` + "\n", ` {"a":1} `, `{"a":1}`} {
+		var dst map[string]any
+		if err := decodeJSON(testContext(http.MethodPost, "/x", body), &dst); err != nil {
+			t.Errorf("%q: %v", body, err)
+		}
+	}
+	for _, body := range []string{`{"a":1} {"b":2}`, `{"a":1}x`, `{"a":1}]`, `1 2`} {
+		var dst any
+		err := decodeJSON(testContext(http.MethodPost, "/x", body), &dst)
+		if got := fieldsOf(t, err); len(got) != 0 {
+			t.Errorf("%q: fields = %+v", body, got)
+		}
+	}
+}
+
+// A body cut off by the route's limit is 413, for a required and an optional
+// body alike.
+func TestDecodeJSONTooLargeIs413(t *testing.T) {
+	limited := func(body string) *gin.Context {
+		c := testContext(http.MethodPost, "/x", body)
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 8)
+		return c
+	}
+	var dst map[string]any
+	if err := decodeJSON(limited(`{"note":"too long"}`), &dst); !errors.Is(err, domain.ErrRequestTooLarge) {
+		t.Fatalf("decodeJSON: %v", err)
+	}
+	if err := decodeOptionalJSON(limited(`{"note":"too long"}`), &dst); !errors.Is(err, domain.ErrRequestTooLarge) {
+		t.Fatalf("decodeOptionalJSON: %v", err)
+	}
+	if err := decodeOptionalJSON(limited(`{"a":1}`), &dst); err != nil || dst["a"] != float64(1) {
+		t.Fatalf("under the limit: %v %v", err, dst)
+	}
+}
+
 func TestJSONPath(t *testing.T) {
 	for in, want := range map[string]string{
 		"CreatePaymentRequest.order_id":          "order_id",

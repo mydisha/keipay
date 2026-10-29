@@ -37,7 +37,9 @@ type Config struct {
 	JWTSecretSet bool `mapstructure:"-"`
 
 	// CookieSecureMode is auto, true or false; see CookieSecure.
-	CookieSecureMode       string        `mapstructure:"COOKIE_SECURE"`
+	CookieSecureMode string `mapstructure:"COOKIE_SECURE"`
+	// HSTSMode is auto, true or false; see HSTSEnabled.
+	HSTSMode               string        `mapstructure:"HSTS_ENABLED"`
 	SessionIdleTimeout     time.Duration `mapstructure:"SESSION_IDLE_TIMEOUT"`
 	SessionAbsoluteTimeout time.Duration `mapstructure:"SESSION_ABSOLUTE_TIMEOUT"`
 
@@ -100,7 +102,7 @@ func Load() (*Config, error) {
 		"REDIS_ADDR", "REDIS_PASSWORD", "REDIS_DB",
 		"XENDIT_SECRET_KEY", "XENDIT_CALLBACK_TOKEN",
 		"JWT_SECRET",
-		"COOKIE_SECURE", "SESSION_IDLE_TIMEOUT", "SESSION_ABSOLUTE_TIMEOUT",
+		"COOKIE_SECURE", "HSTS_ENABLED", "SESSION_IDLE_TIMEOUT", "SESSION_ABSOLUTE_TIMEOUT",
 		"LOGIN_MAX_FAILURES_PER_IP", "LOGIN_MAX_FAILURES_PER_EMAIL", "LOGIN_FAILURE_WINDOW",
 		"TRUSTED_PROXIES", "SETUP_TOKEN",
 		"ENCRYPTION_KEY",
@@ -135,6 +137,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("WEBHOOK_DISABLE_AFTER_FAILURES", 5)
 	v.SetDefault("SHUTDOWN_TIMEOUT", "30s")
 	v.SetDefault("COOKIE_SECURE", "auto")
+	v.SetDefault("HSTS_ENABLED", "auto")
 	v.SetDefault("SESSION_IDLE_TIMEOUT", "30m")
 	v.SetDefault("SESSION_ABSOLUTE_TIMEOUT", "12h")
 	v.SetDefault("LOGIN_MAX_FAILURES_PER_IP", 20)
@@ -167,6 +170,11 @@ func (c *Config) validateAuth() error {
 	case "auto", "true", "false":
 	default:
 		return fmt.Errorf("COOKIE_SECURE must be auto, true or false")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.HSTSMode)) {
+	case "auto", "true", "false":
+	default:
+		return fmt.Errorf("HSTS_ENABLED must be auto, true or false")
 	}
 	if c.SessionIdleTimeout <= 0 {
 		return fmt.Errorf("SESSION_IDLE_TIMEOUT must be greater than zero")
@@ -220,6 +228,23 @@ func (c *Config) CookieSecure() bool {
 		return false
 	default:
 		return !strings.EqualFold(c.AppEnv, "development")
+	}
+}
+
+// HSTSEnabled reports whether responses carry Strict-Transport-Security:
+// always for true, never for false, and for auto whenever cookies are
+// Secure, since both answer the same question: do browsers reach this
+// server over HTTPS. Browsers ignore the header over plain HTTP, so sending
+// it behind a TLS-terminating proxy is safe; an operator who sets the
+// policy at the proxy can turn it off here.
+func (c *Config) HSTSEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(c.HSTSMode)) {
+	case "true":
+		return true
+	case "false":
+		return false
+	default:
+		return c.CookieSecure()
 	}
 }
 

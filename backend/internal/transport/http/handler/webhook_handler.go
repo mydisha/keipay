@@ -79,7 +79,7 @@ func (h *WebhookHandler) receive(c *gin.Context, resolve resolver) {
 		var tooLarge *http.MaxBytesError
 		event, apiErr := "webhook.inbound.read_error", invalidBody()
 		if errors.As(err, &tooLarge) {
-			event, apiErr = "webhook.inbound.too_large", invalidRequest("request body too large")
+			event, apiErr = "webhook.inbound.too_large", domain.ErrRequestTooLarge
 		}
 		log.Warn("webhook inbound read failed",
 			zap.String(logger.FieldLogType, logger.LogTypeWebhook),

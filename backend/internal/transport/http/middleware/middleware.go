@@ -3,6 +3,7 @@ package middleware
 
 import (
 	"net/http"
+	"net/url"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -40,6 +41,23 @@ func RequestID() gin.HandlerFunc {
 // middleware in the gin context, or "" if absent.
 func RequestIDFromContext(c *gin.Context) string {
 	return c.GetString(ctxRequestID)
+}
+
+// ValidQuery refuses a query string that does not parse, such as a stray "%"
+// in cursor=%%%. Go drops the broken pair, so a list would otherwise answer
+// its first page instead of an error.
+func ValidQuery() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if _, err := url.ParseQuery(c.Request.URL.RawQuery); err != nil {
+			response.Error(c, &domain.Error{
+				Code:    domain.CodeInvalidRequest,
+				Message: "malformed query string",
+				Details: map[string]any{"fields": []domain.FieldError{}},
+			})
+			return
+		}
+		c.Next()
+	}
 }
 
 // Recover logs panics and returns 500 instead of crashing the server. A

@@ -313,6 +313,10 @@ func TestReconciliationRequestErrors(t *testing.T) {
 	}
 	expectError(t, f.send(owner, http.MethodGet, "/admin/reconciliation-runs?cursor=nope", ""), http.StatusBadRequest, domain.CodeInvalidCursor)
 	expectError(t, f.send(owner, http.MethodGet, "/admin/reconciliation-runs/"+runID+"/items?cursor=nope", ""), http.StatusBadRequest, domain.CodeInvalidCursor)
+	// A broken escape is refused rather than dropped, which answered page 1.
+	for _, path := range []string{"/admin/reconciliation-runs?cursor=%%%", "/admin/payments?cursor=%%%", "/admin/payment-reports?limit=%zz"} {
+		expectError(t, f.send(owner, http.MethodGet, path, ""), http.StatusBadRequest, domain.CodeInvalidRequest)
+	}
 
 	unknownRun := id.New(id.Reconciliation)
 	for _, path := range []string{"/admin/reconciliation-runs/" + unknownRun, "/admin/reconciliation-runs/" + unknownRun + "/items",

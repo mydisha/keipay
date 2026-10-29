@@ -1544,7 +1544,7 @@ export interface components {
          *
          *     | code | status | meaning |
          *     |---|---|---|
-         *     | `invalid_request` | 400 | Malformed JSON, failed field validation, a non-integer path id, or a bad `limit` on a cursor-paginated list. `details.fields` is a list of `{field, rule}`. |
+         *     | `invalid_request` | 400 | Malformed JSON, a query string that does not parse (such as a stray `%`), failed field validation, a non-integer path id, or a bad `limit` on a cursor-paginated list. `details.fields` is a list of `{field, rule}`. |
          *     | `validation_failed` | 400 | The request is well-formed but breaks a business rule. |
          *     | `invalid_cursor` | 400 | The `cursor` is malformed or was not issued by this endpoint. |
          *     | `unauthorized` | 401 | Authentication failed for a reason not listed below. |

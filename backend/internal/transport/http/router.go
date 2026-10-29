@@ -170,7 +170,7 @@ func NewRouter(d Deps) *gin.Engine {
 
 	// App-facing API: API key + HMAC + timestamp + nonce replay protection.
 	v1 := r.Group("/v1")
-	v1.Use(middleware.AppAuth(d.AppResolver, d.NonceStore, d.SecretDecryptor, d.Log))
+	v1.Use(middleware.ValidQuery(), middleware.AppAuth(d.AppResolver, d.NonceStore, d.SecretDecryptor, d.Log))
 
 	{
 		v1.POST("/payments", d.Payment.Create)
@@ -193,6 +193,7 @@ func NewRouter(d Deps) *gin.Engine {
 	}
 	admin := r.Group("/admin")
 	admin.Use(
+		middleware.ValidQuery(),
 		middleware.AdminContext(d.Cookies, newToken),
 		middleware.LoadSession(d.Sessions, d.Cookies),
 		middleware.CSRF(d.Log),

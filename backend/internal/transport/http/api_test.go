@@ -3,7 +3,6 @@ package http
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -42,21 +41,6 @@ func (emptyLedger) Summary(context.Context, domain.LedgerFilter) ([]domain.Ledge
 	return nil, nil
 }
 
-type deliveries struct {
-	domain.WebhookRepository
-	byID map[int64]domain.WebhookDelivery
-}
-
-func (deliveries) ListDeliveries(context.Context, domain.DeliveryFilter) ([]domain.WebhookDelivery, error) {
-	return nil, nil
-}
-func (d deliveries) GetDelivery(_ context.Context, id int64) (*domain.WebhookDelivery, error) {
-	if v, ok := d.byID[id]; ok {
-		return &v, nil
-	}
-	return nil, domain.ErrNotFound
-}
-
 type plainCipher struct{}
 
 func (plainCipher) Encrypt(s string) (string, error) { return "enc:" + s, nil }
@@ -77,9 +61,29 @@ func (m *memNonces) Acquire(_ context.Context, key string) bool {
 	return true
 }
 
-type replayer struct{ err error }
+type queued struct {
+	id      int64
+	attempt int
+	manual  bool
+}
 
-func (r *replayer) ReplayWebhookForward(context.Context, int64) error { return r.err }
+// recordingQueue records the delivery attempts the services enqueue; set err
+// to make the queue unavailable.
+type recordingQueue struct {
+	mu    sync.Mutex
+	calls []queued
+	err   error
+}
+
+func (q *recordingQueue) EnqueueDelivery(_ context.Context, id int64, attempt int, manual bool, _ time.Time) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.err != nil {
+		return q.err
+	}
+	q.calls = append(q.calls, queued{id: id, attempt: attempt, manual: manual})
+	return nil
+}
 
 // auditRepo records entries and serves a canned page to List.
 type auditRepo struct {
@@ -123,7 +127,6 @@ type apiFixture struct {
 	sessions *memstore.Sessions
 	failures *memstore.Failures
 	audit    *auditRepo
-	replay   *replayer
 	auth     *service.AuthService
 	logs     *observer.ObservedLogs
 	owner    *domain.User
@@ -140,7 +143,9 @@ type apiFixture struct {
 	testConn, liveConn *domain.Connection
 	// xenditAPI stands in for the Xendit API the xendit adapter calls.
 	xenditAPI *fakeXenditAPI
-	webhooks  *webhookStores
+	hooks     *memstore.Webhooks
+	ledger    *memstore.Ledger
+	queue     *recordingQueue
 }
 
 // apiOption adjusts the fixture before the router is built.
@@ -156,7 +161,6 @@ func newAPI(t *testing.T, frontendDir string, opts ...apiOption) *apiFixture {
 		sessions: memstore.NewSessions(time.Now),
 		failures: memstore.NewFailures(time.Now),
 		audit:    &auditRepo{},
-		replay:   &replayer{},
 		logs:     logs,
 		apps:     memstore.NewApps(time.Now),
 		fake:     providertest.New(),
@@ -194,29 +198,37 @@ func newAPI(t *testing.T, frontendDir string, opts ...apiOption) *apiFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tx := memstore.NewTx(f.apps, f.keys, f.conns, f.payments)
+	f.hooks = memstore.NewWebhooks(f.apps, f.payments, f.conns, time.Now)
+	f.ledger = &memstore.Ledger{}
+	f.queue = &recordingQueue{}
+	tx := memstore.NewTx(f.apps, f.keys, f.conns, f.payments, f.hooks, f.ledger)
 	f.appSvc = service.NewAppService(f.apps, f.keys, f.conns, plainCipher{}, tx, auditSvc)
 	f.connSvc = service.NewConnectionService(service.ConnectionDeps{
 		Connections: f.conns, Merchants: f.conns.Merchants(), Apps: f.apps, Payments: f.payments, Registry: registry,
 		Sealer: sealer, Tx: tx, Audit: auditSvc, Log: log, BaseURL: "https://pay.example.com",
 	})
 	paymentSvc := service.NewPaymentService(f.payments, f.conns, registry, sealer, log)
-	f.webhooks = newWebhookStores()
-	webhookSvc := service.NewWebhookService(f.payments, f.webhooks.ledger, f.webhooks.repo, tx, f.webhooks.idemp, f.webhooks.enqueuer)
+	webhookSvc := service.NewWebhookService(service.WebhookDeps{
+		Payments: f.payments, Ledger: f.ledger, Inbound: f.hooks.Inbound(), Events: f.hooks.Events(),
+		Endpoints: f.hooks.Endpoints(), Deliveries: f.hooks.Deliveries(), Tx: tx, Enqueuer: f.queue, Log: log,
+	})
+	endpointSvc := service.NewWebhookEndpointService(service.WebhookEndpointDeps{
+		Apps: f.apps, Endpoints: f.hooks.Endpoints(), Events: f.hooks.Events(), Deliveries: f.hooks.Deliveries(),
+		Cipher: plainCipher{}, Tx: tx, Audit: auditSvc, Enqueuer: f.queue, Log: log,
+	})
+	deliverySvc := service.NewDeliveryService(service.DeliveryDeps{
+		Deliveries: f.hooks.Deliveries(), Endpoints: f.hooks.Endpoints(), Tx: tx, Enqueuer: f.queue, Audit: auditSvc, Log: log,
+	})
 	f.deps.Apps = handler.NewAppHandler(f.appSvc)
+	f.deps.Endpoints = handler.NewWebhookEndpointHandler(endpointSvc)
+	f.deps.Deliveries = handler.NewDeliveryHandler(deliverySvc, service.NewInboundService(f.hooks.Inbound()))
 	f.deps.Connections = handler.NewConnectionHandler(f.connSvc)
 	f.deps.Webhook = handler.NewWebhookHandler(webhookSvc, f.connSvc, log)
 	f.deps.Payment = handler.NewPaymentHandler(paymentSvc)
 	f.deps.AppResolver = f.appSvc
 	f.deps.NonceStore = &memNonces{seen: map[string]bool{}}
 	f.deps.SecretDecryptor = plainCipher{}
-	f.deps.Admin = handler.NewAdminHandler(
-		paymentSvc,
-		service.NewLedgerService(emptyLedger{}),
-		service.NewDeliveryService(deliveries{byID: map[int64]domain.WebhookDelivery{3: {ID: 3, Status: domain.WebhookDeliveryFailed, Attempts: 2}}},
-			f.replay, auditSvc),
-		auditSvc,
-	)
+	f.deps.Admin = handler.NewAdminHandler(paymentSvc, service.NewLedgerService(emptyLedger{}), auditSvc)
 	f.router = NewRouter(f.deps)
 	f.owner = f.addUser(t, "owner@example.com", domain.RoleOwner)
 	ctx := domain.WithActor(context.Background(), domain.SystemActor("test"))
@@ -384,7 +396,8 @@ func TestEmptyListsEncodeAsArrays(t *testing.T) {
 		"/admin/apps":               {`"data":[]`, `"next_cursor":null`},
 		"/admin/payments":           {`"data":[]`, `"next_cursor":null`},
 		"/admin/ledger":             {`"entries":[]`, `"summary":[]`},
-		"/admin/webhook-deliveries": {`"deliveries":[]`},
+		"/admin/webhook-deliveries": {`"data":[]`, `"next_cursor":null`},
+		"/admin/inbound-webhooks":   {`"data":[]`, `"next_cursor":null`},
 		"/admin/audit-logs":         {`"data":[]`, `"next_cursor":null`},
 	}
 	for path, wants := range cases {
@@ -472,39 +485,6 @@ func TestAuditLogsQueryErrors(t *testing.T) {
 	}
 	expectError(t, f.send(owner, http.MethodGet, "/admin/audit-logs?cursor=nope", ""), 400, domain.CodeInvalidCursor)
 	expectError(t, f.send(nil, http.MethodGet, "/admin/audit-logs", ""), 401, domain.CodeSessionRequired)
-}
-
-// --- replay and path ids ---
-
-func TestReplay(t *testing.T) {
-	f := newAPI(t, "")
-	owner := f.signIn(t, f.owner)
-	f.audit.logs = nil
-	expectError(t, f.send(owner, http.MethodPost, "/admin/webhook-deliveries/abc/replay", ""), 400, domain.CodeInvalidRequest)
-	expectError(t, f.send(owner, http.MethodPost, "/admin/webhook-deliveries/99/replay", ""), 404, domain.CodeNotFound)
-
-	f.replay.err = errors.New("redis down")
-	expectError(t, f.send(owner, http.MethodPost, "/admin/webhook-deliveries/3/replay", ""), 500, domain.CodeInternal)
-	if len(f.audit.logs) != 0 {
-		t.Fatal("failed replay recorded an entry")
-	}
-
-	f.replay.err = nil
-	w := f.send(owner, http.MethodPost, "/admin/webhook-deliveries/3/replay", "")
-	if w.Code != http.StatusAccepted || w.Body.String() != `{"requeued":true}` {
-		t.Fatalf("replay: %d %s", w.Code, w.Body.String())
-	}
-	if len(f.audit.logs) != 1 || f.audit.logs[0].Action != "webhook_delivery.replay" || f.audit.logs[0].Actor.RequestID == "" ||
-		f.audit.logs[0].Actor.ID != f.owner.PublicID {
-		t.Fatalf("entries = %+v", f.audit.logs)
-	}
-}
-
-func TestInvalidDeliveryPathID(t *testing.T) {
-	f := newAPI(t, "")
-	owner := f.signIn(t, f.owner)
-	env := expectError(t, f.send(owner, http.MethodPost, "/admin/webhook-deliveries/x/replay", ""), 400, domain.CodeInvalidRequest)
-	expectFields(t, env, domain.FieldError{Field: "id", Rule: "int"})
 }
 
 // --- unknown routes ---

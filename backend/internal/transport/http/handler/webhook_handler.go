@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
@@ -18,7 +19,8 @@ import (
 )
 
 // WebhookHandler receives inbound gateway callbacks. Each connection has its
-// own URL and is verified with its own credentials, by the service.
+// own URL and is verified with its own credentials, by the service. Every
+// callback that reaches a known connection is recorded in the inbound log.
 type WebhookHandler struct {
 	svc   *service.WebhookService
 	conns *service.ConnectionService
@@ -91,6 +93,7 @@ func (h *WebhookHandler) receive(c *gin.Context, resolve resolver) {
 
 	ev, err := h.conns.VerifyCallback(conn, c.Request.Header, raw)
 	if err != nil {
+		h.recordRejected(ctx, conn, raw, err)
 		h.rejected(c, conn, len(raw), err)
 		return
 	}
@@ -109,6 +112,11 @@ func (h *WebhookHandler) receive(c *gin.Context, resolve resolver) {
 	)...)
 
 	err = h.svc.Process(ctx, conn, *ev, raw)
+	if errors.Is(err, domain.ErrInvalidInput) {
+		// Recorded as invalid_payload by the service.
+		h.rejected(c, conn, len(raw), err)
+		return
+	}
 	if errors.Is(err, service.ErrForwardNotQueued) {
 		// Committed; the sweeper enqueues the forward. Ack so the gateway stops retrying.
 		log.Warn("webhook forward enqueue deferred", append(fields,
@@ -151,6 +159,24 @@ func (h *WebhookHandler) receive(c *gin.Context, resolve resolver) {
 		zap.Int64(logger.FieldLatencyMS, time.Since(start).Milliseconds()),
 	)...)
 	response.Success(c, dto.ReceivedResponse{Received: true})
+}
+
+// Result details of rejected callbacks. They are fixed strings, so neither
+// a credential nor the parser's text reaches the console through them.
+const (
+	detailInvalidSignature = "verification with the connection's credentials failed"
+	detailInvalidPayload   = "the body is not a callback this provider sends"
+)
+
+// recordRejected logs a callback of a known connection that failed
+// verification or parsing; other errors are not about the callback.
+func (h *WebhookHandler) recordRejected(ctx context.Context, conn *domain.Connection, raw []byte, err error) {
+	switch {
+	case errors.Is(err, domain.ErrInvalidCallbackToken):
+		h.svc.RecordRejected(ctx, conn, raw, domain.InboundInvalidSignature, detailInvalidSignature)
+	case errors.Is(err, domain.ErrInvalidInput):
+		h.svc.RecordRejected(ctx, conn, raw, domain.InboundInvalidPayload, detailInvalidPayload)
+	}
 }
 
 // rejected answers a callback that could not be verified or read. conn is set

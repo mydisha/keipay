@@ -29,7 +29,12 @@ func newTestApp(t *testing.T, pool *pgxpool.Pool, env domain.Environment) *domai
 func deleteApp(pool *pgxpool.Pool, a *domain.App) {
 	ctx := context.Background()
 	for _, q := range []string{
+		`DELETE FROM webhook_delivery_attempts WHERE delivery_id IN (SELECT id FROM webhook_deliveries WHERE app_id=$1)`,
 		`DELETE FROM webhook_deliveries WHERE app_id=$1`,
+		`DELETE FROM inbound_webhooks WHERE payment_id IN (SELECT id FROM payments WHERE app_id=$1)
+			OR event_id IN (SELECT id FROM events WHERE app_id=$1)`,
+		`DELETE FROM events WHERE app_id=$1`,
+		`DELETE FROM webhook_endpoints WHERE app_id=$1`,
 		`DELETE FROM ledger_entries WHERE app_id=$1`,
 		`DELETE FROM payments WHERE app_id=$1`,
 		`DELETE FROM app_api_keys WHERE app_id=$1`,
@@ -67,6 +72,7 @@ func deleteConnection(pool *pgxpool.Pool, id int64, publicID string) {
 		`UPDATE apps SET default_connection_id = NULL WHERE default_connection_id = $1`,
 		`UPDATE payments SET connection_id = NULL WHERE connection_id = $1`,
 		`UPDATE merchants SET legacy_connection_id = NULL WHERE legacy_connection_id = $1`,
+		`DELETE FROM inbound_webhooks WHERE connection_id = $1`,
 		`DELETE FROM connections WHERE id = $1`,
 	} {
 		_, _ = pool.Exec(ctx, q, id)

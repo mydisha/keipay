@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/pkg/id"
@@ -55,80 +54,6 @@ func newFakeXenditAPI(t *testing.T) *fakeXenditAPI {
 	}))
 	t.Cleanup(f.Close)
 	return f
-}
-
-// webhookStores are in-memory ledger and webhook repositories for callback tests.
-type webhookStores struct {
-	ledger   *memLedger
-	repo     *memWebhooks
-	idemp    *memIdemp
-	enqueuer *recordingEnqueuer
-}
-
-func newWebhookStores() *webhookStores {
-	return &webhookStores{ledger: &memLedger{}, repo: &memWebhooks{events: map[string]bool{}}, idemp: &memIdemp{seen: map[string]bool{}},
-		enqueuer: &recordingEnqueuer{}}
-}
-
-type memLedger struct {
-	mu      sync.Mutex
-	entries []domain.LedgerEntry
-}
-
-func (m *memLedger) Create(_ context.Context, e *domain.LedgerEntry) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.entries = append(m.entries, *e)
-	return nil
-}
-func (m *memLedger) MarkSettled(context.Context, int64, time.Time) error { return nil }
-func (m *memLedger) List(context.Context, domain.LedgerFilter) ([]domain.LedgerEntry, error) {
-	return nil, nil
-}
-func (m *memLedger) Summary(context.Context, domain.LedgerFilter) ([]domain.LedgerSummary, error) {
-	return nil, nil
-}
-
-type memWebhooks struct {
-	domain.WebhookRepository
-	mu         sync.Mutex
-	events     map[string]bool
-	deliveries []domain.WebhookDelivery
-}
-
-func (m *memWebhooks) CreateEventIfNew(_ context.Context, key, status string) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.events[key+":"+status] {
-		return false, nil
-	}
-	m.events[key+":"+status] = true
-	return true, nil
-}
-
-func (m *memWebhooks) CreateDelivery(_ context.Context, d *domain.WebhookDelivery) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	d.ID = int64(len(m.deliveries) + 1)
-	m.deliveries = append(m.deliveries, *d)
-	return nil
-}
-
-type memIdemp struct {
-	mu   sync.Mutex
-	seen map[string]bool
-}
-
-func (m *memIdemp) Seen(_ context.Context, key string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.seen[key]
-}
-
-func (m *memIdemp) Mark(_ context.Context, key string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.seen[key] = true
 }
 
 func systemCtx() context.Context {

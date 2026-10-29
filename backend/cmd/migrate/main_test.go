@@ -30,10 +30,11 @@ func freshCLIPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// T-19 / AC-8: the seed creates the demo test app with one key through the
-// service, audited as system:seed, prints the one-time secrets in the agreed
-// format, and on a rerun prints the skip line and creates nothing. It never
-// creates a user.
+// T-19 / AC-8, T-B33: the seed creates the demo test app with one key through
+// the service, audited as system:seed, prints the one-time secrets in the
+// agreed format (no webhook secret: apps have none since webhook endpoints),
+// and on a rerun prints the skip line and creates nothing. It never creates a
+// user or a webhook endpoint.
 func TestIntegrationSeedCreatesDemoTestApp(t *testing.T) {
 	pool := freshCLIPool(t)
 	cipher, err := crypto.New("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
@@ -49,7 +50,6 @@ func TestIntegrationSeedCreatesDemoTestApp(t *testing.T) {
 	re := regexp.MustCompile(`\Acreated app demo \((app_[0-9A-HJKMNP-TV-Z]{26}), test\)\n` +
 		`  api_key=(kp_test_[0-9a-f]{32})\n` +
 		`  api_secret=(kps_test_[0-9a-f]{48})\n` +
-		`  webhook_secret=(kpwh_[0-9a-f]{48})\n` +
 		`no console user yet: open the console to create the first owner, or run -reset-admin -email <email>\n\z`)
 	m := re.FindStringSubmatch(out.String())
 	if m == nil {
@@ -66,8 +66,12 @@ func TestIntegrationSeedCreatesDemoTestApp(t *testing.T) {
 	if secret, err := cipher.Decrypt(key.SecretEnc); err != nil || secret != m[3] {
 		t.Fatalf("stored api secret does not match the printed one: %v", err)
 	}
-	if secret, err := cipher.Decrypt(app.WebhookSecretEnc); err != nil || secret != m[4] {
-		t.Fatalf("stored webhook secret does not match the printed one: %v", err)
+	if app.WebhookSecretEnc != "" {
+		t.Fatal("seeded app has a webhook secret")
+	}
+	var endpoints int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM webhook_endpoints`).Scan(&endpoints); err != nil || endpoints != 0 {
+		t.Fatalf("seed created %d webhook endpoints: %v", endpoints, err)
 	}
 
 	out.Reset()

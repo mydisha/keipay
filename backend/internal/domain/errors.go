@@ -51,6 +51,7 @@ const (
 	CodeAPIKeyExpired           ErrorCode = "api_key_expired"
 	CodeIdempotencyKeyReused    ErrorCode = "idempotency_key_reused"
 	CodeConnectionInUse         ErrorCode = "connection_in_use"
+	CodeDeliveryNotReplayable   ErrorCode = "delivery_not_replayable"
 	CodeNoEligibleConnection    ErrorCode = "no_eligible_connection"
 	CodeProviderRejected        ErrorCode = "provider_rejected"
 	CodeProviderUnavailable     ErrorCode = "provider_unavailable"
@@ -68,7 +69,7 @@ func ErrorCodes() []ErrorCode {
 		CodePasswordChangeRequired, CodeInvalidCSRFToken, CodeInvalidSetupToken,
 		CodeSetupCompleted, CodeLastOwner, CodeCannotModifySelf, CodeRateLimited,
 		CodeAPIKeyRevoked, CodeAPIKeyExpired, CodeIdempotencyKeyReused,
-		CodeConnectionInUse, CodeNoEligibleConnection, CodeProviderRejected, CodeProviderUnavailable,
+		CodeConnectionInUse, CodeDeliveryNotReplayable, CodeNoEligibleConnection, CodeProviderRejected, CodeProviderUnavailable,
 	}
 }
 
@@ -185,6 +186,24 @@ func ConnectionInUse(apps []AppSummary, count int) *Error {
 		Code:    CodeConnectionInUse,
 		Message: "the connection is the default connection of one or more apps",
 		Details: map[string]any{"apps": listed, "app_count": count},
+		Err:     ErrConflict,
+	}
+}
+
+// Reasons reported by delivery_not_replayable in details.reason.
+const (
+	ReplayReasonInProgress      = "in_progress"
+	ReplayReasonNoEndpoint      = "no_endpoint"
+	ReplayReasonEndpointDeleted = "endpoint_deleted"
+	ReplayReasonDisabled        = "endpoint_disabled"
+)
+
+// DeliveryNotReplayable refuses a replay for reason.
+func DeliveryNotReplayable(reason string) *Error {
+	return &Error{
+		Code:    CodeDeliveryNotReplayable,
+		Message: "the delivery cannot be replayed now",
+		Details: map[string]any{"reason": reason},
 		Err:     ErrConflict,
 	}
 }

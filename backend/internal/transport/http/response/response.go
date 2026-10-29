@@ -70,6 +70,7 @@ var statusByCode = map[domain.ErrorCode]int{
 	domain.CodeAPIKeyExpired:           http.StatusUnauthorized,
 	domain.CodeIdempotencyKeyReused:    http.StatusConflict,
 	domain.CodeConnectionInUse:         http.StatusConflict,
+	domain.CodeDeliveryNotReplayable:   http.StatusConflict,
 	domain.CodeNoEligibleConnection:    http.StatusUnprocessableEntity,
 	domain.CodeProviderRejected:        http.StatusUnprocessableEntity,
 	domain.CodeProviderUnavailable:     http.StatusServiceUnavailable,

@@ -31,6 +31,7 @@ const (
 	RuleType             = "type"
 	RuleInvalidCharacter = "invalid_character"
 	RuleMaxBytes         = "max_bytes"
+	RuleMoved            = "moved"
 )
 
 // Input limits for apps, keys, metadata and idempotency keys.

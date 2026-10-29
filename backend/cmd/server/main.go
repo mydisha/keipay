@@ -109,16 +109,19 @@ func main() {
 	apiKeyRepo := postgres.NewAPIKeyRepo(pool)
 	paymentRepo := postgres.NewPaymentRepo(pool)
 	ledgerRepo := postgres.NewLedgerRepo(pool)
-	webhookRepo := postgres.NewWebhookRepo(pool)
+	endpointRepo := postgres.NewWebhookEndpointRepo(pool)
+	eventRepo := postgres.NewEventRepo(pool)
+	deliveryRepo := postgres.NewDeliveryRepo(pool)
+	inboundRepo := postgres.NewInboundWebhookRepo(pool)
 	auditRepo := postgres.NewAuditRepo(pool)
 	connRepo := postgres.NewConnectionRepo(pool)
 	merchantRepo := postgres.NewMerchantRepo(pool)
 	txMgr := postgres.NewTxManager(pool)
 
-	// Initialize idempotency stores. API keys and apps are not cached, so a
-	// revoked key or disabled app is refused on the next request.
-	log.Debug("initializing idempotency stores")
-	idemp := redisrepo.NewIdempotency(rdb, 24*time.Hour)
+	// Initialize the /v1 nonce store. API keys and apps are not cached, so a
+	// revoked key or disabled app is refused on the next request. Gateway
+	// callbacks are deduplicated in Postgres (inbound_webhooks), not here.
+	log.Debug("initializing nonce store")
 	nonces := redisrepo.NewIdempotency(rdb, 10*time.Minute)
 	sessions := redisrepo.NewSessionStore(rdb)
 	loginFailures := redisrepo.NewFailureCounter(rdb)
@@ -126,9 +129,9 @@ func main() {
 	// Initialize asynq enqueuer.
 	log.Debug("initializing asynq enqueuer")
 	redisOpt := asynq.RedisClientOpt{Addr: cfg.RedisAddr, Password: cfg.RedisPassword, DB: cfg.RedisDB}
-	enqueuer := worker.NewEnqueuer(redisOpt, cfg.WebhookMaxRetry)
+	enqueuer := worker.NewEnqueuer(redisOpt)
 	defer func() { _ = enqueuer.Close() }()
-	log.Debug("asynq enqueuer initialized", zap.Int("max_retry", cfg.WebhookMaxRetry))
+	log.Debug("asynq enqueuer initialized")
 
 	// Gateway adapters built into this server.
 	registry, err := provider.NewRegistry(xendit.New())
@@ -154,8 +157,37 @@ func main() {
 	})
 	paymentSvc := service.NewPaymentService(paymentRepo, connRepo, registry, cipher, log)
 	ledgerSvc := service.NewLedgerService(ledgerRepo)
-	webhookSvc := service.NewWebhookService(paymentRepo, ledgerRepo, webhookRepo, txMgr, idemp, enqueuer)
-	deliverySvc := service.NewDeliveryService(webhookRepo, enqueuer, auditSvc)
+	webhookSvc := service.NewWebhookService(service.WebhookDeps{
+		Payments:   paymentRepo,
+		Ledger:     ledgerRepo,
+		Inbound:    inboundRepo,
+		Events:     eventRepo,
+		Endpoints:  endpointRepo,
+		Deliveries: deliveryRepo,
+		Tx:         txMgr,
+		Enqueuer:   enqueuer,
+		Log:        log,
+	})
+	endpointSvc := service.NewWebhookEndpointService(service.WebhookEndpointDeps{
+		Apps:       appRepo,
+		Endpoints:  endpointRepo,
+		Events:     eventRepo,
+		Deliveries: deliveryRepo,
+		Cipher:     cipher,
+		Tx:         txMgr,
+		Audit:      auditSvc,
+		Enqueuer:   enqueuer,
+		Log:        log,
+	})
+	deliverySvc := service.NewDeliveryService(service.DeliveryDeps{
+		Deliveries: deliveryRepo,
+		Endpoints:  endpointRepo,
+		Tx:         txMgr,
+		Enqueuer:   enqueuer,
+		Audit:      auditSvc,
+		Log:        log,
+	})
+	inboundSvc := service.NewInboundService(inboundRepo)
 	hasher := service.NewBcryptHasher(service.DefaultBcryptCost)
 	userSvc := service.NewUserService(userRepo, txMgr, auditSvc, hasher)
 	authSvc, err := service.NewAuthService(service.AuthDeps{
@@ -208,8 +240,10 @@ func main() {
 		TrustedProxies:  cfg.TrustedProxies,
 		Payment:         handler.NewPaymentHandler(paymentSvc),
 		Webhook:         handler.NewWebhookHandler(webhookSvc, connSvc, log),
-		Admin:           handler.NewAdminHandler(paymentSvc, ledgerSvc, deliverySvc, auditSvc),
+		Admin:           handler.NewAdminHandler(paymentSvc, ledgerSvc, auditSvc),
 		Apps:            handler.NewAppHandler(appSvc),
+		Endpoints:       handler.NewWebhookEndpointHandler(endpointSvc),
+		Deliveries:      handler.NewDeliveryHandler(deliverySvc, inboundSvc),
 		Connections:     handler.NewConnectionHandler(connSvc),
 		Auth:            handler.NewAuthHandler(authSvc, cookies, service.NewToken),
 		Users:           handler.NewUserHandler(userSvc),
@@ -225,14 +259,28 @@ func main() {
 	}
 
 	// Optional in-process asynq worker, plus the sweeper that re-enqueues
-	// deliveries whose post-commit enqueue failed.
+	// deliveries whose next attempt is overdue.
 	var asynqSrv *asynq.Server
 	sweepCtx, stopSweeper := context.WithCancel(ctx)
 	defer stopSweeper()
 	if cfg.RunWorker {
-		log.Info("starting asynq worker", zap.Int("concurrency", 10))
-		asynqSrv = startWorker(redisOpt, appRepo, webhookRepo, cipher, log, cfg.WebhookMaxRetry)
-		go worker.NewSweeper(webhookRepo, enqueuer, log).Run(sweepCtx)
+		// The sweeper deletes archived tasks through the inspector before
+		// re-enqueuing their attempt.
+		inspector := asynq.NewInspector(redisOpt)
+		defer func() { _ = inspector.Close() }()
+		log.Info("starting asynq worker", zap.Int("concurrency", 10),
+			zap.Int("disable_after_failures", cfg.WebhookDisableAfterFailures))
+		asynqSrv = startWorker(redisOpt, worker.NewForwarder(worker.ForwarderDeps{
+			Deliveries:           deliveryRepo,
+			Endpoints:            endpointRepo,
+			Tx:                   txMgr,
+			Cipher:               cipher,
+			Audit:                auditSvc,
+			Enqueuer:             enqueuer,
+			Log:                  log,
+			DisableAfterFailures: cfg.WebhookDisableAfterFailures,
+		}), log)
+		go worker.NewSweeper(deliveryRepo, enqueuer, inspector, log).Run(sweepCtx)
 		log.Info("asynq worker started")
 	}
 
@@ -305,19 +353,10 @@ func main() {
 	)
 }
 
-func startWorker(
-	redisOpt asynq.RedisClientOpt,
-	appRepo *postgres.AppRepo,
-	webhookRepo *postgres.WebhookRepo,
-	cipher *crypto.Cipher,
-	log *zap.Logger,
-	maxRetry int,
-) *asynq.Server {
-	fwd := worker.NewForwarder(appRepo, webhookRepo, cipher, log, maxRetry)
-
+func startWorker(redisOpt asynq.RedisClientOpt, fwd *worker.Forwarder, log *zap.Logger) *asynq.Server {
 	srv := asynq.NewServer(redisOpt, asynq.Config{
 		Concurrency: 10,
-		Queues:      map[string]int{"webhooks": 10},
+		Queues:      map[string]int{worker.QueueWebhooks: 10},
 		Logger:      newAsynqLogger(log),
 	})
 	mux := asynq.NewServeMux()

@@ -29,6 +29,14 @@ const (
 	ActionConnectionDisable           = "connection.disable"
 	ActionConnectionEnable            = "connection.enable"
 	ActionConnectionTest              = "connection.test"
+	ActionWebhookEndpointCreate       = "webhook_endpoint.create"
+	ActionWebhookEndpointUpdate       = "webhook_endpoint.update"
+	ActionWebhookEndpointDelete       = "webhook_endpoint.delete"
+	ActionWebhookEndpointRotate       = "webhook_endpoint.rotate_secret"
+	ActionWebhookEndpointDisable      = "webhook_endpoint.disable"
+	ActionWebhookEndpointEnable       = "webhook_endpoint.enable"
+	ActionWebhookEndpointAutoDisable  = "webhook_endpoint.auto_disable"
+	ActionWebhookEndpointTest         = "webhook_endpoint.test"
 	ActionWebhookDeliveryReplay       = "webhook_delivery.replay"
 	ActionUserSetup                   = "user.setup"
 	ActionUserCreate                  = "user.create"
@@ -48,6 +56,7 @@ const (
 	TargetAPIKey          = "api_key"
 	TargetConnection      = "connection"
 	TargetUser            = "user"
+	TargetWebhookEndpoint = "webhook_endpoint"
 	TargetWebhookDelivery = "webhook_delivery"
 )
 
@@ -168,6 +177,10 @@ func redact(v any) any {
 
 func secretKey(k string) bool {
 	k = strings.ToLower(k)
+	// A last-4 hint or an expiry describes a secret without revealing it.
+	if strings.HasSuffix(k, "_last4") || strings.HasSuffix(k, "_expires_at") {
+		return false
+	}
 	return strings.Contains(k, "password") || strings.Contains(k, "secret") ||
 		strings.Contains(k, "token") || strings.HasSuffix(k, "_enc")
 }

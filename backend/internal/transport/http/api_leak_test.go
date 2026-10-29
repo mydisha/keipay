@@ -118,3 +118,40 @@ func TestNoSecretsInLogsAuditOrBodies(t *testing.T) {
 		}
 	}
 }
+
+// T-B37 / AC-2: no response, audit snapshot or log line carries an endpoint
+// secret or a custom header value.
+func TestWebhookSecretsNeverLeak(t *testing.T) {
+	f := newAPI(t, "")
+	owner := f.signIn(t, f.owner)
+	app := f.createApp(t, owner, `{"name":"Acme","slug":"acme","environment":"test"}`)
+	created := f.createEndpoint(t, owner, app.id, `{"url":"https://hooks.example.com","events":["*"],
+		"headers":[{"name":"Authorization","value":"Bearer header-secret-value"},{"name":"X-Short","value":"tiny-val"}]}`)
+	path := "/admin/webhook-endpoints/" + created["endpoint"].(map[string]any)["id"].(string)
+	rotated := decode(t, f.send(owner, http.MethodPost, path+"/rotate-secret", ""), http.StatusOK)
+	decode(t, f.send(owner, http.MethodPatch, path, `{"headers":[{"name":"X-New","value":"another-header-secret"}],"description":"d"}`), 200)
+	decode(t, f.send(owner, http.MethodPost, path+"/test", `{"event_type":"payment.paid"}`), 202)
+	secrets := []string{created["secret"].(string), rotated["secret"].(string), "header-secret-value", "tiny-val", "another-header-secret"}
+	for _, e := range f.hooks.AllEndpoints() {
+		secrets = append(secrets, e.SecretEnc)
+	}
+
+	var bodies []string
+	for _, p := range []string{path, "/admin/apps/" + app.id + "/webhook-endpoints", "/admin/audit-logs", "/admin/webhook-deliveries"} {
+		bodies = append(bodies, decodeRawBody(t, f.send(owner, http.MethodGet, p, "")))
+	}
+	for _, l := range f.audit.logs {
+		bodies = append(bodies, string(l.Before)+string(l.After))
+	}
+	for _, e := range f.logs.All() {
+		raw, _ := json.Marshal(e.ContextMap())
+		bodies = append(bodies, e.Message+string(raw))
+	}
+	for _, body := range bodies {
+		for _, s := range secrets {
+			if strings.Contains(body, s) {
+				t.Fatalf("leak of %q in %s", s[:6], body)
+			}
+		}
+	}
+}

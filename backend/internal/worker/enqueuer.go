@@ -3,49 +3,49 @@ package worker
 import (
 	"context"
 	"errors"
-	"fmt"
+	"time"
 
 	"github.com/hibiken/asynq"
 )
 
-// Enqueuer wraps an asynq client to schedule webhook forward tasks.
+// ErrTaskExists means the attempt's task id is still held by a queued,
+// running, retrying or archived task.
+var ErrTaskExists = asynq.ErrTaskIDConflict
+
+// infraMaxRetry bounds asynq's own retries of one attempt. They cover only
+// infrastructure failures (database, queue); failed HTTP attempts are
+// rescheduled by the forwarder per the endpoint's retry policy.
+const infraMaxRetry = 10
+
+// Enqueuer wraps an asynq client to schedule delivery attempts.
 type Enqueuer struct {
-	client   *asynq.Client
-	maxRetry int
+	client *asynq.Client
 }
 
 // NewEnqueuer constructs an Enqueuer backed by a Redis connection.
-func NewEnqueuer(redisOpt asynq.RedisClientOpt, maxRetry int) *Enqueuer {
-	if maxRetry <= 0 {
-		maxRetry = 5
-	}
-	return &Enqueuer{client: asynq.NewClient(redisOpt), maxRetry: maxRetry}
+func NewEnqueuer(redisOpt asynq.RedisClientOpt) *Enqueuer {
+	return &Enqueuer{client: asynq.NewClient(redisOpt)}
 }
 
-// EnqueueWebhookForward schedules forwarding of a delivery with retry policy.
-// The task ID is derived from the delivery, so enqueuing a delivery that is
-// already queued or running (e.g. by the sweeper) is a no-op.
-func (e *Enqueuer) EnqueueWebhookForward(ctx context.Context, deliveryID int64) error {
-	err := e.enqueue(ctx, deliveryID, asynq.TaskID(fmt.Sprintf("%s:%d", TypeWebhookForward, deliveryID)))
-	if errors.Is(err, asynq.ErrTaskIDConflict) {
-		return nil
-	}
-	return err
-}
-
-// ReplayWebhookForward schedules an admin-requested re-send. It skips the task ID
-// dedup because an archived (exhausted) task keeps holding that ID.
-func (e *Enqueuer) ReplayWebhookForward(ctx context.Context, deliveryID int64) error {
-	return e.enqueue(ctx, deliveryID)
-}
-
-func (e *Enqueuer) enqueue(ctx context.Context, deliveryID int64, opts ...asynq.Option) error {
-	task, err := NewWebhookForwardTask(deliveryID)
+// Schedule queues one attempt of a delivery to run at at. An attempt whose
+// task id is taken returns ErrTaskExists.
+func (e *Enqueuer) Schedule(ctx context.Context, deliveryID int64, attempt int, manual bool, at time.Time) error {
+	task, err := NewWebhookForwardTask(deliveryID, attempt, manual)
 	if err != nil {
 		return err
 	}
-	opts = append(opts, asynq.MaxRetry(e.maxRetry), asynq.Queue("webhooks"))
-	_, err = e.client.EnqueueContext(ctx, task, opts...)
+	_, err = e.client.EnqueueContext(ctx, task, asynq.TaskID(ForwardTaskID(deliveryID, attempt)),
+		asynq.Queue(QueueWebhooks), asynq.MaxRetry(infraMaxRetry), asynq.ProcessAt(at))
+	return err
+}
+
+// EnqueueDelivery is Schedule where an attempt that is already queued is a
+// no-op.
+func (e *Enqueuer) EnqueueDelivery(ctx context.Context, deliveryID int64, attempt int, manual bool, at time.Time) error {
+	err := e.Schedule(ctx, deliveryID, attempt, manual, at)
+	if errors.Is(err, ErrTaskExists) {
+		return nil
+	}
 	return err
 }
 

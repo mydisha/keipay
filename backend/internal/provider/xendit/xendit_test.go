@@ -327,15 +327,34 @@ func TestParseWebhook(t *testing.T) {
 	}
 }
 
+// T-B35: known statuses keep their mapping; anything else is unknown, so a
+// callback carrying it is recorded but never applied.
 func TestMapStatus(t *testing.T) {
-	for in, want := range map[string]domain.PaymentStatus{
+	known := map[string]domain.PaymentStatus{
 		"PAID": domain.PaymentStatusPaid, "SETTLED": domain.PaymentStatusSettled, "EXPIRED": domain.PaymentStatusExpired,
 		"FAILED": domain.PaymentStatusFailed, "STOPPED": domain.PaymentStatusFailed, "PENDING": domain.PaymentStatusPending,
-		"SOMETHING_NEW": domain.PaymentStatusPending, "": domain.PaymentStatusPending, "paid": domain.PaymentStatusPending,
-	} {
-		if got := MapStatus(in); got != want {
-			t.Errorf("MapStatus(%q) = %s, want %s", in, got, want)
+	}
+	for in, want := range known {
+		if got, ok := MapStatus(in); got != want || !ok {
+			t.Errorf("MapStatus(%q) = %s, %v; want %s, true", in, got, ok, want)
 		}
+	}
+	for _, in := range []string{"SOMETHING_NEW", "", "paid", "PAÏD"} {
+		if got, ok := MapStatus(in); got != "" || ok {
+			t.Errorf("MapStatus(%q) = %q, %v; want unknown", in, got, ok)
+		}
+	}
+}
+
+// T-B35: an unknown status parses with an empty Status and the gateway's own
+// value kept for the inbound log.
+func TestParseWebhookUnknownStatus(t *testing.T) {
+	ev, err := New().ParseWebhook([]byte(`{"id":"inv_1","external_id":"kp_pay_x","status":"REFUNDED","amount":5000}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Status != "" || ev.ProviderStatus != "REFUNDED" || ev.EventKey != "inv_1" {
+		t.Fatalf("event = %+v", ev)
 	}
 }
 

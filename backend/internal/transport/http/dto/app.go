@@ -9,12 +9,13 @@ import (
 )
 
 // CreateAppRequest is the request body for POST /admin/apps. Field rules are
-// checked by the service so they match the contract exactly.
+// checked by the service so they match the contract exactly. WebhookURL is
+// only read to refuse the retired field, whatever its value.
 type CreateAppRequest struct {
 	Name               string             `json:"name"`
 	Slug               string             `json:"slug"`
 	Environment        domain.Environment `json:"environment"`
-	WebhookURL         string             `json:"webhook_url"`
+	WebhookURL         json.RawMessage    `json:"webhook_url"`
 	RedirectSuccessURL string             `json:"redirect_success_url"`
 	RedirectFailureURL string             `json:"redirect_failure_url"`
 	Metadata           json.RawMessage    `json:"metadata"`
@@ -26,8 +27,7 @@ type CreateAPIKeyRequest struct {
 	ExpiresAt *time.Time `json:"expires_at"`
 }
 
-// App is an app as the API shows it. The webhook secret and internal id never
-// leave the server.
+// App is an app as the API shows it. The internal id never leaves the server.
 type App struct {
 	ID                 string             `json:"id"`
 	Slug               string             `json:"slug"`
@@ -35,7 +35,6 @@ type App struct {
 	Environment        domain.Environment `json:"environment"`
 	Status             domain.AppStatus   `json:"status"`
 	Metadata           domain.Metadata    `json:"metadata"`
-	WebhookURL         string             `json:"webhook_url"`
 	RedirectSuccessURL string             `json:"redirect_success_url"`
 	RedirectFailureURL string             `json:"redirect_failure_url"`
 	DefaultConnection  *ConnectionSummary `json:"default_connection"`
@@ -52,7 +51,6 @@ func AppFromDomain(a *domain.App) App {
 		Environment:        a.Environment,
 		Status:             a.Status,
 		Metadata:           a.Metadata,
-		WebhookURL:         a.WebhookURL,
 		RedirectSuccessURL: a.RedirectSuccessURL,
 		RedirectFailureURL: a.RedirectFailureURL,
 		DefaultConnection:  ConnectionSummaryFromDomain(a.DefaultConnection),
@@ -95,23 +93,21 @@ func AppListFromDomain(page domain.PageResult[domain.App]) AppListResponse {
 	return out
 }
 
-// AppCreatedResponse carries a new app, its first key and the secrets shown once.
+// AppCreatedResponse carries a new app, its first key and the secret shown once.
 type AppCreatedResponse struct {
-	App           App    `json:"app"`
-	Key           APIKey `json:"key"`
-	APIKey        string `json:"api_key"`
-	APISecret     string `json:"api_secret"`
-	WebhookSecret string `json:"webhook_secret"`
+	App       App    `json:"app"`
+	Key       APIKey `json:"key"`
+	APIKey    string `json:"api_key"`
+	APISecret string `json:"api_secret"`
 }
 
 // AppCreatedFromService converts a created app.
 func AppCreatedFromService(c *service.AppCreated, now time.Time) AppCreatedResponse {
 	return AppCreatedResponse{
-		App:           AppFromDomain(c.App),
-		Key:           APIKeyFromDomain(c.App, c.Key, now),
-		APIKey:        c.APIKey,
-		APISecret:     c.APISecret,
-		WebhookSecret: c.WebhookSecret,
+		App:       AppFromDomain(c.App),
+		Key:       APIKeyFromDomain(c.App, c.Key, now),
+		APIKey:    c.APIKey,
+		APISecret: c.APISecret,
 	}
 }
 

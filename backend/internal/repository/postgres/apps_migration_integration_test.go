@@ -442,7 +442,7 @@ func TestIntegrationPaymentLedgerDeliveryLists(t *testing.T) {
 	apps := postgres.NewAppRepo(pool)
 	payments := postgres.NewPaymentRepo(pool)
 	ledger := postgres.NewLedgerRepo(pool)
-	webhooks := postgres.NewWebhookRepo(pool)
+	deliveries := postgres.NewDeliveryRepo(pool)
 
 	var all []*domain.App
 	for _, slug := range []string{"acme", "globex"} {
@@ -469,8 +469,8 @@ func TestIntegrationPaymentLedgerDeliveryLists(t *testing.T) {
 		if err := ledger.Create(ctx, &domain.LedgerEntry{AppID: app.ID, PaymentID: p.ID, Amount: 1000, XenditFee: 10, NetAmount: 990, Type: domain.LedgerEntryTypePayment}); err != nil {
 			t.Fatal(err)
 		}
-		if err := webhooks.CreateDelivery(ctx, &domain.WebhookDelivery{PaymentID: p.ID, AppID: app.ID, EventType: "payment.paid",
-			Payload: []byte(`{}`), Status: domain.WebhookDeliveryPending}); err != nil {
+		if err := deliveries.Create(ctx, &domain.WebhookDelivery{PublicID: id.New(id.Delivery), PaymentID: &p.ID, AppID: app.ID,
+			EventType: "payment.paid", Payload: []byte(`{}`), Status: domain.WebhookDeliveryPending, MaxAttempts: 1}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -521,17 +521,17 @@ func TestIntegrationPaymentLedgerDeliveryLists(t *testing.T) {
 		summary[1].App != globex.Summary() {
 		t.Fatalf("summary = %+v %v", summary, err)
 	}
-	ds, err := webhooks.ListDeliveries(ctx, domain.DeliveryFilter{AppPublicID: &acmeID})
-	if err != nil || len(ds) != 3 {
+	ds, err := deliveries.List(ctx, domain.DeliveryFilter{AppPublicID: &acmeID}, domain.Page{Limit: 50})
+	if err != nil || len(ds.Items) != 3 {
 		t.Fatalf("deliveries = %+v %v", ds, err)
 	}
-	for _, d := range ds {
+	for _, d := range ds.Items {
 		if d.App != acme.Summary() || d.AppID != acme.ID || !id.Valid(d.PaymentPublicID, id.Payment) {
 			t.Fatalf("delivery row = %+v", d)
 		}
 	}
-	if all, _ := webhooks.ListDeliveries(ctx, domain.DeliveryFilter{}); len(all) != 4 {
-		t.Fatalf("all deliveries = %d", len(all))
+	if all, _ := deliveries.List(ctx, domain.DeliveryFilter{}, domain.Page{Limit: 50}); len(all.Items) != 4 {
+		t.Fatalf("all deliveries = %d", len(all.Items))
 	}
 
 	// Lookups are scoped to the app.

@@ -39,19 +39,21 @@ info:
 
     New list endpoints use cursor pagination: `limit` (1-200, default 50)
     and an opaque `cursor`; the response carries `data` and `next_cursor`
-    (`null` on the last page). Two older admin lists (`/admin/ledger`,
-    `/admin/webhook-deliveries`) still use `limit` and `offset` and move
-    to cursors when their features are reworked.
+    (`null` on the last page). One older admin list (`/admin/ledger`)
+    still uses `limit` and `offset` and moves to cursors when its feature
+    is reworked.
 
     ## Identifiers
 
     Resources are identified by prefixed public ids: `app_…` (app),
     `key_…` (API key), `pay_…` (payment), `con_…` (gateway connection),
-    `usr_…` (user), `aud_…` (audit entry). The part after the prefix is a ULID; lower case is accepted.
-    Internal integer ids are not exposed, with three exceptions kept for
-    existing integrations: the `payment_id` field of `/v1` payments and
-    webhook events, and the ids of ledger entries and webhook deliveries
-    (the replay endpoint uses the latter).
+    `whe_…` (webhook endpoint), `evt_…` (event), `dlv_…` (webhook
+    delivery), `inb_…` (inbound gateway webhook), `usr_…` (user),
+    `aud_…` (audit entry). The part after the prefix is a ULID; lower
+    case is accepted. Internal integer ids are not exposed, with two
+    exceptions kept for existing integrations: the `payment_id` field of
+    `/v1` payments and of version `v1` webhook bodies, and the ids of
+    ledger entries.
 
     ## App API keys
 
@@ -81,11 +83,9 @@ info:
     finally replay (`401 replayed_request`). Key and app state are only
     reported to callers that signed with the key's secret.
 
-    Outbound webhooks are signed with the app's webhook signing secret
-    (`kpwh_` + 48 hex characters, shown once when the app is created),
-    which is separate from its API keys so rotating keys never breaks
-    webhook verification. Apps that existed before apps replaced tenants
-    keep their original `api_secret` as their webhook signing secret.
+    Outbound webhooks are signed with the secret of each webhook endpoint
+    (see Webhooks to apps), never with an API secret, so rotating keys
+    never breaks webhook verification.
 
     ## Idempotency
 
@@ -129,6 +129,62 @@ info:
     `POST /webhooks/xendit` remains as an alias for the connection
     imported from the deprecated `XENDIT_SECRET_KEY` and
     `XENDIT_CALLBACK_TOKEN` settings (see that operation).
+
+    Every callback that reaches a known connection is recorded as an
+    inbound webhook (`inb_…`): the raw body, whether verification passed,
+    and what processing did with it (`InboundWebhookResult`). Read them
+    with `GET /admin/inbound-webhooks`.
+
+    ## Webhooks to apps
+
+    KeiPay tells apps about payment changes by POSTing events to the
+    app's webhook endpoints (`whe_…`, `/admin/apps/{id}/webhook-endpoints`).
+    An app may have up to 10 endpoints. Each endpoint has a URL, the
+    events it subscribes to, its own signing secret, optional custom
+    headers, a retry policy and a body version.
+
+    **Events.** `GET /admin/event-types` is the catalog: every event type
+    with a description and an example. A subscription entry is an event
+    type (`payment.paid`), a group wildcard (`payment.*`) or `*` (every
+    event, including types added later). One event (`evt_…`) is created
+    per payment change and fanned out as one delivery (`dlv_…`) per
+    active endpoint whose subscriptions match, so each endpoint gets the
+    same event id.
+
+    **Body.** Endpoints with `api_version` `v2` (the default) receive the
+    envelope `WebhookEnvelope`:
+    `{"id": "evt_…", "type": "payment.paid", "api_version": "v2",
+    "created_at": "…", "data": {…}}`. Fields are only ever added within a
+    version; a breaking change gets a new `api_version`. Endpoints with
+    `api_version` `v1` receive the older flat body `PaymentWebhookEvent`;
+    only endpoints migrated from an app's former `webhook_url` start on
+    `v1`.
+
+    **Headers and signature.** Every request carries `Content-Type:
+    application/json`, `User-Agent: KeiPay-Webhooks/1`,
+    `X-KeiPay-Event-Id` (`evt_…`), `X-KeiPay-Event-Type`,
+    `X-KeiPay-Delivery-Id` (`dlv_…`) and
+    `X-KeiPay-Signature: t=<unix seconds>,v1=<hex>`, where `<hex>` is the
+    HMAC-SHA256 of `"{t}.{raw body}"` keyed with the endpoint's signing
+    secret (`kpwh_` + 48 hex characters). Test sends add
+    `X-KeiPay-Test: true`. While a rotated secret is still in its overlap
+    window the header carries one `v1=` per valid secret, newest first;
+    accept the request when any of them matches. Reject a `t` more than 5
+    minutes from your clock. Endpoints with `legacy_signature` also get
+    `X-Kei-Event` and `X-Kei-Signature` (hex HMAC-SHA256 of the raw body,
+    keyed with the current secret only); endpoints migrated from an app's
+    `webhook_url` start with it on and keep that app's old signing
+    secret, so existing receivers keep working.
+
+    **Delivery.** At least once: dedupe on `X-KeiPay-Event-Id`. Any `2xx`
+    within 15 seconds acknowledges; anything else, a redirect, or a
+    timeout is a failed attempt, retried per the endpoint's
+    `retry_policy`. A delivery whose attempts run out is `FAILED`. After
+    `WEBHOOK_DISABLE_AFTER_FAILURES` (default 5) failed deliveries in a
+    row the endpoint is disabled with `disabled_reason`
+    `consecutive_failures`; enable it again with
+    `POST /admin/webhook-endpoints/{id}/enable`. Replaying a delivery
+    sends the same event id and body once more.
 
     ## Admin authentication
 
@@ -184,6 +240,10 @@ info:
     | `audit:read` | yes | yes | no |
     | `users:manage` | yes | no | no |
 
+    Webhook endpoints are app settings (`apps:read`, `apps:write`).
+    `deliveries:read` covers both webhook logs: outbound deliveries and
+    inbound gateway webhooks.
+
     `GET /admin/me` returns the caller's permissions, so clients never
     hard-code this table. New permissions may be added.
   license:
@@ -210,7 +270,7 @@ tags:
   - name: admin-payments
     description: Payment and ledger reporting.
   - name: admin-webhooks
-    description: Outbound webhook deliveries to apps.
+    description: Event catalog, webhook endpoints, outbound deliveries to apps and inbound gateway webhooks.
   - name: admin-audit
     description: Audit trail of admin mutations.
 
@@ -346,18 +406,24 @@ paths:
         connection's `callback_token` (constant-time comparison).
 
         - Unknown connection id, malformed id, or a provider that differs
-          from the connection's: `404 not_found`.
+          from the connection's: `404 not_found`. Not recorded.
         - Verification fails: `401 invalid_callback_token`, logged as a
-          security event. A token valid for another connection is still
-          rejected.
-        - Body is not valid JSON for the provider: `400 invalid_request`.
-        - Duplicate and stale callbacks, callbacks whose amount or
-          currency does not match the payment, and callbacks for a payment
-          created through a different connection are acknowledged with
-          `200` (the last two are recorded, not applied, and logged as
-          security events) so the gateway stops retrying.
+          security event and recorded as an inbound webhook with result
+          `invalid_signature` (body cut to 4096 bytes). A token valid for
+          another connection is still rejected.
+        - Body is not valid JSON for the provider: `400 invalid_request`,
+          recorded with result `invalid_payload`.
+        - Duplicate (`duplicate`) and stale (`stale`) callbacks, callbacks
+          with a gateway status KeiPay does not know (`unmapped`), callbacks
+          whose amount or currency does not match the payment, and
+          callbacks for a payment created through a different connection
+          (both `mismatch`, logged as security events) are acknowledged
+          with `200` and not applied, so the gateway stops retrying.
+          Duplicates are detected per connection on the gateway's event
+          key and status.
         - Real processing failures, including an unknown payment
-          reference, return `500` so the gateway retries.
+          reference, return `500` (recorded as `error`) so the gateway
+          retries.
 
         Disabled connections still accept callbacks, so payments created
         before disabling keep updating.
@@ -921,10 +987,11 @@ paths:
           csrfToken: []
       description: |
         Creates an active app with its first API key (label `Default`, no
-        expiry) and its webhook signing secret. The API key, API secret
-        and webhook signing secret are returned in plaintext exactly once.
-        `slug` must be unused within the environment (`409 conflict`);
-        `slug` and `environment` never change. Records `app.create` and
+        expiry). The API key and API secret are returned in plaintext
+        exactly once. `slug` must be unused within the environment
+        (`409 conflict`); `slug` and `environment` never change. Webhook
+        URLs are webhook endpoints now: a body with `webhook_url` returns
+        `400 invalid_request` with rule `moved`. Records `app.create` and
         `api_key.create`.
       requestBody:
         required: true
@@ -987,7 +1054,9 @@ paths:
         Send only the fields to change; `metadata` replaces the whole
         object. `slug` and `environment` cannot change: a body containing
         either returns `400 invalid_request` with rule `immutable` for that
-        field, even with the current value. A body with none of the
+        field, even with the current value. `webhook_url` returns
+        `400 invalid_request` with rule `moved` (use webhook endpoints).
+        A body with none of the
         updatable fields returns `400 invalid_request` with
         `details.fields` `[{"field": "body", "rule": "required"}]`. Other
         unknown fields are ignored. A request that changes nothing returns
@@ -1231,6 +1300,362 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/apps/{id}/webhook-endpoints:
+    get:
+      tags: [admin-webhooks]
+      operationId: listWebhookEndpoints
+      summary: List an app's webhook endpoints
+      description: |
+        Cursor-paginated, newest first (`created_at` descending, then `id`
+        descending). Includes disabled endpoints; deleted endpoints are
+        never listed. Secrets and custom header values are never returned.
+      x-keipay-permission: apps:read
+      parameters:
+        - $ref: '#/components/parameters/AppIdPath'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of endpoints.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpointListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [admin-webhooks]
+      operationId: createWebhookEndpoint
+      summary: Create a webhook endpoint
+      x-keipay-permission: apps:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Creates an active endpoint with a new signing secret, returned in
+        plaintext exactly once. Field rules are on
+        `CreateWebhookEndpointRequest`; every failing field is reported in
+        one `400 invalid_request`. An app may have at most 10 endpoints
+        (deleted ones do not count); one more returns
+        `400 validation_failed`. Works on disabled apps too. Records
+        `webhook_endpoint.create`.
+      parameters:
+        - $ref: '#/components/parameters/AppIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWebhookEndpointRequest'
+      responses:
+        '201':
+          description: The endpoint and its one-time signing secret.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpointSecretResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/webhook-endpoints/{id}:
+    get:
+      tags: [admin-webhooks]
+      operationId: getWebhookEndpoint
+      summary: Get a webhook endpoint
+      description: A deleted endpoint returns `404 not_found`.
+      x-keipay-permission: apps:read
+      parameters:
+        - $ref: '#/components/parameters/WebhookEndpointIdPath'
+      responses:
+        '200':
+          description: The endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpointResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [admin-webhooks]
+      operationId: updateWebhookEndpoint
+      summary: Update a webhook endpoint
+      x-keipay-permission: apps:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Send only the fields to change; `events`, `headers` and
+        `retry_policy` replace the whole value (`headers: []` removes all
+        custom headers; omitted keeps them). Field rules are the same as on
+        create. `status`, `secret` or `app_id` in the body returns
+        `400 invalid_request` with rule `immutable` (use disable, enable or
+        rotate-secret). A body with none of the updatable fields returns
+        `400 invalid_request` with `details.fields`
+        `[{"field": "body", "rule": "required"}]`. A request that changes
+        nothing returns the endpoint and records nothing; otherwise it
+        records `webhook_endpoint.update` with only the changed fields
+        (header names only, never values). Changes apply to deliveries
+        created afterwards; a delivery keeps the body it was created with.
+      parameters:
+        - $ref: '#/components/parameters/WebhookEndpointIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateWebhookEndpointRequest'
+      responses:
+        '200':
+          description: The endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpointResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [admin-webhooks]
+      operationId: deleteWebhookEndpoint
+      summary: Delete a webhook endpoint
+      x-keipay-permission: apps:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Soft-deletes the endpoint: it stops receiving events at once and
+        disappears from lists, while its past deliveries stay readable.
+        Pending deliveries to it end `FAILED` without another attempt.
+        Deleting a deleted endpoint returns `404 not_found`. Records
+        `webhook_endpoint.delete`.
+      parameters:
+        - $ref: '#/components/parameters/WebhookEndpointIdPath'
+      responses:
+        '204':
+          description: Deleted.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/webhook-endpoints/{id}/rotate-secret:
+    post:
+      tags: [admin-webhooks]
+      operationId: rotateWebhookEndpointSecret
+      summary: Rotate a webhook endpoint's signing secret
+      x-keipay-permission: apps:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Issues a new signing secret, returned in plaintext exactly once.
+        The current secret becomes the previous secret and keeps signing
+        (as a second `v1=` in `X-KeiPay-Signature`) for `overlap_hours`
+        (default 24, `0` ends it at once); any older previous secret is
+        dropped. `X-Kei-Signature` uses only the new secret. Works on
+        disabled endpoints. Records `webhook_endpoint.rotate_secret`
+        (`after`: `{secret_last4, previous_secret_expires_at}`).
+      parameters:
+        - $ref: '#/components/parameters/WebhookEndpointIdPath'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RotateWebhookSecretRequest'
+      responses:
+        '200':
+          description: The endpoint and its new one-time signing secret.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpointSecretResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/webhook-endpoints/{id}/disable:
+    post:
+      tags: [admin-webhooks]
+      operationId: disableWebhookEndpoint
+      summary: Disable a webhook endpoint
+      x-keipay-permission: apps:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Stops new deliveries to the endpoint (`disabled_reason` `manual`).
+        Pending deliveries end `FAILED` without another attempt when their
+        turn comes. Disabling a disabled endpoint returns it unchanged and
+        records nothing; otherwise records `webhook_endpoint.disable`.
+      parameters:
+        - $ref: '#/components/parameters/WebhookEndpointIdPath'
+      responses:
+        '200':
+          description: The disabled endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpointResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/webhook-endpoints/{id}/enable:
+    post:
+      tags: [admin-webhooks]
+      operationId: enableWebhookEndpoint
+      summary: Enable a webhook endpoint
+      x-keipay-permission: apps:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Re-activates the endpoint, whatever disabled it, and resets
+        `consecutive_failures` to 0. Deliveries that failed meanwhile are
+        not resent; replay them. Enabling an active endpoint returns it
+        unchanged and records nothing; otherwise records
+        `webhook_endpoint.enable`.
+      parameters:
+        - $ref: '#/components/parameters/WebhookEndpointIdPath'
+      responses:
+        '200':
+          description: The active endpoint.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookEndpointResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/webhook-endpoints/{id}/test:
+    post:
+      tags: [admin-webhooks]
+      operationId: sendWebhookEndpointTest
+      summary: Send a test event to one endpoint
+      x-keipay-permission: apps:write
+      security:
+        - adminSession: []
+          csrfToken: []
+      description: |
+        Creates a test event of `event_type` whose `data` is the catalog
+        example and queues one delivery to this endpoint only, whatever
+        its subscriptions and status (a disabled endpoint can be tested
+        before enabling it). The request carries `X-KeiPay-Test: true`, is
+        signed like any other, is attempted once (no retries) and never
+        counts toward automatic disabling. Watch the returned delivery for
+        the outcome. `event_type` must be a catalog type, not a wildcard
+        (rule `oneof`). Records `webhook_endpoint.test`.
+      parameters:
+        - $ref: '#/components/parameters/WebhookEndpointIdPath'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SendTestEventRequest'
+      responses:
+        '202':
+          description: The queued test delivery.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDeliveryResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/event-types:
+    get:
+      tags: [admin-webhooks]
+      operationId: listEventTypes
+      summary: List the event catalog
+      description: |
+        Every event type KeiPay can send, in display order, with a
+        description and an example `v2` envelope, plus the accepted
+        wildcard subscriptions. Clients build event pickers from this list
+        and never hard-code it. New types may be added.
+      x-keipay-permission: apps:read
+      responses:
+        '200':
+          description: The catalog.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventTypeListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -1709,24 +2134,55 @@ paths:
       summary: List outbound webhook deliveries
       x-keipay-permission: deliveries:read
       description: |
-        Offset-paginated, newest first. An unparseable `app_id` is
-        ignored; a well-formed `app_id` that matches no app returns an
-        empty list. An out-of-range `limit` falls back to the default.
+        Cursor-paginated, newest first (`created_at` descending, then `id`
+        descending). Every filter is optional and they combine with AND.
+        An invalid value returns `400 invalid_request`: `app_id`,
+        `endpoint_id` or `event_id` rule `public_id`; `status`,
+        `event_type` or `environment` rule `oneof`; `from` or `to` rule
+        `datetime`. A well-formed id that matches nothing returns an empty
+        page. Rows do not carry the body; get one delivery for it.
       parameters:
-        - $ref: '#/components/parameters/AppIdFilter'
+        - name: app_id
+          in: query
+          required: false
+          description: Only deliveries of this app.
+          schema:
+            type: string
+            pattern: '^app_[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
+        - name: endpoint_id
+          in: query
+          required: false
+          description: Only deliveries to this endpoint (deleted endpoints included).
+          schema:
+            type: string
+            pattern: '^whe_[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
+        - name: event_id
+          in: query
+          required: false
+          description: Only deliveries of this event (one per endpoint it fanned out to).
+          schema:
+            type: string
+            pattern: '^evt_[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
+        - name: event_type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/EventType'
         - name: status
           in: query
           required: false
           schema:
             $ref: '#/components/schemas/WebhookDeliveryStatus'
-        - name: limit
+        - name: environment
           in: query
           required: false
-          description: 1-200, default 50.
+          description: Only deliveries of apps in this environment.
           schema:
-            type: integer
-            default: 50
-        - $ref: '#/components/parameters/Offset'
+            $ref: '#/components/schemas/AppEnvironment'
+        - $ref: '#/components/parameters/FromFilter'
+        - $ref: '#/components/parameters/ToFilter'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
       responses:
         '200':
           description: A page of deliveries.
@@ -1734,10 +2190,42 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DeliveryListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/webhook-deliveries/{id}:
+    get:
+      tags: [admin-webhooks]
+      operationId: getWebhookDelivery
+      summary: Get a webhook delivery with its attempts
+      description: |
+        The delivery, the body as sent, and every attempt (request headers,
+        response status and the first 4096 bytes of the response body),
+        oldest first. Custom header values are shown as `[REDACTED]`.
+      x-keipay-permission: deliveries:read
+      parameters:
+        - $ref: '#/components/parameters/DeliveryIdPath'
+      responses:
+        '200':
+          description: The delivery.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookDeliveryDetailResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -1751,24 +2239,116 @@ paths:
         - adminSession: []
           csrfToken: []
       description: |
-        Re-enqueues the delivery. Delivery is at-least-once, so apps must
-        already dedupe. Recorded in the audit log as `webhook_delivery.replay`.
+        Sends the same event (same `X-KeiPay-Event-Id`, same body, a fresh
+        signature) to the same endpoint once more: one attempt, not
+        retried, which never counts toward automatic disabling. No new
+        event or delivery is created, so receivers that dedupe on the
+        event id see a duplicate. Only `DELIVERED` and `FAILED` deliveries
+        can be replayed; otherwise `409 delivery_not_replayable` with
+        `details.reason` `in_progress` (still `PENDING`), `no_endpoint`
+        (a delivery from before webhook endpoints whose app had no webhook
+        URL), `endpoint_deleted` or `endpoint_disabled`. Records
+        `webhook_delivery.replay` (`before`: `{status, attempts}`).
       parameters:
-        - name: id
-          in: path
-          required: true
-          description: Delivery id. A non-integer returns `400 invalid_request`; an integer below 1 matches nothing and returns `404 not_found`.
-          schema:
-            type: integer
-            format: int64
-            minimum: 1
+        - $ref: '#/components/parameters/DeliveryIdPath'
       responses:
         '202':
-          description: Re-enqueued.
+          description: The delivery, `PENDING` again with one attempt queued.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ReplayResponse'
+                $ref: '#/components/schemas/WebhookDeliveryResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/inbound-webhooks:
+    get:
+      tags: [admin-webhooks]
+      operationId: listInboundWebhooks
+      summary: List inbound gateway webhooks
+      x-keipay-permission: deliveries:read
+      description: |
+        Every callback that reached a known connection, newest first
+        (`received_at` descending, then `id` descending), cursor-paginated.
+        An invalid filter returns `400 invalid_request`: `connection_id`
+        rule `public_id`; `result` or `environment` rule `oneof`; `from`
+        or `to` rule `datetime` (bounds on `received_at`). Rows do not
+        carry the body; get one inbound webhook for it.
+      parameters:
+        - name: connection_id
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: '^con_[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
+        - name: result
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/InboundWebhookResult'
+        - name: environment
+          in: query
+          required: false
+          description: Only callbacks of connections in this environment.
+          schema:
+            $ref: '#/components/schemas/AppEnvironment'
+        - name: from
+          in: query
+          required: false
+          description: Inclusive lower bound on `received_at` (RFC 3339).
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          description: Inclusive upper bound on `received_at` (RFC 3339).
+          schema:
+            type: string
+            format: date-time
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of inbound webhooks.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboundWebhookListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/inbound-webhooks/{id}:
+    get:
+      tags: [admin-webhooks]
+      operationId: getInboundWebhook
+      summary: Get an inbound gateway webhook with its raw body
+      x-keipay-permission: deliveries:read
+      parameters:
+        - $ref: '#/components/parameters/InboundWebhookIdPath'
+      responses:
+        '200':
+          description: The inbound webhook.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboundWebhookDetailResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -1807,27 +2387,111 @@ paths:
           $ref: '#/components/responses/InternalError'
 
 webhooks:
-  paymentEvent:
+  event:
     post:
-      operationId: paymentEventWebhook
-      summary: Payment event forwarded to the app's webhook_url
+      operationId: webhookEventV2
+      summary: Event sent to a webhook endpoint (api_version v2)
       description: |
-        Sent when a payment changes status. Verify `X-Kei-Signature` (hex
-        HMAC-SHA256 of the raw body keyed with the app's webhook signing
-        secret; for apps that existed before apps replaced tenants, that is
-        their original `api_secret`) in constant time. Return any `2xx` to
-        acknowledge; anything else is retried. Delivery is at-least-once:
-        dedupe on `payment_public_id` (or `payment_id`) + `event`.
+        Sent to every active endpoint of the app whose subscriptions match
+        the event type, once per event. Verify `X-KeiPay-Signature` (see
+        "Webhooks to apps": HMAC-SHA256 of `"{t}.{raw body}"` with the
+        endpoint's signing secret, compared in constant time against every
+        `v1=` value) and reject a `t` more than 5 minutes old. Return any
+        `2xx` within 15 seconds to acknowledge; anything else is retried
+        per the endpoint's retry policy. Delivery is at-least-once: dedupe
+        on `X-KeiPay-Event-Id` (equal to the body's `id`).
       security: []
       parameters:
-        - name: X-Kei-Event
+        - name: X-KeiPay-Event-Id
           in: header
           required: true
           schema:
-            $ref: '#/components/schemas/PaymentEventType'
-        - name: X-Kei-Signature
+            type: string
+            pattern: '^evt_[0-9A-HJKMNP-TV-Z]{26}$'
+        - name: X-KeiPay-Event-Type
           in: header
           required: true
+          schema:
+            $ref: '#/components/schemas/EventType'
+        - name: X-KeiPay-Delivery-Id
+          in: header
+          required: true
+          description: The delivery (one per event and endpoint); a replay reuses it.
+          schema:
+            type: string
+            pattern: '^dlv_[0-9A-HJKMNP-TV-Z]{26}$'
+        - name: X-KeiPay-Signature
+          in: header
+          required: true
+          description: '`t=<unix seconds>` then one or more `v1=<64 hex>`, comma-separated, newest secret first.'
+          schema:
+            type: string
+            pattern: '^t=[0-9]+(,v1=[0-9a-f]{64})+$'
+            examples: ['t=1730109600,v1=5257a869e7ecebeda32affa62cdca3fa51cad7e77a0e56ff536d0ce8e108d8bd']
+        - name: X-KeiPay-Test
+          in: header
+          required: false
+          description: '`true` on test sends (`POST /admin/webhook-endpoints/{id}/test`); absent otherwise.'
+          schema:
+            type: string
+            const: 'true'
+        - name: X-Kei-Signature
+          in: header
+          required: false
+          description: Only for endpoints with `legacy_signature`. Hex HMAC-SHA256 of the raw body with the current secret.
+          schema:
+            type: string
+            pattern: '^[0-9a-f]{64}$'
+        - name: X-Kei-Event
+          in: header
+          required: false
+          description: Only for endpoints with `legacy_signature`. Same value as `X-KeiPay-Event-Type`.
+          schema:
+            $ref: '#/components/schemas/EventType'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookEnvelope'
+      responses:
+        '200':
+          description: Acknowledged. Any 2xx status works.
+  paymentEventV1:
+    post:
+      operationId: paymentEventWebhookV1
+      summary: Event sent to a webhook endpoint (api_version v1)
+      deprecated: true
+      description: |
+        The flat body sent before the v2 envelope, still used by endpoints
+        whose `api_version` is `v1` (endpoints migrated from an app's
+        `webhook_url` start there). Headers are the same as for `v2`;
+        migrated endpoints also get `X-Kei-Signature` and `X-Kei-Event`
+        until `legacy_signature` is turned off. Move to `v2` by switching
+        the endpoint's `api_version` once your receiver reads the envelope.
+      security: []
+      parameters:
+        - name: X-KeiPay-Event-Id
+          in: header
+          required: false
+          description: Absent only when replaying a delivery made before events existed (its body has no `event_id` either).
+          schema:
+            type: string
+            pattern: '^evt_[0-9A-HJKMNP-TV-Z]{26}$'
+        - name: X-KeiPay-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: '^t=[0-9]+(,v1=[0-9a-f]{64})+$'
+        - name: X-Kei-Event
+          in: header
+          required: false
+          schema:
+            $ref: '#/components/schemas/EventType'
+        - name: X-Kei-Signature
+          in: header
+          required: false
           schema:
             type: string
             pattern: '^[0-9a-f]{64}$'
@@ -1944,6 +2608,43 @@ components:
         type: string
         pattern: '^con_[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
         examples: [con_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+    WebhookEndpointIdPath:
+      name: id
+      in: path
+      required: true
+      description: |
+        Webhook endpoint id (`whe_…`; lower case is accepted). Any other
+        format returns `400 invalid_request` with `details.fields`
+        `[{"field": "id", "rule": "public_id"}]`.
+      schema:
+        type: string
+        pattern: '^whe_[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
+        examples: [whe_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+    DeliveryIdPath:
+      name: id
+      in: path
+      required: true
+      description: |
+        Delivery id (`dlv_…`; lower case is accepted). Any other format,
+        including the integer ids used before, returns
+        `400 invalid_request` with `details.fields`
+        `[{"field": "id", "rule": "public_id"}]`.
+      schema:
+        type: string
+        pattern: '^dlv_[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
+        examples: [dlv_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+    InboundWebhookIdPath:
+      name: id
+      in: path
+      required: true
+      description: |
+        Inbound webhook id (`inb_…`; lower case is accepted). Any other
+        format returns `400 invalid_request` with `details.fields`
+        `[{"field": "id", "rule": "public_id"}]`.
+      schema:
+        type: string
+        pattern: '^inb_[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$'
+        examples: [inb_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
     AppIdFilter:
       name: app_id
       in: query
@@ -2072,7 +2773,8 @@ components:
         `conflict` (duplicate slug within an environment, duplicate
         connection name or email, or an `order_id` reused with a different
         amount or currency), `idempotency_key_reused`, `setup_completed`,
-        `last_owner`, `cannot_modify_self`, or `connection_in_use`.
+        `last_owner`, `cannot_modify_self`, `connection_in_use`, or
+        `delivery_not_replayable`.
       content:
         application/json:
           schema:
@@ -2149,6 +2851,7 @@ components:
         | `setup_completed` | 409 | First-run setup already happened; sign in instead. |
         | `last_owner` | 409 | The change would leave no active owner. |
         | `cannot_modify_self` | 409 | Owners cannot disable themselves or reset their own password through the users API. |
+        | `delivery_not_replayable` | 409 | The delivery cannot be replayed now. `details.reason`: `in_progress` (still `PENDING`), `no_endpoint`, `endpoint_deleted` or `endpoint_disabled`. |
         | `connection_in_use` | 409 | The connection is some app's default connection. `details.apps` lists up to 10 (`AppSummary`), `details.app_count` counts them. |
         | `no_eligible_connection` | 422 | No connection can take the payment. `details.reasons` is a list of strings: `no_default_connection`, `connection_disabled`. More reasons may be added. |
         | `provider_rejected` | 422 | The gateway refused the request (validation, limits, credentials). `details.provider` names the provider. The message is generic; the gateway's own text is only logged. |
@@ -2188,6 +2891,7 @@ components:
         - api_key_expired
         - idempotency_key_reused
         - connection_in_use
+        - delivery_not_replayable
         - no_eligible_connection
         - provider_rejected
         - provider_unavailable
@@ -2256,9 +2960,14 @@ components:
       description: Normalized lifecycle. Status only moves forward (PENDING → PAID → SETTLED); a late success after EXPIRED or FAILED is still applied.
       enum: [PENDING, PAID, SETTLED, EXPIRED, FAILED]
 
-    PaymentEventType:
+    EventType:
       type: string
-      enum: [payment.paid, payment.settled, payment.expired, payment.failed]
+      description: |
+        The event catalog (`GET /admin/event-types` has descriptions and
+        examples). `payment.duplicate` is reserved for a payment paid more
+        than once; it is not sent yet. New types may be added; ignore types
+        you do not handle.
+      enum: [payment.paid, payment.settled, payment.expired, payment.failed, payment.duplicate]
 
     OrderItem:
       type: object
@@ -2709,7 +3418,7 @@ components:
 
     App:
       type: object
-      required: [id, slug, name, environment, status, metadata, webhook_url, redirect_success_url, redirect_failure_url, default_connection, created_at, updated_at]
+      required: [id, slug, name, environment, status, metadata, redirect_success_url, redirect_failure_url, default_connection, created_at, updated_at]
       properties:
         default_connection:
           description: The connection `POST /v1/payments` uses; `null` when none is set. Always the app's environment.
@@ -2731,9 +3440,6 @@ components:
           $ref: '#/components/schemas/AppStatus'
         metadata:
           $ref: '#/components/schemas/Metadata'
-        webhook_url:
-          type: string
-          description: Where payment events are sent; empty means none.
         redirect_success_url:
           type: string
         redirect_failure_url:
@@ -2770,8 +3476,6 @@ components:
           $ref: '#/components/schemas/AppSlug'
         environment:
           $ref: '#/components/schemas/AppEnvironment'
-        webhook_url:
-          $ref: '#/components/schemas/HttpUrl'
         redirect_success_url:
           $ref: '#/components/schemas/HttpUrl'
         redirect_failure_url:
@@ -2792,8 +3496,6 @@ components:
           description: An active connection with the app's environment, or `null` to clear.
         name:
           $ref: '#/components/schemas/AppName'
-        webhook_url:
-          $ref: '#/components/schemas/HttpUrl'
         redirect_success_url:
           $ref: '#/components/schemas/HttpUrl'
         redirect_failure_url:
@@ -2822,7 +3524,7 @@ components:
 
     AppCreatedResponse:
       type: object
-      required: [app, key, api_key, api_secret, webhook_secret]
+      required: [app, key, api_key, api_secret]
       properties:
         app:
           $ref: '#/components/schemas/App'
@@ -2836,10 +3538,6 @@ components:
           type: string
           format: password
           description: The HMAC secret for `X-Signature`. Shown once; store it now.
-        webhook_secret:
-          type: string
-          format: password
-          description: The secret that signs outbound webhooks (`X-Kei-Signature`). Shown once; store it now.
 
     ApiKeyStatus:
       type: string
@@ -3465,33 +4163,183 @@ components:
           items:
             $ref: '#/components/schemas/LedgerSummary'
 
-    WebhookDeliveryStatus:
-      type: string
-      enum: [PENDING, DELIVERED, FAILED]
-
-    WebhookDelivery:
+    EventTypeInfo:
       type: object
-      required: [id, payment_id, app, event_type, payload, status, attempts, last_error, created_at, updated_at]
+      required: [type, description, example]
+      properties:
+        type:
+          $ref: '#/components/schemas/EventType'
+        description:
+          type: string
+          description: One sentence for people choosing subscriptions.
+        example:
+          $ref: '#/components/schemas/WebhookEnvelope'
+
+    EventWildcard:
+      type: object
+      required: [pattern, description]
+      properties:
+        pattern:
+          type: string
+          description: A subscription entry that matches several types.
+          examples: ['payment.*', '*']
+        description:
+          type: string
+
+    EventTypeListResponse:
+      type: object
+      required: [data, wildcards]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventTypeInfo'
+        wildcards:
+          type: array
+          description: '`payment.*` (every `payment.` type) and `*` (every type, including ones added later), in that order.'
+          items:
+            $ref: '#/components/schemas/EventWildcard'
+
+    EventSubscription:
+      type: string
+      description: |
+        An event type from the catalog, a group wildcard (`<group>.*` for a
+        group in the catalog, e.g. `payment.*`) or `*`. Surrounding spaces
+        are trimmed. Anything else: rule `oneof`.
+      maxLength: 64
+      examples: [payment.paid, 'payment.*', '*']
+
+    WebhookApiVersion:
+      type: string
+      description: |
+        The body an endpoint receives. `v2`: `WebhookEnvelope`. `v1`: the
+        older flat `PaymentWebhookEvent`, for endpoints migrated from an
+        app's `webhook_url`.
+      enum: [v1, v2]
+
+    WebhookEndpointStatus:
+      type: string
+      enum: [active, disabled]
+
+    WebhookEndpointDisabledReason:
+      type: string
+      description: '`manual` (disabled through the API) or `consecutive_failures` (disabled automatically).'
+      enum: [manual, consecutive_failures]
+
+    WebhookRetryPolicy:
+      type: object
+      description: |
+        How many times one delivery is attempted and how long to wait
+        between attempts. With `exponential` the wait after attempt `n` is
+        `interval_seconds × 2^(n-1)`, capped at 6 hours; with `fixed` it is
+        `interval_seconds`. The default (8 attempts, exponential, 30 s)
+        spans about an hour. Out of range: rule `min` or `max` on
+        `retry_policy.<field>`; unknown `backoff`: rule `oneof`.
+      required: [max_attempts, backoff, interval_seconds]
+      properties:
+        max_attempts:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 8
+        backoff:
+          type: string
+          enum: [exponential, fixed]
+          default: exponential
+        interval_seconds:
+          type: integer
+          minimum: 10
+          maximum: 3600
+          default: 30
+
+    WebhookHeaderInput:
+      type: object
+      required: [name, value]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: |
+            An HTTP header name (RFC 9110 token characters). Not allowed
+            (rule `reserved`, case-insensitive): `Content-Type`,
+            `Content-Length`, `Host`, `User-Agent`, `Connection`,
+            `Transfer-Encoding`, and any name starting with `X-KeiPay-` or
+            `X-Kei-`. Invalid characters: rule `header_name`. Repeated
+            name (case-insensitive): rule `duplicate`.
+          examples: [Authorization]
+        value:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          format: password
+          description: Stored encrypted and never returned. Control characters (including CR and LF) are rejected with rule `header_value`.
+
+    WebhookHeaderHint:
+      type: object
+      required: [name, value_last4]
+      properties:
+        name:
+          type: string
+        value_last4:
+          type: [string, 'null']
+          description: Last 4 characters of the value; `null` when the value is shorter than 12 characters.
+
+    WebhookEndpoint:
+      type: object
+      required: [id, app, url, description, events, api_version, legacy_signature, headers, retry_policy, status, disabled_reason, disabled_at, consecutive_failures, secret_last4, previous_secret_expires_at, migrated, created_at, updated_at]
       properties:
         id:
-          type: integer
-          format: int64
-        payment_id:
           type: string
-          pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
+          pattern: '^whe_[0-9A-HJKMNP-TV-Z]{26}$'
+          examples: [whe_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
         app:
           $ref: '#/components/schemas/AppSummary'
-        event_type:
-          $ref: '#/components/schemas/PaymentEventType'
-        payload:
-          $ref: '#/components/schemas/PaymentWebhookEvent'
-          description: The body as sent. Deliveries created before apps replaced tenants have no `payment_public_id` or `metadata`.
-        status:
-          $ref: '#/components/schemas/WebhookDeliveryStatus'
-        attempts:
-          type: integer
-        last_error:
+        url:
           type: string
+        description:
+          type: string
+        events:
+          type: array
+          description: The subscriptions, in the order they were saved.
+          items:
+            $ref: '#/components/schemas/EventSubscription'
+        api_version:
+          $ref: '#/components/schemas/WebhookApiVersion'
+        legacy_signature:
+          type: boolean
+          description: Whether requests also carry `X-Kei-Signature` and `X-Kei-Event`.
+        headers:
+          type: array
+          description: Custom headers, names only plus a hint of each value.
+          items:
+            $ref: '#/components/schemas/WebhookHeaderHint'
+        retry_policy:
+          $ref: '#/components/schemas/WebhookRetryPolicy'
+        status:
+          $ref: '#/components/schemas/WebhookEndpointStatus'
+        disabled_reason:
+          description: Set exactly when `status` is `disabled`.
+          oneOf:
+            - $ref: '#/components/schemas/WebhookEndpointDisabledReason'
+            - type: 'null'
+        disabled_at:
+          type: [string, 'null']
+          format: date-time
+        consecutive_failures:
+          type: integer
+          minimum: 0
+          description: Deliveries in a row that ran out of attempts; reset by any successful attempt and by enabling.
+        secret_last4:
+          type: [string, 'null']
+          description: Last 4 characters of the current signing secret; `null` for a secret carried over from an app's former webhook settings until it is rotated.
+        previous_secret_expires_at:
+          type: [string, 'null']
+          format: date-time
+          description: While set and in the future, the previous secret still signs requests.
+        migrated:
+          type: boolean
+          description: Created from the app's former `webhook_url` when webhook endpoints were introduced.
         created_at:
           type: string
           format: date-time
@@ -3499,37 +4347,465 @@ components:
           type: string
           format: date-time
 
+    CreateWebhookEndpointRequest:
+      type: object
+      required: [url, events]
+      properties:
+        url:
+          type: string
+          maxLength: 2048
+          description: |
+            An absolute `http` or `https` URL with a host, at most 2048
+            bytes, without whitespace or control characters. Blank: rule
+            `required`; invalid: rule `url`; `http` for an app in the
+            `live` environment: rule `https`.
+          examples: [https://shop.example.com/hooks/keipay]
+        description:
+          type: string
+          maxLength: 500
+          description: Free text, trimmed; at most 500 characters (rule `max`), no control characters other than newline and tab (rule `name`).
+        events:
+          type: array
+          minItems: 1
+          maxItems: 20
+          description: |
+            Subscriptions. Empty: rule `required`; more than 20: rule
+            `max`; per element `events.<i>` rule `oneof` or `duplicate`.
+          items:
+            $ref: '#/components/schemas/EventSubscription'
+        api_version:
+          $ref: '#/components/schemas/WebhookApiVersion'
+        legacy_signature:
+          type: boolean
+          default: false
+        headers:
+          type: array
+          maxItems: 10
+          description: More than 10 entries returns rule `max` on `headers`. Element errors use `headers.<i>.name` or `headers.<i>.value`.
+          items:
+            $ref: '#/components/schemas/WebhookHeaderInput'
+        retry_policy:
+          $ref: '#/components/schemas/WebhookRetryPolicy'
+
+    UpdateWebhookEndpointRequest:
+      type: object
+      minProperties: 1
+      description: Send only the fields to change. Rules as on create.
+      properties:
+        url:
+          type: string
+          maxLength: 2048
+        description:
+          type: string
+          maxLength: 500
+        events:
+          type: array
+          minItems: 1
+          maxItems: 20
+          items:
+            $ref: '#/components/schemas/EventSubscription'
+        api_version:
+          $ref: '#/components/schemas/WebhookApiVersion'
+        legacy_signature:
+          type: boolean
+        headers:
+          type: array
+          maxItems: 10
+          description: Replaces every custom header; `[]` removes them all.
+          items:
+            $ref: '#/components/schemas/WebhookHeaderInput'
+        retry_policy:
+          $ref: '#/components/schemas/WebhookRetryPolicy'
+
+    RotateWebhookSecretRequest:
+      type: object
+      properties:
+        overlap_hours:
+          type: integer
+          minimum: 0
+          maximum: 168
+          default: 24
+          description: How long the current secret keeps signing next to the new one. Out of range or not an integer returns `400 invalid_request` with rule `min`, `max` or `type`.
+
+    SendTestEventRequest:
+      type: object
+      required: [event_type]
+      properties:
+        event_type:
+          $ref: '#/components/schemas/EventType'
+
+    WebhookEndpointResponse:
+      type: object
+      required: [endpoint]
+      properties:
+        endpoint:
+          $ref: '#/components/schemas/WebhookEndpoint'
+
+    WebhookEndpointSecretResponse:
+      type: object
+      required: [endpoint, secret]
+      properties:
+        endpoint:
+          $ref: '#/components/schemas/WebhookEndpoint'
+        secret:
+          type: string
+          format: password
+          description: The signing secret (`kpwh_` + 48 hex characters). Shown once; store it now.
+          examples: [kpwh_3f9a0c1d2e4b5a69788796a5b4c3d2e1f0a9b8c7d6e5f4a3]
+
+    WebhookEndpointListResponse:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/WebhookEndpoint'
+        next_cursor:
+          type: [string, 'null']
+          description: Pass as `cursor` to get the next page; `null` on the last page.
+
+    WebhookEnvelope:
+      type: object
+      description: The `v2` webhook body. Fields are only ever added within `v2`.
+      required: [id, type, api_version, created_at, data]
+      properties:
+        id:
+          type: string
+          pattern: '^evt_[0-9A-HJKMNP-TV-Z]{26}$'
+          description: The event id; the same for every endpoint and every attempt. Dedupe on it.
+          examples: [evt_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+        type:
+          $ref: '#/components/schemas/EventType'
+        api_version:
+          type: string
+          const: v2
+        created_at:
+          type: string
+          format: date-time
+          description: When the event happened in KeiPay (not when this attempt was sent).
+        data:
+          $ref: '#/components/schemas/PaymentEventData'
+
+    PaymentEventData:
+      type: object
+      description: The payment as of the event.
+      required: [id, order_id, reference, status, amount, currency, metadata, provider, connection_id, paid_at, settled_at]
+      properties:
+        id:
+          type: string
+          pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
+          examples: [pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+        order_id:
+          type: string
+        reference:
+          type: string
+          description: The gateway reference (`reference` on the payment).
+        status:
+          $ref: '#/components/schemas/PaymentStatus'
+        amount:
+          type: integer
+          format: int64
+          description: Minor units (whole rupiah for IDR).
+        currency:
+          type: string
+        metadata:
+          $ref: '#/components/schemas/Metadata'
+        provider:
+          oneOf:
+            - $ref: '#/components/schemas/ProviderName'
+            - type: 'null'
+        connection_id:
+          type: [string, 'null']
+          pattern: '^con_[0-9A-HJKMNP-TV-Z]{26}$'
+        paid_at:
+          type: [string, 'null']
+          format: date-time
+        settled_at:
+          type: [string, 'null']
+          format: date-time
+
+    WebhookDeliveryStatus:
+      type: string
+      description: |
+        `PENDING`: waiting for its next attempt (`next_attempt_at`).
+        `DELIVERED`: an attempt got a `2xx`. `FAILED`: attempts ran out, or
+        the endpoint was disabled or deleted before the next attempt.
+      enum: [PENDING, DELIVERED, FAILED]
+
+    WebhookEndpointRef:
+      type: object
+      description: The endpoint a delivery went to.
+      required: [id, url, description, deleted]
+      properties:
+        id:
+          type: string
+          pattern: '^whe_[0-9A-HJKMNP-TV-Z]{26}$'
+        url:
+          type: string
+        description:
+          type: string
+        deleted:
+          type: boolean
+
+    EventRef:
+      type: object
+      required: [id, type, test]
+      properties:
+        id:
+          type: string
+          pattern: '^evt_[0-9A-HJKMNP-TV-Z]{26}$'
+        type:
+          $ref: '#/components/schemas/EventType'
+        test:
+          type: boolean
+          description: A test send, not a real payment change.
+
+    WebhookDelivery:
+      type: object
+      required: [id, app, endpoint, event, event_type, payment_id, status, attempts, max_attempts, next_attempt_at, last_attempt_at, last_response_status, last_error, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          pattern: '^dlv_[0-9A-HJKMNP-TV-Z]{26}$'
+          examples: [dlv_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+        app:
+          $ref: '#/components/schemas/AppSummary'
+        endpoint:
+          description: '`null` for a delivery from before webhook endpoints whose app had no webhook URL.'
+          oneOf:
+            - $ref: '#/components/schemas/WebhookEndpointRef'
+            - type: 'null'
+        event:
+          description: '`null` for a delivery from before events existed.'
+          oneOf:
+            - $ref: '#/components/schemas/EventRef'
+            - type: 'null'
+        event_type:
+          $ref: '#/components/schemas/EventType'
+        payment_id:
+          type: [string, 'null']
+          pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
+          description: '`null` for test sends.'
+        status:
+          $ref: '#/components/schemas/WebhookDeliveryStatus'
+        attempts:
+          type: integer
+          minimum: 0
+          description: Attempts made so far, replays included.
+        max_attempts:
+          type: integer
+          minimum: 0
+          description: Attempts allowed before the delivery fails; a replay allows exactly one more.
+        next_attempt_at:
+          type: [string, 'null']
+          format: date-time
+          description: Set while `PENDING`.
+        last_attempt_at:
+          type: [string, 'null']
+          format: date-time
+        last_response_status:
+          type: [integer, 'null']
+          description: HTTP status of the last attempt; `null` when it got no response (timeout, connection error) or none was made.
+        last_error:
+          type: string
+          description: Why the last attempt or the delivery failed; empty after success.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    WebhookDeliveryAttempt:
+      type: object
+      required: [attempt, manual, url, request_headers, response_status, response_body, response_body_truncated, error, duration_ms, started_at]
+      properties:
+        attempt:
+          type: integer
+          minimum: 1
+        manual:
+          type: boolean
+          description: Made by a replay.
+        url:
+          type: string
+        request_headers:
+          type: object
+          description: Headers sent; custom header values are `[REDACTED]`.
+          additionalProperties:
+            type: string
+        response_status:
+          type: [integer, 'null']
+        response_body:
+          type: string
+          description: The first 4096 bytes of the response body as text (invalid UTF-8 replaced).
+        response_body_truncated:
+          type: boolean
+        error:
+          type: string
+          description: Network or protocol error, or `unexpected status 500` style text; empty on success.
+        duration_ms:
+          type: integer
+          minimum: 0
+        started_at:
+          type: string
+          format: date-time
+
+    WebhookDeliveryDetail:
+      allOf:
+        - $ref: '#/components/schemas/WebhookDelivery'
+        - type: object
+          required: [payload, attempt_log]
+          properties:
+            payload:
+              type: object
+              additionalProperties: true
+              description: The body as sent (`WebhookEnvelope` or `PaymentWebhookEvent`, by the endpoint's version when the delivery was created).
+            attempt_log:
+              type: array
+              description: Oldest first. Empty for deliveries made before attempts were logged.
+              items:
+                $ref: '#/components/schemas/WebhookDeliveryAttempt'
+
+    WebhookDeliveryResponse:
+      type: object
+      required: [delivery]
+      properties:
+        delivery:
+          $ref: '#/components/schemas/WebhookDelivery'
+
+    WebhookDeliveryDetailResponse:
+      type: object
+      required: [delivery]
+      properties:
+        delivery:
+          $ref: '#/components/schemas/WebhookDeliveryDetail'
+
     DeliveryListResponse:
       type: object
-      required: [deliveries]
+      required: [data, next_cursor]
       properties:
-        deliveries:
+        data:
           type: array
           items:
             $ref: '#/components/schemas/WebhookDelivery'
+        next_cursor:
+          type: [string, 'null']
+          description: Pass as `cursor` to get the next page; `null` on the last page.
 
-    ReplayResponse:
+    InboundWebhookResult:
+      type: string
+      description: |
+        What KeiPay did with a callback.
+
+        | result | HTTP | meaning |
+        |---|---|---|
+        | `applied` | 200 | Moved the payment forward and created an event. |
+        | `stale` | 200 | Valid, but not a forward move (e.g. `PAID` after `SETTLED`). |
+        | `duplicate` | 200 | The same event key and gateway status already reached this connection. |
+        | `mismatch` | 200 | Amount or currency differs from the payment, or the payment belongs to another connection. Not applied; security event. |
+        | `unmapped` | 200 | A gateway status KeiPay does not know. Not applied. |
+        | `invalid_signature` | 401 | Verification with the connection's credentials failed. |
+        | `invalid_payload` | 400 | The body is not a callback this provider sends. |
+        | `error` | 500 | Processing failed (e.g. unknown payment reference); the gateway retries. |
+      enum: [applied, stale, duplicate, mismatch, unmapped, invalid_signature, invalid_payload, error]
+
+    InboundWebhook:
       type: object
-      required: [requeued]
+      required: [id, connection, provider, source, signature_valid, result, result_detail, event_key, provider_status, reference, payment_id, event, received_at]
       properties:
-        requeued:
+        id:
+          type: string
+          pattern: '^inb_[0-9A-HJKMNP-TV-Z]{26}$'
+          examples: [inb_01JBKQ7Z8M4X2Y6V3N9T5R1W0C]
+        connection:
+          $ref: '#/components/schemas/ConnectionSummary'
+        provider:
+          $ref: '#/components/schemas/ProviderName'
+        source:
+          type: string
+          description: '`webhook` (a gateway callback). Other sources may be added.'
+          enum: [webhook]
+        signature_valid:
           type: boolean
-          const: true
+        result:
+          $ref: '#/components/schemas/InboundWebhookResult'
+        result_detail:
+          type: string
+          description: A short explanation, e.g. which field mismatched; may be empty. Never contains secrets.
+        event_key:
+          type: [string, 'null']
+          description: The gateway's event key (Xendit invoice id); `null` when the body could not be read or verification failed.
+        provider_status:
+          type: [string, 'null']
+          description: The gateway's own status value.
+        reference:
+          type: [string, 'null']
+          description: The payment reference the callback names.
+        payment_id:
+          type: [string, 'null']
+          pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
+          description: The payment it was matched to, when one was found.
+        event:
+          description: The event an `applied` callback created.
+          oneOf:
+            - $ref: '#/components/schemas/EventRef'
+            - type: 'null'
+        received_at:
+          type: string
+          format: date-time
+
+    InboundWebhookDetail:
+      allOf:
+        - $ref: '#/components/schemas/InboundWebhook'
+        - type: object
+          required: [raw_body, raw_body_truncated]
+          properties:
+            raw_body:
+              type: string
+              description: The body exactly as received, as text (invalid UTF-8 replaced). Usually JSON.
+            raw_body_truncated:
+              type: boolean
+              description: Bodies that failed verification are stored cut to 4096 bytes.
+
+    InboundWebhookListResponse:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/InboundWebhook'
+        next_cursor:
+          type: [string, 'null']
+          description: Pass as `cursor` to get the next page; `null` on the last page.
+
+    InboundWebhookDetailResponse:
+      type: object
+      required: [inbound_webhook]
+      properties:
+        inbound_webhook:
+          $ref: '#/components/schemas/InboundWebhookDetail'
 
     PaymentWebhookEvent:
       type: object
+      description: The `v1` webhook body (endpoints with `api_version` `v1`).
       required: [event, payment_id, order_id, external_id, status, amount, currency, timestamp]
       properties:
         event:
-          $ref: '#/components/schemas/PaymentEventType'
+          $ref: '#/components/schemas/EventType'
+        event_id:
+          type: string
+          pattern: '^evt_[0-9A-HJKMNP-TV-Z]{26}$'
+          description: The event id, also in `X-KeiPay-Event-Id`. Dedupe on it. Missing only in deliveries made before events existed.
         payment_id:
           type: integer
           format: int64
-          description: Legacy integer id. Prefer `payment_public_id`.
+          description: Legacy integer id (`0` on test sends). Prefer `payment_public_id`.
         payment_public_id:
           type: string
           pattern: '^pay_[0-9A-HJKMNP-TV-Z]{26}$'
-          description: The payment's `pay_…` id. Sent on every event since apps replaced tenants.
+          description: The payment's `pay_…` id.
         order_id:
           type: string
         external_id:
@@ -3537,7 +4813,7 @@ components:
           description: The gateway reference (same as `reference` on the payment).
         metadata:
           $ref: '#/components/schemas/Metadata'
-          description: The payment's `metadata`, `{}` when none. Sent on every event since apps replaced tenants.
+          description: The payment's `metadata`, `{}` when none.
         status:
           $ref: '#/components/schemas/PaymentStatus'
         amount:
@@ -3554,6 +4830,7 @@ components:
         timestamp:
           type: string
           format: date-time
+          description: When the event was created (the event's `created_at`).
 
     AuditActor:
       type: object
@@ -3569,7 +4846,8 @@ components:
           type: string
           description: |
             The user's `usr_…` id for `admin`; the component name (`seed`,
-            `cli`, `setup`) for `system`; `anonymous` for `anonymous`.
+            `cli`, `setup`, `import`, `worker`) for `system`; `anonymous`
+            for `anonymous`.
             Entries written before users existed carry the admin username.
 
     AuditTarget:
@@ -3579,10 +4857,10 @@ components:
         type:
           type: string
           description: Entries written before users existed use `admin_user` for the console admin; entries written before apps existed use `tenant` with the integer tenant id.
-          examples: [app, api_key, connection, user, webhook_delivery]
+          examples: [app, api_key, connection, user, webhook_endpoint, webhook_delivery]
         id:
           type: string
-          description: The target's identifier as a string (`app_…`, `key_…`, `usr_…`). Empty for a failed sign-in with an unknown email.
+          description: The target's identifier as a string (`app_…`, `key_…`, `usr_…`, `whe_…`, `dlv_…`). Empty for a failed sign-in with an unknown email. Replays recorded before deliveries had public ids carry the integer delivery id.
 
     AuditLog:
       type: object
@@ -3605,7 +4883,12 @@ components:
             `api_key.rotate`, `api_key.revoke`, `connection.create`,
             `connection.update`, `connection.update_credentials`,
             `connection.update_channels`, `connection.disable`,
-            `connection.enable`, `connection.test`, `webhook_delivery.replay`,
+            `connection.enable`, `connection.test`,
+            `webhook_endpoint.create`, `webhook_endpoint.update`,
+            `webhook_endpoint.delete`, `webhook_endpoint.rotate_secret`,
+            `webhook_endpoint.disable`, `webhook_endpoint.enable`,
+            `webhook_endpoint.auto_disable` (actor `system:worker`),
+            `webhook_endpoint.test`, `webhook_delivery.replay`,
             `user.setup`, `user.create`, `user.update`, `user.disable`,
             `user.enable`, `user.reset_password`, `user.change_password`,
             `user.login`, `user.login_failed`, `user.logout`. Older entries

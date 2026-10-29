@@ -55,13 +55,13 @@ func keysOf(t *testing.T, label string, obj any, want ...string) map[string]any 
 	return m
 }
 
-var appKeys = []string{"id", "slug", "name", "environment", "status", "metadata", "webhook_url",
+var appKeys = []string{"id", "slug", "name", "environment", "status", "metadata",
 	"redirect_success_url", "redirect_failure_url", "default_connection", "created_at", "updated_at"}
 var apiKeyKeys = []string{"id", "app_id", "label", "environment", "prefix", "last4", "status",
 	"last_used_at", "expires_at", "revoked_at", "created_at"}
 
 type createdApp struct {
-	id, keyID, apiKey, apiSecret, webhookSecret string
+	id, keyID, apiKey, apiSecret string
 }
 
 // createApp creates an app through the API and makes the fixture's
@@ -71,11 +71,10 @@ func (f *apiFixture) createApp(t *testing.T, b *browser, body string) createdApp
 	m := decode(t, f.send(b, http.MethodPost, "/admin/apps", body), http.StatusCreated)
 	f.useDefaultConnection(t, m["app"].(map[string]any)["id"].(string))
 	return createdApp{
-		id:            m["app"].(map[string]any)["id"].(string),
-		keyID:         m["key"].(map[string]any)["id"].(string),
-		apiKey:        m["api_key"].(string),
-		apiSecret:     m["api_secret"].(string),
-		webhookSecret: m["webhook_secret"].(string),
+		id:        m["app"].(map[string]any)["id"].(string),
+		keyID:     m["key"].(map[string]any)["id"].(string),
+		apiKey:    m["api_key"].(string),
+		apiSecret: m["api_secret"].(string),
 	}
 }
 
@@ -85,9 +84,10 @@ func TestAppResponseShapes(t *testing.T) {
 	owner := f.signIn(t, f.owner)
 
 	m := decode(t, f.send(owner, http.MethodPost, "/admin/apps",
-		`{"name":"Acme","slug":"acme","environment":"test","webhook_url":"https://acme.example/hook","metadata":{"tier":12345678901234567890,"note":"ü"}}`),
+		`{"name":"Acme","slug":"acme","environment":"test","metadata":{"tier":12345678901234567890,"note":"ü"}}`),
 		http.StatusCreated)
-	keysOf(t, "created", m, "app", "key", "api_key", "api_secret", "webhook_secret")
+	// T-B33 / AC-18: no webhook_url or webhook_secret any more.
+	keysOf(t, "created", m, "app", "key", "api_key", "api_secret")
 	app := keysOf(t, "app", m["app"], appKeys...)
 	key := keysOf(t, "key", m["key"], apiKeyKeys...)
 	if !appIDRe.MatchString(app["id"].(string)) || app["environment"] != "test" || app["status"] != "active" || app["slug"] != "acme" {
@@ -101,7 +101,7 @@ func TestAppResponseShapes(t *testing.T) {
 		key["last4"] != m["api_key"].(string)[len(m["api_key"].(string))-4:] {
 		t.Fatalf("key = %v", key)
 	}
-	for _, field := range []string{"api_key", "api_secret", "webhook_secret"} {
+	for _, field := range []string{"api_key", "api_secret"} {
 		if m[field] == "" {
 			t.Fatalf("%s empty", field)
 		}
@@ -180,10 +180,8 @@ func TestAppRequestErrors(t *testing.T) {
 		expectFields(t, expectError(t, f.send(owner, http.MethodGet, "/admin/payments?"+q, ""), 400, domain.CodeInvalidRequest), want)
 	}
 	decode(t, f.send(owner, http.MethodGet, "/admin/payments?app_id="+strings.ToLower(app.id[:4])+app.id[4:]+"&status=PAID&from=2026-01-01T00:00:00Z&to=2026-12-31T00:00:00%2B07:00", ""), http.StatusOK)
-	// The legacy offset lists ignore a malformed app_id.
-	for _, path := range []string{"/admin/ledger?app_id=1", "/admin/webhook-deliveries?app_id=nope"} {
-		decode(t, f.send(owner, http.MethodGet, path, ""), http.StatusOK)
-	}
+	// The legacy offset ledger ignores a malformed app_id.
+	decode(t, f.send(owner, http.MethodGet, "/admin/ledger?app_id=1", ""), http.StatusOK)
 }
 
 // AC-9: PATCH refuses slug and environment and needs an updatable field.
@@ -203,9 +201,11 @@ func TestAppPatch(t *testing.T) {
 		{`{"slug":"","environment":null}`, []domain.FieldError{{Field: "slug", Rule: "immutable"}, {Field: "environment", Rule: "immutable"}}},
 		{`{}`, []domain.FieldError{{Field: "body", Rule: "required"}}},
 		{`{"unknown":1}`, []domain.FieldError{{Field: "body", Rule: "required"}}},
-		{`{"name":1,"webhook_url":null}`, []domain.FieldError{{Field: "name", Rule: "type"}, {Field: "webhook_url", Rule: "type"}}},
+		{`{"name":1,"webhook_url":null}`, []domain.FieldError{{Field: "name", Rule: "type"}}},
 		{`{"metadata":{"a":[1]}}`, []domain.FieldError{{Field: "metadata.a", Rule: "type"}}},
-		{`{"webhook_url":"ftp://x"}`, []domain.FieldError{{Field: "webhook_url", Rule: "url"}}},
+		{`{"webhook_url":"https://acme.example/hook"}`, []domain.FieldError{{Field: "webhook_url", Rule: "moved"}}},
+		{`{"webhook_url":null,"slug":"x","name":" "}`, []domain.FieldError{{Field: "name", Rule: "required"}, {Field: "slug", Rule: "immutable"},
+			{Field: "webhook_url", Rule: "moved"}}},
 	}
 	for _, tc := range cases {
 		expectFields(t, expectError(t, f.send(owner, http.MethodPatch, path, tc.body), 400, domain.CodeInvalidRequest), tc.want...)
@@ -451,8 +451,8 @@ func TestAppSecretsNeverLeak(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
 	var secrets []string
-	app := f.createApp(t, owner, `{"name":"Acme","slug":"acme","environment":"test","webhook_url":"https://acme.example/hook"}`)
-	secrets = append(secrets, app.apiKey, app.apiSecret, app.webhookSecret)
+	app := f.createApp(t, owner, `{"name":"Acme","slug":"acme","environment":"test"}`)
+	secrets = append(secrets, app.apiKey, app.apiSecret)
 	ck := decode(t, f.send(owner, http.MethodPost, "/admin/apps/"+app.id+"/keys", `{"label":"Two"}`), http.StatusCreated)
 	secrets = append(secrets, ck["api_key"].(string), ck["api_secret"].(string))
 	rk := decode(t, f.send(owner, http.MethodPost, "/admin/apps/"+app.id+"/keys/"+app.keyID+"/rotate", ""), http.StatusCreated)
@@ -468,10 +468,7 @@ func TestAppSecretsNeverLeak(t *testing.T) {
 	for _, k := range f.keys.All() {
 		secrets = append(secrets, k.Hash, k.SecretEnc)
 	}
-	for _, a := range f.apps.All() {
-		secrets = append(secrets, a.WebhookSecretEnc)
-	}
-	if len(secrets) < 12 {
+	if len(secrets) < 11 {
 		t.Fatalf("collected %d secrets", len(secrets))
 	}
 

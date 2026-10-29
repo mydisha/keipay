@@ -24,7 +24,7 @@ func chdirBackend(t *testing.T) string {
 		"POSTGRES_DSN", "XENDIT_SECRET_KEY", "XENDIT_CALLBACK_TOKEN", "JWT_SECRET", "ENCRYPTION_KEY", "FRONTEND_DIR",
 		"APP_ENV", "COOKIE_SECURE", "SESSION_IDLE_TIMEOUT", "SESSION_ABSOLUTE_TIMEOUT",
 		"LOGIN_MAX_FAILURES_PER_IP", "LOGIN_MAX_FAILURES_PER_EMAIL", "LOGIN_FAILURE_WINDOW",
-		"TRUSTED_PROXIES", "SETUP_TOKEN",
+		"TRUSTED_PROXIES", "SETUP_TOKEN", "WEBHOOK_DISABLE_AFTER_FAILURES",
 	} {
 		t.Setenv(key, "")
 	}
@@ -129,5 +129,30 @@ func TestLoad_XenditSettingsBothOrNeither(t *testing.T) {
 				t.Fatalf("cfg = %q / %q", cfg.XenditSecretKey, cfg.XenditCallbackToken)
 			}
 		})
+	}
+}
+
+// T-B36 / AC-10: endpoints are disabled after 5 exhausted deliveries by
+// default; 0 turns it off; a negative value is a configuration error.
+func TestLoad_WebhookDisableAfterFailures(t *testing.T) {
+	root := chdirBackend(t)
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte(envBody("postgres://root")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load()
+	if err != nil || cfg.WebhookDisableAfterFailures != 5 {
+		t.Fatalf("default = %v, %v", cfg, err)
+	}
+	t.Setenv("WEBHOOK_DISABLE_AFTER_FAILURES", "0")
+	if cfg, err := Load(); err != nil || cfg.WebhookDisableAfterFailures != 0 {
+		t.Fatalf("0 = %v, %v", cfg, err)
+	}
+	t.Setenv("WEBHOOK_DISABLE_AFTER_FAILURES", "12")
+	if cfg, err := Load(); err != nil || cfg.WebhookDisableAfterFailures != 12 {
+		t.Fatalf("12 = %v, %v", cfg, err)
+	}
+	t.Setenv("WEBHOOK_DISABLE_AFTER_FAILURES", "-1")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "WEBHOOK_DISABLE_AFTER_FAILURES") {
+		t.Fatalf("-1: %v", err)
 	}
 }

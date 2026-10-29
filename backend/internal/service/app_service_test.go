@@ -76,7 +76,7 @@ func TestAppCreate(t *testing.T) {
 		t.Run(string(env), func(t *testing.T) {
 			f := newAppFixture(t)
 			c, err := f.svc.Create(adminCtx(), CreateAppInput{
-				Name: " Acme Shop ", Slug: " Acme-Shop ", Environment: env, WebhookURL: " https://acme.example/hook ",
+				Name: " Acme Shop ", Slug: " Acme-Shop ", Environment: env,
 				Metadata: json.RawMessage(`{"team":"payments","tier":2}`),
 			})
 			if err != nil {
@@ -84,13 +84,12 @@ func TestAppCreate(t *testing.T) {
 			}
 			envStr := string(env)
 			if !regexp.MustCompile(`^kp_`+envStr+`_[0-9a-f]{32}$`).MatchString(c.APIKey) ||
-				!regexp.MustCompile(`^kps_`+envStr+`_[0-9a-f]{48}$`).MatchString(c.APISecret) ||
-				!regexp.MustCompile(`^kpwh_[0-9a-f]{48}$`).MatchString(c.WebhookSecret) {
-				t.Fatalf("secrets = %s %s %s", c.APIKey, c.APISecret, c.WebhookSecret)
+				!regexp.MustCompile(`^kps_`+envStr+`_[0-9a-f]{48}$`).MatchString(c.APISecret) {
+				t.Fatalf("secrets = %s %s", c.APIKey, c.APISecret)
 			}
 			a, k := c.App, c.Key
 			if !id.Valid(a.PublicID, id.App) || a.Slug != "acme-shop" || a.Name != "Acme Shop" || a.Environment != env ||
-				a.Status != domain.AppActive || a.WebhookURL != "https://acme.example/hook" {
+				a.Status != domain.AppActive || a.WebhookURL != "" {
 				t.Fatalf("app = %+v", a)
 			}
 			if !id.Valid(k.PublicID, id.APIKey) || k.Label != "Default" || k.ExpiresAt != nil || k.Environment != env ||
@@ -98,8 +97,9 @@ func TestAppCreate(t *testing.T) {
 				k.Hash != keygen.HashAPIKey(c.APIKey) {
 				t.Fatalf("key = %+v", k)
 			}
-			if a.WebhookSecretEnc != "enc("+c.WebhookSecret+")" || k.SecretEnc != "enc("+c.APISecret+")" {
-				t.Fatalf("secrets not stored encrypted: %q %q", a.WebhookSecretEnc, k.SecretEnc)
+			// T-B33: apps no longer get a webhook secret; endpoints have their own.
+			if a.WebhookSecretEnc != "" || k.SecretEnc != "enc("+c.APISecret+")" {
+				t.Fatalf("secrets: webhook %q api %q", a.WebhookSecretEnc, k.SecretEnc)
 			}
 
 			logs := f.audit.Logs()
@@ -112,14 +112,14 @@ func TestAppCreate(t *testing.T) {
 			assertJSON(t, "app.create before", logs[0].Before, nil)
 			assertJSON(t, "app.create after", logs[0].After, map[string]any{
 				"id": a.PublicID, "slug": "acme-shop", "name": "Acme Shop", "environment": envStr, "status": "active",
-				"webhook_url": "https://acme.example/hook", "redirect_success_url": "", "redirect_failure_url": "",
+				"redirect_success_url": "", "redirect_failure_url": "",
 				"metadata": map[string]any{"team": "payments", "tier": 2},
 			})
 			assertJSON(t, "api_key.create after", logs[1].After, map[string]any{
 				"id": k.PublicID, "app_id": a.PublicID, "label": "Default", "environment": envStr,
 				"prefix": "kp_" + envStr + "_", "last4": k.Last4, "expires_at": nil, "revoked_at": nil,
 			})
-			assertNoSecrets(t, f, c.APIKey, c.APISecret, c.WebhookSecret, k.Hash)
+			assertNoSecrets(t, f, c.APIKey, c.APISecret, k.Hash)
 		})
 	}
 }
@@ -152,19 +152,22 @@ func TestAppCreateSlugUniquePerEnvironment(t *testing.T) {
 func TestAppCreateFieldRules(t *testing.T) {
 	f := newAppFixture(t)
 	_, err := f.svc.Create(adminCtx(), CreateAppInput{
-		Name: "", Slug: "a", Environment: "prod", WebhookURL: "ftp://x", RedirectSuccessURL: "/ok",
+		Name: "", Slug: "a", Environment: "prod", WebhookURL: true, RedirectSuccessURL: "/ok",
 		RedirectFailureURL: "https://", Metadata: json.RawMessage(`{"b":[],"a":{}}`),
 	})
 	assertFields(t, err,
 		domain.FieldError{Field: "name", Rule: "required"},
 		domain.FieldError{Field: "slug", Rule: "slug"},
 		domain.FieldError{Field: "environment", Rule: "oneof"},
-		domain.FieldError{Field: "webhook_url", Rule: "url"},
+		domain.FieldError{Field: "webhook_url", Rule: "moved"},
 		domain.FieldError{Field: "redirect_success_url", Rule: "url"},
 		domain.FieldError{Field: "redirect_failure_url", Rule: "url"},
 		domain.FieldError{Field: "metadata.a", Rule: "type"},
 		domain.FieldError{Field: "metadata.b", Rule: "type"},
 	)
+	// T-B33: webhook_url alone is refused too.
+	_, err = f.svc.Create(adminCtx(), CreateAppInput{Name: "A", Slug: "acme", Environment: domain.EnvTest, WebhookURL: true})
+	assertFields(t, err, domain.FieldError{Field: "webhook_url", Rule: "moved"})
 	_, err = f.svc.Create(adminCtx(), CreateAppInput{Name: strings.Repeat("n", 101), Slug: "", Environment: ""})
 	assertFields(t, err,
 		domain.FieldError{Field: "name", Rule: "max"},
@@ -208,8 +211,9 @@ func TestAppUpdate(t *testing.T) {
 		{"environment", UpdateAppInput{Environment: true, Name: str("X")}, []domain.FieldError{fe("environment", "immutable")}},
 		{"both", UpdateAppInput{Slug: true, Environment: true}, []domain.FieldError{fe("slug", "immutable"), fe("environment", "immutable")}},
 		{"empty body", UpdateAppInput{}, []domain.FieldError{fe("body", "required")}},
-		{"bad fields", UpdateAppInput{Name: str(" "), WebhookURL: str("x"), Metadata: json.RawMessage(`[]`), Slug: true},
-			[]domain.FieldError{fe("name", "required"), fe("slug", "immutable"), fe("webhook_url", "url"), fe("metadata", "object")}},
+		{"bad fields", UpdateAppInput{Name: str(" "), WebhookURL: true, Metadata: json.RawMessage(`[]`), Slug: true},
+			[]domain.FieldError{fe("name", "required"), fe("slug", "immutable"), fe("webhook_url", "moved"), fe("metadata", "object")}},
+		{"webhook_url alone", UpdateAppInput{WebhookURL: true}, []domain.FieldError{fe("webhook_url", "moved")}},
 	}
 	for _, tc := range cases {
 		_, err := f.svc.Update(adminCtx(), pub, tc.in)
@@ -220,7 +224,7 @@ func TestAppUpdate(t *testing.T) {
 	}
 
 	// No-op: same values write and record nothing.
-	got, err := f.svc.Update(adminCtx(), pub, UpdateAppInput{Name: str(" App acme "), WebhookURL: str(""), Metadata: json.RawMessage(`null`)})
+	got, err := f.svc.Update(adminCtx(), pub, UpdateAppInput{Name: str(" App acme "), Metadata: json.RawMessage(`null`)})
 	if err != nil || got.Name != "App acme" || f.apps.Updates != 0 || len(f.audit.Logs()) != 0 {
 		t.Fatalf("no-op: %+v %v updates=%d audit=%v", got, err, f.apps.Updates, f.actions())
 	}
@@ -229,7 +233,7 @@ func TestAppUpdate(t *testing.T) {
 	if _, err := f.svc.Update(adminCtx(), pub, UpdateAppInput{Metadata: json.RawMessage(`{"a":1,"b":"x"}`)}); err != nil {
 		t.Fatal(err)
 	}
-	got, err = f.svc.Update(adminCtx(), pub, UpdateAppInput{Name: str("Acme Ünïcode"), WebhookURL: str(""),
+	got, err = f.svc.Update(adminCtx(), pub, UpdateAppInput{Name: str("Acme Ünïcode"),
 		RedirectFailureURL: str("https://acme.example/fail"), Metadata: json.RawMessage(`{"c":true}`)})
 	if err != nil {
 		t.Fatal(err)

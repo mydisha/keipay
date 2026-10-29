@@ -36,23 +36,6 @@ const (
 	legacySecret = "sk_legacy_0123456789abcdef"
 )
 
-type noCache struct{}
-
-func (noCache) Seen(context.Context, string) bool { return false }
-func (noCache) Mark(context.Context, string)      {}
-
-type recordingEnqueuer struct {
-	mu  sync.Mutex
-	ids []int64
-}
-
-func (e *recordingEnqueuer) EnqueueWebhookForward(_ context.Context, id int64) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.ids = append(e.ids, id)
-	return nil
-}
-
 // runNonces scopes the shared Redis nonce store to one test run, since
 // requests repeat byte for byte across runs.
 type runNonces struct {
@@ -65,19 +48,22 @@ func (n runNonces) Acquire(ctx context.Context, key string) bool {
 }
 
 // e2e is the real router over Postgres and Redis on a database migrated
-// from phase 1 with one legacy tenant. The deprecated XENDIT_* settings are
-// imported as on an upgraded server, so the legacy app pays through the real
-// Xendit adapter, pointed at a fake Xendit API.
+// from phase 1 with one legacy tenant that had a webhook URL. The deprecated
+// XENDIT_* settings are imported as on an upgraded server, so the legacy app
+// pays through the real Xendit adapter, pointed at a fake Xendit API.
 type e2e struct {
-	router    *gin.Engine
-	appSvc    *service.AppService
-	connSvc   *service.ConnectionService
-	payments  *postgres.PaymentRepo
-	apps      *postgres.AppRepo
-	webhooks  *postgres.WebhookRepo
-	webhook   *service.WebhookService
-	cipher    *crypto.Cipher
-	xenditAPI *fakeXenditAPI
+	router     *gin.Engine
+	appSvc     *service.AppService
+	connSvc    *service.ConnectionService
+	payments   *postgres.PaymentRepo
+	apps       *postgres.AppRepo
+	endpoints  *postgres.WebhookEndpointRepo
+	deliveries *postgres.DeliveryRepo
+	tx         *postgres.TxManager
+	audit      *service.AuditService
+	webhook    *service.WebhookService
+	cipher     *crypto.Cipher
+	xenditAPI  *fakeXenditAPI
 	// legacy is the connection imported from the XENDIT_* settings.
 	legacy *domain.Connection
 }
@@ -101,7 +87,8 @@ func newE2E(t *testing.T) *e2e {
 	t.Cleanup(pool.Close)
 	secretEnc, _ := cipher.Encrypt(legacySecret)
 	for _, q := range []string{
-		`INSERT INTO tenants (id, name, slug, api_key, api_secret_enc, active) VALUES (1, 'Acme', 'acme', '` + legacyKey + `', '` + secretEnc + `', true)`,
+		`INSERT INTO tenants (id, name, slug, api_key, api_secret_enc, active, webhook_url)
+			VALUES (1, 'Acme', 'acme', '` + legacyKey + `', '` + secretEnc + `', true, 'https://acme.example/hook')`,
 		`SELECT setval(pg_get_serial_sequence('tenants', 'id'), 1)`,
 		`INSERT INTO payments (id, tenant_id, order_id, external_id, amount) VALUES (1, 1, 'ord-1', 'acme:ord-1', 1000)`,
 		`SELECT setval(pg_get_serial_sequence('payments', 'id'), 1)`,
@@ -121,11 +108,13 @@ func newE2E(t *testing.T) *e2e {
 
 	tx := postgres.NewTxManager(pool)
 	e := &e2e{
-		apps:      postgres.NewAppRepo(pool),
-		payments:  postgres.NewPaymentRepo(pool),
-		webhooks:  postgres.NewWebhookRepo(pool),
-		cipher:    cipher,
-		xenditAPI: newFakeXenditAPI(t),
+		apps:       postgres.NewAppRepo(pool),
+		payments:   postgres.NewPaymentRepo(pool),
+		endpoints:  postgres.NewWebhookEndpointRepo(pool),
+		deliveries: postgres.NewDeliveryRepo(pool),
+		tx:         tx,
+		cipher:     cipher,
+		xenditAPI:  newFakeXenditAPI(t),
 	}
 	registry, err := provider.NewRegistry(xendit.New(xendit.WithBaseURL(e.xenditAPI.URL)), providertest.New())
 	if err != nil {
@@ -133,6 +122,7 @@ func newE2E(t *testing.T) *e2e {
 	}
 	conns := postgres.NewConnectionRepo(pool)
 	audit := service.NewAuditService(postgres.NewAuditRepo(pool))
+	e.audit = audit
 	e.appSvc = service.NewAppService(e.apps, postgres.NewAPIKeyRepo(pool), conns, cipher, tx, audit)
 	e.connSvc = service.NewConnectionService(service.ConnectionDeps{
 		Connections: conns, Merchants: postgres.NewMerchantRepo(pool), Apps: e.apps, Payments: e.payments,
@@ -143,7 +133,10 @@ func newE2E(t *testing.T) *e2e {
 		t.Fatalf("import: %+v %v", imported, err)
 	}
 	e.legacy = imported.Connection
-	e.webhook = service.NewWebhookService(e.payments, postgres.NewLedgerRepo(pool), e.webhooks, tx, noCache{}, &recordingEnqueuer{})
+	e.webhook = service.NewWebhookService(service.WebhookDeps{
+		Payments: e.payments, Ledger: postgres.NewLedgerRepo(pool), Inbound: postgres.NewInboundWebhookRepo(pool),
+		Events: postgres.NewEventRepo(pool), Endpoints: e.endpoints, Deliveries: e.deliveries, Tx: tx, Enqueuer: &recordingQueue{},
+	})
 	gin.SetMode(gin.TestMode)
 	e.router = NewRouter(Deps{
 		Log:             zap.NewNop(),
@@ -260,49 +253,69 @@ func TestIntegrationEndToEndMigratedApp(t *testing.T) {
 			t.Fatalf("%s: %v", cb.ev.Reference, err)
 		}
 	}
-	ds, err := e.webhooks.ListDeliveries(ctx, domain.DeliveryFilter{})
-	if err != nil || len(ds) != 3 {
-		t.Fatalf("deliveries = %+v %v", ds, err)
+	// Only acme had a webhook URL, so only it has an endpoint: the one
+	// migrated from it.
+	page, err := e.deliveries.List(ctx, domain.DeliveryFilter{}, domain.Page{Limit: 50})
+	if err != nil || len(page.Items) != 2 {
+		t.Fatalf("deliveries = %+v %v", page.Items, err)
 	}
 	byPayment := map[string]domain.WebhookDelivery{}
-	for _, d := range ds {
-		byPayment[d.PaymentPublicID] = d
+	for _, d := range page.Items {
+		full, err := e.deliveries.GetByPublicID(ctx, d.PublicID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		byPayment[d.PaymentPublicID] = *full
 	}
 	if d := byPayment[created.ID]; d.App.Slug != "acme" || !strings.Contains(string(d.Payload), `"payment_public_id": "`+created.ID+`"`) ||
-		!strings.Contains(string(d.Payload), `"note": "ü 🌏"`) {
+		!strings.Contains(string(d.Payload), `"note": "ü 🌏"`) || !strings.Contains(string(d.Payload), `"event_id": "evt_`) {
 		t.Fatalf("new delivery = %+v %s", d.App, d.Payload)
 	}
-	if d := byPayment[strings.TrimPrefix(otherPay.Reference, "kp_")]; d.App.PublicID != other.App.PublicID {
-		t.Fatalf("other delivery = %+v", d.App)
-	}
 
-	// The forward for the migrated app verifies with its original api_secret.
+	// T-B32 / AC-8: the migrated endpoint sends the v1 body, signed as before
+	// with the app's original api_secret.
 	var mu sync.Mutex
 	var got []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		mu.Lock()
 		defer mu.Unlock()
-		if hmac.Verify(legacySecret, b, r.Header.Get("X-Kei-Signature")) {
+		switch {
+		case !hmac.Verify(legacySecret, b, r.Header.Get("X-Kei-Signature")):
+			got = append(got, "bad legacy signature")
+		case !strings.HasPrefix(r.Header.Get("X-KeiPay-Signature"), "t="):
+			got = append(got, "no signature")
+		case !strings.Contains(string(b), `"event": "payment.paid"`):
+			got = append(got, "not a v1 body")
+		default:
 			got = append(got, "ok")
-		} else {
-			got = append(got, "bad signature")
 		}
 	}))
 	defer srv.Close()
-	acme, _ := e.apps.GetByID(ctx, 1)
-	acme.WebhookURL = srv.URL
-	if err := e.apps.Update(ctx, acme); err != nil {
+	migrated := byPayment[created.ID].Endpoint
+	if migrated == nil {
+		t.Fatal("delivery has no endpoint")
+	}
+	err = e.tx.WithinTx(ctx, func(ctx context.Context) error {
+		ep, err := e.endpoints.GetByPublicIDForUpdate(ctx, migrated.PublicID)
+		if err != nil {
+			return err
+		}
+		if !ep.Migrated || !ep.LegacySignature || ep.APIVersion != domain.WebhookAPIV1 || ep.SecretLast4 != nil {
+			t.Errorf("migrated endpoint = %+v", ep)
+		}
+		ep.URL = srv.URL
+		return e.endpoints.Update(ctx, ep)
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
-	fwd := worker.NewForwarder(e.apps, e.webhooks, e.cipher, zap.NewNop(), 3)
-	for _, d := range ds {
-		if d.AppID != 1 {
-			continue
-		}
-		task, _ := worker.NewWebhookForwardTask(d.ID)
+	fwd := worker.NewForwarder(worker.ForwarderDeps{Deliveries: e.deliveries, Endpoints: e.endpoints, Tx: e.tx, Cipher: e.cipher,
+		Audit: e.audit, Enqueuer: &recordingQueue{}, DisableAfterFailures: 5})
+	for _, d := range byPayment {
+		task, _ := worker.NewWebhookForwardTask(d.ID, 1, false)
 		if err := fwd.HandleWebhookForward(ctx, task); err != nil {
-			t.Fatalf("forward %d: %v", d.ID, err)
+			t.Fatalf("forward %s: %v", d.PublicID, err)
 		}
 	}
 	if strings.Join(got, ",") != "ok,ok" {

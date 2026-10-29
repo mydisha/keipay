@@ -168,7 +168,8 @@ type Callback struct {
 	Currency  string `json:"currency"`
 }
 
-// ParseWebhook decodes a Callback; status is taken as a PaymentStatus.
+// ParseWebhook decodes a Callback; status is taken as a PaymentStatus, and a
+// value that is not one is unknown (empty Status).
 func (f *Fake) ParseWebhook(raw []byte) (*provider.InboundEvent, error) {
 	var cb Callback
 	if err := json.Unmarshal(raw, &cb); err != nil {
@@ -177,9 +178,16 @@ func (f *Fake) ParseWebhook(raw []byte) (*provider.InboundEvent, error) {
 	if cb.ID == "" || cb.Reference == "" {
 		return nil, errors.New("missing id or reference")
 	}
+	status := domain.PaymentStatus(cb.Status)
+	switch status {
+	case domain.PaymentStatusPending, domain.PaymentStatusPaid, domain.PaymentStatusSettled,
+		domain.PaymentStatusExpired, domain.PaymentStatusFailed:
+	default:
+		status = ""
+	}
 	return &provider.InboundEvent{
 		EventKey: cb.ID, Reference: cb.Reference, ProviderPaymentID: cb.ID, ProviderStatus: cb.Status,
-		Status: domain.PaymentStatus(cb.Status), Amount: cb.Amount, Currency: cb.Currency, Source: "webhook",
+		Status: status, Amount: cb.Amount, Currency: cb.Currency, Source: "webhook",
 	}, nil
 }
 

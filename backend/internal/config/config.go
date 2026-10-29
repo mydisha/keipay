@@ -56,8 +56,10 @@ type Config struct {
 	// EncryptionKey is 64 hex chars (32 bytes) for AES-256-GCM at-rest secrets.
 	EncryptionKey string `mapstructure:"ENCRYPTION_KEY"`
 
-	RunWorker       bool `mapstructure:"RUN_WORKER"`
-	WebhookMaxRetry int  `mapstructure:"WEBHOOK_MAX_RETRY"`
+	RunWorker bool `mapstructure:"RUN_WORKER"`
+	// WebhookDisableAfterFailures disables a webhook endpoint after this many
+	// deliveries in a row ran out of attempts; 0 never does.
+	WebhookDisableAfterFailures int `mapstructure:"WEBHOOK_DISABLE_AFTER_FAILURES"`
 
 	// ShutdownTimeout is the maximum duration to wait for graceful shutdown.
 	// Defaults to 30 seconds if not set or invalid.
@@ -102,7 +104,7 @@ func Load() (*Config, error) {
 		"LOGIN_MAX_FAILURES_PER_IP", "LOGIN_MAX_FAILURES_PER_EMAIL", "LOGIN_FAILURE_WINDOW",
 		"TRUSTED_PROXIES", "SETUP_TOKEN",
 		"ENCRYPTION_KEY",
-		"RUN_WORKER", "WEBHOOK_MAX_RETRY",
+		"RUN_WORKER", "WEBHOOK_DISABLE_AFTER_FAILURES",
 		"SHUTDOWN_TIMEOUT",
 		"FRONTEND_DIR",
 	} {
@@ -130,7 +132,7 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("REDIS_DB", 0)
 	v.SetDefault("RUN_WORKER", true)
-	v.SetDefault("WEBHOOK_MAX_RETRY", 5)
+	v.SetDefault("WEBHOOK_DISABLE_AFTER_FAILURES", 5)
 	v.SetDefault("SHUTDOWN_TIMEOUT", "30s")
 	v.SetDefault("COOKIE_SECURE", "auto")
 	v.SetDefault("SESSION_IDLE_TIMEOUT", "30m")
@@ -150,6 +152,9 @@ func (c *Config) validate() error {
 	}
 	if len(c.EncryptionKey) != 64 {
 		return fmt.Errorf("ENCRYPTION_KEY must be 64 hex chars (32 bytes)")
+	}
+	if c.WebhookDisableAfterFailures < 0 {
+		return fmt.Errorf("WEBHOOK_DISABLE_AFTER_FAILURES must be 0 (never) or more")
 	}
 	if len(missing) > 0 {
 		return fmt.Errorf("missing required config: %s", strings.Join(missing, ", "))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"go.uber.org/zap"
@@ -63,7 +64,19 @@ const (
 	detailMissingKey       = "missing event key or reference"
 )
 
-// WebhookDeps are the collaborators of a WebhookService.
+// CallbackLimits bound the rejected callbacks (failed verification or
+// parsing) a sender IP and a connection may produce in a window. Over a
+// limit, further rejected callbacks are refused without being recorded, so
+// anyone who learns a callback URL cannot fill the inbound log. Accepted
+// callbacks are never limited.
+type CallbackLimits struct {
+	MaxRejectedPerIP         int
+	MaxRejectedPerConnection int
+	Window                   time.Duration
+}
+
+// WebhookDeps are the collaborators of a WebhookService. Limiter may be
+// nil, which disables the callback limits.
 type WebhookDeps struct {
 	Payments   domain.PaymentRepository
 	Reports    domain.PaymentReportRepository
@@ -73,6 +86,8 @@ type WebhookDeps struct {
 	Deliveries domain.DeliveryRepository
 	Tx         domain.TxManager
 	Enqueuer   Enqueuer
+	Limiter    domain.FailureLimiter
+	Limits     CallbackLimits
 	Log        *zap.Logger
 }
 
@@ -88,6 +103,8 @@ type WebhookService struct {
 	deliveries domain.DeliveryRepository
 	tx         domain.TxManager
 	enqueuer   Enqueuer
+	limiter    domain.FailureLimiter
+	limits     CallbackLimits
 	log        *zap.Logger
 	now        func() time.Time
 }
@@ -100,7 +117,7 @@ func NewWebhookService(d WebhookDeps) *WebhookService {
 	}
 	return &WebhookService{
 		payments: d.Payments, reports: d.Reports, inbound: d.Inbound, events: d.Events, endpoints: d.Endpoints,
-		deliveries: d.Deliveries, tx: d.Tx, enqueuer: d.Enqueuer, log: log, now: time.Now,
+		deliveries: d.Deliveries, tx: d.Tx, enqueuer: d.Enqueuer, limiter: d.Limiter, limits: d.Limits, log: log, now: time.Now,
 	}
 }
 
@@ -126,7 +143,9 @@ type processOutcome struct {
 // commit; see ErrForwardNotQueued.
 func (s *WebhookService) Process(ctx context.Context, conn *domain.Connection, ev provider.InboundEvent, raw []byte) error {
 	if ev.Reference == "" || ev.EventKey == "" {
-		s.record(ctx, s.newInbound(conn, raw, domain.InboundInvalidPayload, detailMissingKey))
+		if err := s.RecordRejected(ctx, conn, raw, domain.InboundInvalidPayload, detailMissingKey); err != nil {
+			return err
+		}
 		return fmt.Errorf("%w: %s", domain.ErrInvalidInput, detailMissingKey)
 	}
 
@@ -156,10 +175,42 @@ func (s *WebhookService) Process(ctx context.Context, conn *domain.Connection, e
 
 // RecordRejected logs a callback that failed before processing: verification
 // (InboundInvalidSignature; the body is cut to MaxRejectedBodyBytes, since
-// anyone can send it) or parsing (InboundInvalidPayload). Failing to write
-// is logged, not returned.
-func (s *WebhookService) RecordRejected(ctx context.Context, conn *domain.Connection, raw []byte, result domain.InboundResult, detail string) {
+// anyone can send it) or parsing (InboundInvalidPayload, cut to
+// MaxUnappliedBodyBytes). It counts against the sender's and the
+// connection's rejected-callback limits, read from the ClientMeta in ctx;
+// once a limit is reached it records nothing and returns rate_limited.
+// Failing to write is logged, not returned, and so is a limiter that does
+// not answer: a gateway's retries matter more than the limit.
+func (s *WebhookService) RecordRejected(ctx context.Context, conn *domain.Connection, raw []byte, result domain.InboundResult, detail string) error {
+	meta := ClientMetaFromContext(ctx)
+	ipKey, connKey := "ip:"+meta.IP, "con:"+conn.PublicID
+	if s.limiter != nil {
+		blocked, wait, err := s.limiter.Blocked(ctx,
+			domain.FailureLimit{Key: ipKey, Max: s.limits.MaxRejectedPerIP},
+			domain.FailureLimit{Key: connKey, Max: s.limits.MaxRejectedPerConnection})
+		switch {
+		case err != nil:
+			logger.Ctx(ctx, s.log).Warn("callback limiter unavailable",
+				zap.String(logger.FieldLogType, logger.LogTypeWebhook),
+				zap.String(logger.FieldEvent, "webhook.inbound.limiter_unavailable"),
+				zap.String("connection_id", conn.PublicID), zap.Error(err))
+		case blocked:
+			logger.Security(s.log, logger.EventCallbackRateLimited, logger.SeverityMedium, meta.IP, meta.RequestID,
+				"too many rejected callbacks", zap.String("connection_id", conn.PublicID), zap.String("provider", conn.Provider),
+				zap.String("result", string(result)))
+			return domain.RateLimited(int(math.Ceil(wait.Seconds())))
+		}
+	}
 	s.record(ctx, s.newInbound(conn, raw, result, detail))
+	if s.limiter != nil {
+		if err := s.limiter.Fail(context.WithoutCancel(ctx), s.limits.Window, ipKey, connKey); err != nil {
+			logger.Ctx(ctx, s.log).Warn("rejected callback not counted",
+				zap.String(logger.FieldLogType, logger.LogTypeWebhook),
+				zap.String(logger.FieldEvent, "webhook.inbound.limiter_unavailable"),
+				zap.String("connection_id", conn.PublicID), zap.Error(err))
+		}
+	}
+	return nil
 }
 
 func (s *WebhookService) newInbound(conn *domain.Connection, raw []byte, result domain.InboundResult, detail string) *domain.InboundWebhook {
@@ -168,8 +219,15 @@ func (s *WebhookService) newInbound(conn *domain.Connection, raw []byte, result 
 		Source: domain.InboundSourceWebhook, SignatureValid: result != domain.InboundInvalidSignature,
 		Result: result, ResultDetail: detail, RawBody: raw,
 	}
-	if !w.SignatureValid && len(raw) > domain.MaxRejectedBodyBytes {
-		w.RawBody, w.BodyTruncated = raw[:domain.MaxRejectedBodyBytes], true
+	limit := 0
+	switch result {
+	case domain.InboundInvalidSignature:
+		limit = domain.MaxRejectedBodyBytes
+	case domain.InboundInvalidPayload:
+		limit = domain.MaxUnappliedBodyBytes
+	}
+	if limit > 0 && len(raw) > limit {
+		w.RawBody, w.BodyTruncated = raw[:limit], true
 	}
 	return w
 }

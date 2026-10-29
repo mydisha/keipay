@@ -130,16 +130,19 @@ type apiFixture struct {
 	users    *memstore.Users
 	sessions *memstore.Sessions
 	failures *memstore.Failures
-	audit    *auditRepo
-	auth     *service.AuthService
-	logs     *observer.ObservedLogs
-	owner    *domain.User
-	apps     *memstore.Apps
-	keys     *memstore.APIKeys
-	payments *memstore.Payments
-	conns    *memstore.Connections
-	appSvc   *service.AppService
-	connSvc  *service.ConnectionService
+	// callbackFailures is the rejected-callback limiter: 60 per IP and per
+	// connection in 15 minutes. Seed it with Inc to reach a limit.
+	callbackFailures *memstore.Failures
+	audit            *auditRepo
+	auth             *service.AuthService
+	logs             *observer.ObservedLogs
+	owner            *domain.User
+	apps             *memstore.Apps
+	keys             *memstore.APIKeys
+	payments         *memstore.Payments
+	conns            *memstore.Connections
+	appSvc           *service.AppService
+	connSvc          *service.ConnectionService
 	// fake is the provider every app's default connection uses.
 	fake *providertest.Fake
 	// testConn and liveConn are the fake connections createApp makes the
@@ -215,9 +218,11 @@ func newAPI(t *testing.T, frontendDir string, opts ...apiOption) *apiFixture {
 		Sealer: sealer, Tx: tx, Audit: auditSvc, Log: log, BaseURL: "https://pay.example.com",
 	})
 	paymentSvc := service.NewPaymentService(f.payments, f.conns, registry, sealer, log)
+	f.callbackFailures = memstore.NewFailures(time.Now)
 	webhookSvc := service.NewWebhookService(service.WebhookDeps{
 		Payments: f.payments, Reports: f.reports, Inbound: f.hooks.Inbound(), Events: f.hooks.Events(),
 		Endpoints: f.hooks.Endpoints(), Deliveries: f.hooks.Deliveries(), Tx: tx, Enqueuer: f.queue, Log: log,
+		Limiter: f.callbackFailures, Limits: service.CallbackLimits{MaxRejectedPerIP: 60, MaxRejectedPerConnection: 60, Window: 15 * time.Minute},
 	})
 	endpointSvc := service.NewWebhookEndpointService(service.WebhookEndpointDeps{
 		Apps: f.apps, Endpoints: f.hooks.Endpoints(), Events: f.hooks.Events(), Deliveries: f.hooks.Deliveries(),

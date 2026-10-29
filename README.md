@@ -169,7 +169,11 @@ sequenceDiagram
 
 A callback for a reference KeiPay does not know yet answers `500`, so the
 gateway retries it. Every callback, accepted or not, is kept in the inbound
-log.
+log, with two guards against anyone who learns a callback URL: bodies over
+1 MiB are refused (`413 request_too_large`), and callbacks that fail
+verification or parsing are limited per sender IP and per connection (by
+default 60 each in 15 minutes; `429 rate_limited` after that, without a
+log row). Accepted callbacks are never limited.
 
 ### Payment status
 
@@ -732,6 +736,9 @@ verification passed and what happened to it (Webhooks → Inbound). A callback
 only updates payments created through the connection whose URL it arrived
 at, and is matched by the stored reference (`kp_pay_…`, or
 `{slug}:{order_id}` for payments created before apps), never by parsing it.
+Bodies that failed verification are stored cut to 4 KiB, and verified
+bodies that could not be parsed cut to 64 KiB (`body_truncated` says so);
+applied callbacks are kept whole.
 
 ### Upgrading from an app `webhook_url`
 

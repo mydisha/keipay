@@ -122,6 +122,7 @@ func main() {
 	sessions := redisrepo.NewSessionStore(rdb)
 	loginFailures := redisrepo.NewFailureCounter(rdb)
 	authFailures := redisrepo.NewScopedFailureCounter(rdb, "v1fail")
+	callbackFailures := redisrepo.NewScopedFailureCounter(rdb, "callbackfail")
 
 	log.Debug("initializing asynq enqueuer")
 	redisOpt := asynq.RedisClientOpt{Addr: cfg.RedisAddr, Password: cfg.RedisPassword, DB: cfg.RedisDB}
@@ -171,7 +172,12 @@ func main() {
 		Deliveries: deliveryRepo,
 		Tx:         txMgr,
 		Enqueuer:   enqueuer,
-		Log:        log,
+		Limiter:    callbackFailures,
+		Limits: service.CallbackLimits{
+			MaxRejectedPerIP: cfg.CallbackMaxRejectedPerIP, MaxRejectedPerConnection: cfg.CallbackMaxRejectedPerConnection,
+			Window: cfg.CallbackRejectedWindow,
+		},
+		Log: log,
 	})
 	endpointSvc := service.NewWebhookEndpointService(service.WebhookEndpointDeps{
 		Apps:       appRepo,

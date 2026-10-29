@@ -65,6 +65,7 @@ func (h *WebhookHandler) Xendit(c *gin.Context) {
 // 500 so it retries.
 func (h *WebhookHandler) receive(c *gin.Context, resolve resolver) {
 	start := time.Now()
+	c.Request = c.Request.WithContext(service.WithClientMeta(c.Request.Context(), clientMeta(c)))
 	ctx := c.Request.Context()
 	log := logger.Ctx(ctx, h.log)
 
@@ -93,7 +94,10 @@ func (h *WebhookHandler) receive(c *gin.Context, resolve resolver) {
 
 	ev, err := h.conns.VerifyCallback(conn, c.Request.Header, raw)
 	if err != nil {
-		h.recordRejected(ctx, conn, raw, err)
+		if limited := h.recordRejected(ctx, conn, raw, err); limited != nil {
+			response.Error(c, limited)
+			return
+		}
 		h.rejected(c, conn, len(raw), err)
 		return
 	}
@@ -112,6 +116,10 @@ func (h *WebhookHandler) receive(c *gin.Context, resolve resolver) {
 	)...)
 
 	err = h.svc.Process(ctx, conn, *ev, raw)
+	if errors.Is(err, domain.ErrRateLimited) {
+		response.Error(c, err)
+		return
+	}
 	if errors.Is(err, domain.ErrInvalidInput) {
 		// Recorded as invalid_payload by the service.
 		h.rejected(c, conn, len(raw), err)
@@ -169,14 +177,17 @@ const (
 )
 
 // recordRejected logs a callback of a known connection that failed
-// verification or parsing; other errors are not about the callback.
-func (h *WebhookHandler) recordRejected(ctx context.Context, conn *domain.Connection, raw []byte, err error) {
+// verification or parsing; other errors are not about the callback. It
+// returns the rate_limited error when the sender or the connection has had
+// too many rejected callbacks, in which case nothing was recorded.
+func (h *WebhookHandler) recordRejected(ctx context.Context, conn *domain.Connection, raw []byte, err error) error {
 	switch {
 	case errors.Is(err, domain.ErrInvalidCallbackToken):
-		h.svc.RecordRejected(ctx, conn, raw, domain.InboundInvalidSignature, detailInvalidSignature)
+		return h.svc.RecordRejected(ctx, conn, raw, domain.InboundInvalidSignature, detailInvalidSignature)
 	case errors.Is(err, domain.ErrInvalidInput):
-		h.svc.RecordRejected(ctx, conn, raw, domain.InboundInvalidPayload, detailInvalidPayload)
+		return h.svc.RecordRejected(ctx, conn, raw, domain.InboundInvalidPayload, detailInvalidPayload)
 	}
+	return nil
 }
 
 // rejected answers a callback that could not be verified or read. conn is set

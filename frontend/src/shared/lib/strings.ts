@@ -170,6 +170,15 @@ export const strings = {
     nameRequired: "Enter a name.",
     nameTooLong: "Use at most 100 characters.",
     nameInvalid: "Remove control characters from the name.",
+    brandPanelLabel: "About KeiPay",
+    brandTagline: "One API for every payment gateway.",
+    brandSubtitle: "KeiPay creates checkouts on your own gateway accounts, verifies their callbacks and forwards one signed event to each app.",
+    brandPoints: [
+      { title: "Route", body: "Each app pays through the connection you choose; test and live stay apart." },
+      { title: "Verify", body: "Every callback is checked against the connection's credentials before it counts." },
+      { title: "Reconcile", body: "Compare what the gateway settled with what KeiPay recorded, and resolve the rest." },
+    ],
+    brandFooter: "Self-hosted. KeiPay never holds funds.",
   },
   setup: {
     title: "Set up KeiPay",

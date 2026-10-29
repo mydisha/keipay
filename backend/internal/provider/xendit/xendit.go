@@ -260,19 +260,53 @@ type invoiceCallback struct {
 	ID         string `json:"id"`
 	ExternalID string `json:"external_id"`
 	Status     string `json:"status"`
-	Amount     int64  `json:"amount"`
+	Amount     number `json:"amount"`
 	Currency   string `json:"currency"`
-	PaidAmount int64  `json:"paid_amount"`
+	PaidAmount number `json:"paid_amount"`
 	// AdjustedReceived is what the merchant receives after Xendit's fee.
 	// fees_paid_amount is deliberately not read: it is the fee charged to
 	// the customer and is 0 on an ordinary invoice whose fee Xendit deducts
 	// from the merchant.
-	AdjustedReceived *int64 `json:"adjusted_received_amount"`
-	PaidAt           string `json:"paid_at"`
+	AdjustedReceived *number `json:"adjusted_received_amount"`
+	PaidAt           string  `json:"paid_at"`
 	// SettlementDate is sent on PAID callbacks as an estimate and on SETTLED
 	// callbacks as the event time; Updated is the fallback.
 	SettlementDate string `json:"settlement_date"`
 	Updated        string `json:"updated"`
+}
+
+// number is a JSON number kept as written, so a decimal amount converts to
+// minor units exactly. A quoted number is refused.
+type number string
+
+func (n *number) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		return nil
+	}
+	var v json.Number
+	if len(b) == 0 || b[0] == '"' || json.Unmarshal(b, &v) != nil {
+		return fmt.Errorf("amount %s is not a number", b)
+	}
+	*n = number(v)
+	return nil
+}
+
+// minor is n in currency's minor unit; a missing amount is 0.
+func (n number) minor(currency string) (int64, error) {
+	if n == "" {
+		return 0, nil
+	}
+	return domain.MinorUnits(string(n), currency)
+}
+
+// defaultCurrency is the currency Xendit uses for an invoice that names none.
+const defaultCurrency = "IDR"
+
+func invoiceCurrency(c string) string {
+	if c == "" {
+		return defaultCurrency
+	}
+	return c
 }
 
 // ErrInvalidCallback is a callback body that is not a Xendit invoice callback.
@@ -291,6 +325,24 @@ func (a *Adapter) ParseWebhook(raw []byte) (*provider.InboundEvent, error) {
 	if settledAt == nil {
 		settledAt = parseTime(cb.Updated)
 	}
+	// Xendit sends amounts in major units; KeiPay keeps minor units.
+	currency := invoiceCurrency(cb.Currency)
+	amount, err := cb.Amount.minor(currency)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidCallback, err)
+	}
+	paid, err := cb.PaidAmount.minor(currency)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidCallback, err)
+	}
+	var received *int64
+	if cb.AdjustedReceived != nil && *cb.AdjustedReceived != "" {
+		v, err := cb.AdjustedReceived.minor(currency)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidCallback, err)
+		}
+		received = &v
+	}
 	// An unknown status is left empty: the callback is recorded, never applied.
 	status, _ := MapStatus(cb.Status)
 	return &provider.InboundEvent{
@@ -299,10 +351,10 @@ func (a *Adapter) ParseWebhook(raw []byte) (*provider.InboundEvent, error) {
 		ProviderPaymentID: cb.ID,
 		ProviderStatus:    cb.Status,
 		Status:            status,
-		Amount:            cb.Amount,
+		Amount:            amount,
 		Currency:          cb.Currency,
-		PaidAmount:        cb.PaidAmount,
-		Fee:               cb.merchantFee(),
+		PaidAmount:        paid,
+		Fee:               merchantFee(amount, paid, received),
 		PaidAt:            parseTime(cb.PaidAt),
 		SettledAt:         settledAt,
 		Source:            "webhook",
@@ -313,15 +365,15 @@ func (a *Adapter) ParseWebhook(raw []byte) (*provider.InboundEvent, error) {
 // Transactions API reports as its fee plus VAT. It is nil when the callback
 // does not say what the merchant received; a nonsensical negative fee is
 // passed on for the service to drop.
-func (cb invoiceCallback) merchantFee() *int64 {
-	if cb.AdjustedReceived == nil {
+func merchantFee(amount, paid int64, received *int64) *int64 {
+	if received == nil {
 		return nil
 	}
-	gross := cb.PaidAmount
+	gross := paid
 	if gross == 0 {
-		gross = cb.Amount
+		gross = amount
 	}
-	fee := gross - *cb.AdjustedReceived
+	fee := gross - *received
 	return &fee
 }
 
@@ -364,7 +416,9 @@ func parseTime(s string) *time.Time {
 }
 
 func buildInvoiceRequest(settings provider.Settings, in provider.CheckoutInput) invoice.CreateInvoiceRequest {
-	req := *invoice.NewCreateInvoiceRequest(in.Reference, float64(in.Amount))
+	// Xendit takes amounts in major units; KeiPay keeps minor units.
+	currency := invoiceCurrency(in.Currency)
+	req := *invoice.NewCreateInvoiceRequest(in.Reference, domain.MajorUnits(in.Amount, currency))
 	if in.Description != "" {
 		req.SetDescription(in.Description)
 	}
@@ -398,7 +452,7 @@ func buildInvoiceRequest(settings provider.Settings, in provider.CheckoutInput) 
 	if len(in.Items) > 0 {
 		items := make([]invoice.InvoiceItem, 0, len(in.Items))
 		for _, it := range in.Items {
-			item := *invoice.NewInvoiceItem(it.Name, float32(it.Price), float32(it.Quantity))
+			item := *invoice.NewInvoiceItem(it.Name, float32(domain.MajorUnits(it.Price, currency)), float32(it.Quantity))
 			if it.Category != "" {
 				item.SetCategory(it.Category)
 			}

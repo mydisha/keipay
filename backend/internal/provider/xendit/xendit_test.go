@@ -128,6 +128,36 @@ func TestCreateCheckoutRequest(t *testing.T) {
 	}
 }
 
+// Regression: KeiPay keeps minor units but Xendit takes major ones, so a
+// USD 10.50 invoice was sent as 1050 dollars.
+func TestCreateCheckoutSendsMajorUnits(t *testing.T) {
+	cases := []struct {
+		name, currency    string
+		amount, price     int64
+		wantAmount, wantP float64
+	}{
+		{"two-decimal currency", "USD", 1050, 525, 10.5, 5.25},
+		{"zero-decimal currency", "IDR", 150000, 75000, 150000, 75000},
+		{"no currency is Xendit's IDR", "", 150000, 75000, 150000, 75000},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fx, srv := newFakeXendit(t, http.StatusOK, invoiceJSON)
+			in := checkout()
+			in.Currency, in.Amount = tc.currency, tc.amount
+			in.Items[0].Price = tc.price
+			if _, err := New(WithBaseURL(srv.URL)).CreateCheckout(context.Background(), account, in); err != nil {
+				t.Fatal(err)
+			}
+			b := fx.last(t).body
+			price := b["items"].([]any)[0].(map[string]any)["price"]
+			if b["amount"] != tc.wantAmount || price != tc.wantP {
+				t.Fatalf("amount = %v, item price = %v; want %v, %v", b["amount"], price, tc.wantAmount, tc.wantP)
+			}
+		})
+	}
+}
+
 func TestCreateCheckoutChannelsAndSettings(t *testing.T) {
 	fx, srv := newFakeXendit(t, http.StatusOK, invoiceJSON)
 	a := New(WithBaseURL(srv.URL))
@@ -322,6 +352,38 @@ func TestParseWebhook(t *testing.T) {
 
 	for _, bad := range []string{`{not json`, `{"external_id":"r"}`, `{"id":"i"}`, `{"id":"i","external_id":"r","amount":"5000"}`, `[]`} {
 		if _, err := a.ParseWebhook([]byte(bad)); !errors.Is(err, ErrInvalidCallback) {
+			t.Errorf("%s: err = %v", bad, err)
+		}
+	}
+}
+
+// Regression: callback amounts are major units, so a USD callback for 10.50
+// was refused and an integer one was read 100 times too small.
+func TestParseWebhookConvertsToMinorUnits(t *testing.T) {
+	cases := []struct {
+		name, body           string
+		wantAmount, wantPaid int64
+		wantFee              *int64
+	}{
+		{"decimal USD", `"currency":"USD","amount":10.5,"paid_amount":10.5,"adjusted_received_amount":10.03`, 1050, 1050, i64(47)},
+		{"whole USD", `"currency":"USD","amount":25,"paid_amount":25`, 2500, 2500, nil},
+		{"IDR unchanged", `"currency":"IDR","amount":150000,"paid_amount":150000,"adjusted_received_amount":145560`, 150000, 150000, i64(4440)},
+		{"no currency is Xendit's IDR", `"amount":150000`, 150000, 0, nil},
+		{"large IDR stays exact", `"currency":"IDR","amount":16777217,"paid_amount":16777217`, 16777217, 16777217, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ev, err := New().ParseWebhook([]byte(`{"id":"inv_1","external_id":"kp_pay_x","status":"PAID",` + tc.body + `}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ev.Amount != tc.wantAmount || ev.PaidAmount != tc.wantPaid || !reflect.DeepEqual(ev.Fee, tc.wantFee) {
+				t.Fatalf("amount %d, paid %d, fee %v; want %d, %d, %v", ev.Amount, ev.PaidAmount, ev.Fee, tc.wantAmount, tc.wantPaid, tc.wantFee)
+			}
+		})
+	}
+	for _, bad := range []string{`"amount":"10.5"`, `"amount":1e999999999`, `"paid_amount":true`, `"adjusted_received_amount":"5"`} {
+		if _, err := New().ParseWebhook([]byte(`{"id":"i","external_id":"r",` + bad + `}`)); !errors.Is(err, ErrInvalidCallback) {
 			t.Errorf("%s: err = %v", bad, err)
 		}
 	}

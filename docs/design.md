@@ -872,7 +872,7 @@ Baris KeiPay = report dengan `connection_id` run dan `paid_at` di jendela yang d
 
 ### Uang dan waktu
 
-- Uang: `int64` dalam minor unit + kode ISO 4217. Untuk IDR, minor unit yang dipakai KeiPay adalah rupiah utuh (eksponen 0), sesuai gateway; tampilan `Rp150.000`.
+- Uang: `int64` dalam minor unit + kode ISO 4217. Untuk IDR, minor unit yang dipakai KeiPay adalah rupiah utuh (eksponen 0), sesuai gateway; tampilan `Rp150.000`. Gateway memakai major unit, jadi adapter mengonversi di batasnya menurut eksponen ISO 4217: Xendit menerima `amount` dan harga item invoice dalam major unit (USD 1050 sen dikirim `10.5`), dan amount di callback dibaca sebagai angka desimal persis lalu dikonversi ke minor unit. Invoice tanpa mata uang dianggap IDR, default Xendit.
 - Waktu disimpan `timestamptz` UTC dan dikirim RFC 3339; konsol menampilkan Asia/Jakarta (WIB).
 
 ### Port lokal dan gerbang kualitas

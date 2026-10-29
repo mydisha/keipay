@@ -1736,15 +1736,13 @@ export interface components {
              * @example EXPIRED
              */
             status: string;
-            /** Format: int64 */
+            /** @description In major units of `currency` (`10.5` is USD 10.50). KeiPay converts every amount to minor units with the currency's ISO 4217 exponent. */
             amount?: number;
+            /** @description ISO 4217 code. Xendit's default, `IDR`, is assumed when absent. */
             currency?: string;
-            /** Format: int64 */
+            /** @description In major units of `currency`. */
             paid_amount?: number;
-            /**
-             * Format: int64
-             * @description What the merchant receives after Xendit's fee. KeiPay records the fee as `paid_amount` (or `amount`) minus this value, and leaves it unknown when the field is absent. `fees_paid_amount`, the fee charged to the customer, is not read.
-             */
+            /** @description In major units of `currency`. What the merchant receives after Xendit's fee. KeiPay records the fee as `paid_amount` (or `amount`) minus this value, and leaves it unknown when the field is absent. `fees_paid_amount`, the fee charged to the customer, is not read. */
             adjusted_received_amount?: number;
             paid_at?: string;
             settlement_date?: string;

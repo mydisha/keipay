@@ -3661,17 +3661,17 @@ components:
           type: string
           examples: [PAID, SETTLED, EXPIRED]
         amount:
-          type: integer
-          format: int64
+          type: number
+          description: In major units of `currency` (`10.5` is USD 10.50). KeiPay converts every amount to minor units with the currency's ISO 4217 exponent.
         currency:
           type: string
+          description: ISO 4217 code. Xendit's default, `IDR`, is assumed when absent.
         paid_amount:
-          type: integer
-          format: int64
+          type: number
+          description: In major units of `currency`.
         adjusted_received_amount:
-          type: integer
-          format: int64
-          description: What the merchant receives after Xendit's fee. KeiPay records the fee as `paid_amount` (or `amount`) minus this value, and leaves it unknown when the field is absent. `fees_paid_amount`, the fee charged to the customer, is not read.
+          type: number
+          description: In major units of `currency`. What the merchant receives after Xendit's fee. KeiPay records the fee as `paid_amount` (or `amount`) minus this value, and leaves it unknown when the field is absent. `fees_paid_amount`, the fee charged to the customer, is not read.
         paid_at:
           type: string
         settlement_date:

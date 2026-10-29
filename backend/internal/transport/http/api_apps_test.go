@@ -16,6 +16,7 @@ import (
 	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/pkg/hmac"
 	"github.com/mydisha/keipay/backend/internal/pkg/id"
+	"github.com/mydisha/keipay/backend/internal/transport/http/middleware"
 )
 
 var (
@@ -327,6 +328,14 @@ type v1Client struct {
 func (c v1Client) do(method, target, body string, headers ...string) *httptest.ResponseRecorder {
 	ts := signedTimestamp(c.secret, body)
 	h := append([]string{"X-Api-Key", c.apiKey, "X-Timestamp", ts, "X-Signature", hmac.Sign(c.secret, []byte(ts+"."+body))}, headers...)
+	return c.f.send(nil, method, target, body, h...)
+}
+
+// doV2 signs the call with X-Signature-Version: 2 and a fresh nonce.
+func (c v1Client) doV2(method, target, body string, headers ...string) *httptest.ResponseRecorder {
+	ts, nonce := signedTimestamp(c.secret, body), v2Nonce()
+	sig := hmac.Sign(c.secret, middleware.SigningInput(middleware.SignatureV2, ts, nonce, method, target, []byte(body)))
+	h := append([]string{"X-Api-Key", c.apiKey, "X-Timestamp", ts, "X-Signature-Version", "2", "X-Nonce", nonce, "X-Signature", sig}, headers...)
 	return c.f.send(nil, method, target, body, h...)
 }
 

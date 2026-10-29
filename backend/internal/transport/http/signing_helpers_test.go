@@ -3,6 +3,7 @@ package http
 import (
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -33,3 +34,10 @@ func signedTimestamp(secret, body string) string {
 	}
 	panic("signedTimestamp: more than 240 identical signed calls within four minutes")
 }
+
+// v2Nonce is a fresh client nonce for a v2-signed call.
+func v2Nonce() string {
+	return "n-" + strconv.FormatInt(time.Now().UnixNano(), 36) + "-" + strconv.FormatInt(int64(nextNonce.Add(1)), 36) + "-0000"
+}
+
+var nextNonce atomic.Int64

@@ -47,6 +47,21 @@ type Config struct {
 	LoginMaxFailuresPerEmail int           `mapstructure:"LOGIN_MAX_FAILURES_PER_EMAIL"`
 	LoginFailureWindow       time.Duration `mapstructure:"LOGIN_FAILURE_WINDOW"`
 
+	// V1AuthMaxFailuresPerIP and V1AuthMaxFailuresPerKey cap the /v1
+	// authentication failures (unknown key, bad signature, replay) a client
+	// IP and an API key may make within V1AuthFailureWindow.
+	V1AuthMaxFailuresPerIP  int           `mapstructure:"V1_AUTH_MAX_FAILURES_PER_IP"`
+	V1AuthMaxFailuresPerKey int           `mapstructure:"V1_AUTH_MAX_FAILURES_PER_KEY"`
+	V1AuthFailureWindow     time.Duration `mapstructure:"V1_AUTH_FAILURE_WINDOW"`
+
+	// CallbackMaxRejectedPerIP and CallbackMaxRejectedPerConnection cap the
+	// gateway callbacks that fail verification or parsing, per sender IP and
+	// per connection, within CallbackRejectedWindow. Accepted callbacks are
+	// never limited.
+	CallbackMaxRejectedPerIP         int           `mapstructure:"CALLBACK_MAX_REJECTED_PER_IP"`
+	CallbackMaxRejectedPerConnection int           `mapstructure:"CALLBACK_MAX_REJECTED_PER_CONNECTION"`
+	CallbackRejectedWindow           time.Duration `mapstructure:"CALLBACK_REJECTED_WINDOW"`
+
 	// TrustedProxiesRaw is the comma-separated TRUSTED_PROXIES value;
 	// TrustedProxies is its validated, trimmed form.
 	TrustedProxiesRaw string   `mapstructure:"TRUSTED_PROXIES"`
@@ -104,6 +119,8 @@ func Load() (*Config, error) {
 		"JWT_SECRET",
 		"COOKIE_SECURE", "HSTS_ENABLED", "SESSION_IDLE_TIMEOUT", "SESSION_ABSOLUTE_TIMEOUT",
 		"LOGIN_MAX_FAILURES_PER_IP", "LOGIN_MAX_FAILURES_PER_EMAIL", "LOGIN_FAILURE_WINDOW",
+		"V1_AUTH_MAX_FAILURES_PER_IP", "V1_AUTH_MAX_FAILURES_PER_KEY", "V1_AUTH_FAILURE_WINDOW",
+		"CALLBACK_MAX_REJECTED_PER_IP", "CALLBACK_MAX_REJECTED_PER_CONNECTION", "CALLBACK_REJECTED_WINDOW",
 		"TRUSTED_PROXIES", "SETUP_TOKEN",
 		"ENCRYPTION_KEY",
 		"RUN_WORKER", "WEBHOOK_DISABLE_AFTER_FAILURES",
@@ -143,6 +160,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("LOGIN_MAX_FAILURES_PER_IP", 20)
 	v.SetDefault("LOGIN_MAX_FAILURES_PER_EMAIL", 5)
 	v.SetDefault("LOGIN_FAILURE_WINDOW", "15m")
+	v.SetDefault("V1_AUTH_MAX_FAILURES_PER_IP", 100)
+	v.SetDefault("V1_AUTH_MAX_FAILURES_PER_KEY", 50)
+	v.SetDefault("V1_AUTH_FAILURE_WINDOW", "15m")
+	v.SetDefault("CALLBACK_MAX_REJECTED_PER_IP", 60)
+	v.SetDefault("CALLBACK_MAX_REJECTED_PER_CONNECTION", 60)
+	v.SetDefault("CALLBACK_REJECTED_WINDOW", "15m")
 }
 
 func (c *Config) validate() error {
@@ -190,6 +213,19 @@ func (c *Config) validateAuth() error {
 	}
 	if c.LoginFailureWindow <= 0 {
 		return fmt.Errorf("LOGIN_FAILURE_WINDOW must be greater than zero")
+	}
+	for name, n := range map[string]int{
+		"V1_AUTH_MAX_FAILURES_PER_IP": c.V1AuthMaxFailuresPerIP, "V1_AUTH_MAX_FAILURES_PER_KEY": c.V1AuthMaxFailuresPerKey,
+		"CALLBACK_MAX_REJECTED_PER_IP": c.CallbackMaxRejectedPerIP, "CALLBACK_MAX_REJECTED_PER_CONNECTION": c.CallbackMaxRejectedPerConnection,
+	} {
+		if n < 1 {
+			return fmt.Errorf("%s must be at least 1", name)
+		}
+	}
+	for name, d := range map[string]time.Duration{"V1_AUTH_FAILURE_WINDOW": c.V1AuthFailureWindow, "CALLBACK_REJECTED_WINDOW": c.CallbackRejectedWindow} {
+		if d <= 0 {
+			return fmt.Errorf("%s must be greater than zero", name)
+		}
 	}
 	proxies, err := parseTrustedProxies(c.TrustedProxiesRaw)
 	if err != nil {

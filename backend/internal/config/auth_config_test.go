@@ -78,6 +78,23 @@ func TestLoad_CookieSecure(t *testing.T) {
 	}
 }
 
+func TestLoad_FailureLimitDefaults(t *testing.T) {
+	cfg, err := loadWith(t, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.V1AuthMaxFailuresPerIP != 100 || cfg.V1AuthMaxFailuresPerKey != 50 || cfg.V1AuthFailureWindow != 15*time.Minute {
+		t.Fatalf("v1 limits = %d/%d/%v", cfg.V1AuthMaxFailuresPerIP, cfg.V1AuthMaxFailuresPerKey, cfg.V1AuthFailureWindow)
+	}
+	if cfg.CallbackMaxRejectedPerIP != 60 || cfg.CallbackMaxRejectedPerConnection != 60 || cfg.CallbackRejectedWindow != 15*time.Minute {
+		t.Fatalf("callback limits = %d/%d/%v", cfg.CallbackMaxRejectedPerIP, cfg.CallbackMaxRejectedPerConnection, cfg.CallbackRejectedWindow)
+	}
+	cfg, err = loadWith(t, map[string]string{"V1_AUTH_MAX_FAILURES_PER_KEY": "7", "CALLBACK_REJECTED_WINDOW": "1h"})
+	if err != nil || cfg.V1AuthMaxFailuresPerKey != 7 || cfg.CallbackRejectedWindow != time.Hour {
+		t.Fatalf("overrides: %+v %v", cfg, err)
+	}
+}
+
 // HSTS follows the Secure cookie decision unless set explicitly.
 func TestLoad_HSTSEnabled(t *testing.T) {
 	cases := []struct {
@@ -110,6 +127,12 @@ func TestLoad_AuthValidationErrors(t *testing.T) {
 	}{
 		{"cookie maybe", map[string]string{"COOKIE_SECURE": "maybe"}, "COOKIE_SECURE"},
 		{"hsts maybe", map[string]string{"HSTS_ENABLED": "maybe"}, "HSTS_ENABLED"},
+		{"v1 ip limit zero", map[string]string{"V1_AUTH_MAX_FAILURES_PER_IP": "0"}, "V1_AUTH_MAX_FAILURES_PER_IP"},
+		{"v1 key limit zero", map[string]string{"V1_AUTH_MAX_FAILURES_PER_KEY": "0"}, "V1_AUTH_MAX_FAILURES_PER_KEY"},
+		{"v1 window zero", map[string]string{"V1_AUTH_FAILURE_WINDOW": "0s"}, "V1_AUTH_FAILURE_WINDOW"},
+		{"callback ip limit zero", map[string]string{"CALLBACK_MAX_REJECTED_PER_IP": "0"}, "CALLBACK_MAX_REJECTED_PER_IP"},
+		{"callback connection limit zero", map[string]string{"CALLBACK_MAX_REJECTED_PER_CONNECTION": "0"}, "CALLBACK_MAX_REJECTED_PER_CONNECTION"},
+		{"callback window zero", map[string]string{"CALLBACK_REJECTED_WINDOW": "-1m"}, "CALLBACK_REJECTED_WINDOW"},
 		{"idle zero", map[string]string{"SESSION_IDLE_TIMEOUT": "0s"}, "SESSION_IDLE_TIMEOUT"},
 		{"idle negative", map[string]string{"SESSION_IDLE_TIMEOUT": "-1m"}, "SESSION_IDLE_TIMEOUT"},
 		{"absolute below idle", map[string]string{"SESSION_IDLE_TIMEOUT": "2h", "SESSION_ABSOLUTE_TIMEOUT": "1h"}, "SESSION_ABSOLUTE_TIMEOUT"},

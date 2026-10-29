@@ -117,7 +117,7 @@ func TestIntegrationFailureCounter(t *testing.T) {
 	fc := NewFailureCounter(rdb)
 	ctx := context.Background()
 	key, other := "ip:"+randomToken(t), "email:"+randomToken(t)
-	full := failureKeyPrefix + key
+	full := failureKeyPrefix(loginScope) + key
 	t.Cleanup(func() {
 		_ = fc.Reset(context.Background(), key)
 		_ = fc.Reset(context.Background(), other)
@@ -159,7 +159,7 @@ func TestIntegrationFailureCounter(t *testing.T) {
 	if err != nil || ok || wait <= 0 || wait > 1500*time.Millisecond {
 		t.Fatalf("reserve over the limit = %v %v %v", ok, wait, err)
 	}
-	if count() != 2 || rdb.Exists(ctx, failureKeyPrefix+other).Val() != 0 {
+	if count() != 2 || rdb.Exists(ctx, failureKeyPrefix(loginScope)+other).Val() != 0 {
 		t.Fatalf("a refused reserve counted: count %d", count())
 	}
 
@@ -169,7 +169,7 @@ func TestIntegrationFailureCounter(t *testing.T) {
 	if ttl := rdb.PTTL(ctx, full).Val(); ttl <= 0 {
 		t.Fatalf("release dropped the expiry: ttl %v", ttl)
 	}
-	if err := fc.Release(ctx, key, other); err != nil || rdb.Exists(ctx, full, failureKeyPrefix+other).Val() != 0 {
+	if err := fc.Release(ctx, key, other); err != nil || rdb.Exists(ctx, full, failureKeyPrefix(loginScope)+other).Val() != 0 {
 		t.Fatalf("release to zero = %v; keys must be gone, missing ones not created", err)
 	}
 
@@ -221,7 +221,7 @@ func TestIntegrationFailureCounterConcurrentReserve(t *testing.T) {
 	if got := reserved.Load(); got != maxAttempts {
 		t.Fatalf("reserved %d of %d, want %d", got, attempts, maxAttempts)
 	}
-	if n := rdb.Get(context.Background(), failureKeyPrefix+key).Val(); n != "5" {
+	if n := rdb.Get(context.Background(), failureKeyPrefix(loginScope)+key).Val(); n != "5" {
 		t.Fatalf("count = %s", n)
 	}
 }

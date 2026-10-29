@@ -118,9 +118,10 @@ func main() {
 	// revoked key or disabled app is refused on the next request. Gateway
 	// callbacks are deduplicated in Postgres (inbound_webhooks), not here.
 	log.Debug("initializing nonce store")
-	nonces := redisrepo.NewIdempotency(rdb, 10*time.Minute)
+	nonces := redisrepo.NewIdempotency(rdb, middleware.NonceTTL)
 	sessions := redisrepo.NewSessionStore(rdb)
 	loginFailures := redisrepo.NewFailureCounter(rdb)
+	authFailures := redisrepo.NewScopedFailureCounter(rdb, "v1fail")
 
 	log.Debug("initializing asynq enqueuer")
 	redisOpt := asynq.RedisClientOpt{Addr: cfg.RedisAddr, Password: cfg.RedisPassword, DB: cfg.RedisDB}
@@ -239,22 +240,26 @@ func main() {
 		AppResolver:     appSvc,
 		NonceStore:      nonces,
 		SecretDecryptor: cipher,
-		Sessions:        authSvc,
-		Cookies:         cookies,
-		NewToken:        service.NewToken,
-		TrustedProxies:  cfg.TrustedProxies,
-		Payment:         handler.NewPaymentHandler(paymentSvc),
-		Webhook:         handler.NewWebhookHandler(webhookSvc, connSvc, log),
-		Admin:           handler.NewAdminHandler(paymentSvc, auditSvc),
-		Reports:         handler.NewReportHandler(reportSvc, log),
-		Reconciliation:  handler.NewReconciliationHandler(reconSvc, log),
-		Apps:            handler.NewAppHandler(appSvc),
-		Endpoints:       handler.NewWebhookEndpointHandler(endpointSvc),
-		Deliveries:      handler.NewDeliveryHandler(deliverySvc, inboundSvc),
-		Connections:     handler.NewConnectionHandler(connSvc),
-		Auth:            handler.NewAuthHandler(authSvc, cookies, service.NewToken),
-		Users:           handler.NewUserHandler(userSvc),
-		FrontendDir:     frontendDir,
+		AuthLimiter:     authFailures,
+		AuthLimits: middleware.AuthLimits{
+			MaxFailuresPerIP: cfg.V1AuthMaxFailuresPerIP, MaxFailuresPerKey: cfg.V1AuthMaxFailuresPerKey, Window: cfg.V1AuthFailureWindow,
+		},
+		Sessions:       authSvc,
+		Cookies:        cookies,
+		NewToken:       service.NewToken,
+		TrustedProxies: cfg.TrustedProxies,
+		Payment:        handler.NewPaymentHandler(paymentSvc),
+		Webhook:        handler.NewWebhookHandler(webhookSvc, connSvc, log),
+		Admin:          handler.NewAdminHandler(paymentSvc, auditSvc),
+		Reports:        handler.NewReportHandler(reportSvc, log),
+		Reconciliation: handler.NewReconciliationHandler(reconSvc, log),
+		Apps:           handler.NewAppHandler(appSvc),
+		Endpoints:      handler.NewWebhookEndpointHandler(endpointSvc),
+		Deliveries:     handler.NewDeliveryHandler(deliverySvc, inboundSvc),
+		Connections:    handler.NewConnectionHandler(connSvc),
+		Auth:           handler.NewAuthHandler(authSvc, cookies, service.NewToken),
+		Users:          handler.NewUserHandler(userSvc),
+		FrontendDir:    frontendDir,
 	}
 	router := transport.NewRouter(deps)
 

@@ -38,16 +38,20 @@ func (plainCipher) Decrypt(s string) (string, error) { return strings.TrimPrefix
 type memNonces struct {
 	mu   sync.Mutex
 	seen map[string]bool
+	err  error
 }
 
-func (m *memNonces) Acquire(_ context.Context, key string) bool {
+func (m *memNonces) Acquire(_ context.Context, key string) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.err != nil {
+		return false, m.err
+	}
 	if m.seen[key] {
-		return false
+		return false, nil
 	}
 	m.seen[key] = true
-	return true
+	return true, nil
 }
 
 type queued struct {

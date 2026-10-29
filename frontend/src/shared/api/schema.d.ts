@@ -1577,14 +1577,17 @@ export interface components {
          *     | `run_in_progress` | 409 | The reconciliation run is `queued` or `running`: it cannot be re-run, and its items cannot be resolved, until it finishes. |
          *     | `run_not_succeeded` | 409 | The reconciliation run failed, so its items cannot be resolved. Re-run it first. |
          *     | `connection_in_use` | 409 | The connection is some app's default connection. `details.apps` lists up to 10 (`AppSummary`), `details.app_count` counts them. |
+         *     | `request_too_large` | 413 | The request body is over the route's limit: 64 KiB on `/v1`, 1 MiB on `/admin` and on gateway callbacks. |
          *     | `no_eligible_connection` | 422 | No connection can take the payment. `details.reasons` is a list of strings: `no_default_connection`, `connection_disabled`. More reasons may be added. |
          *     | `provider_rejected` | 422 | The gateway refused the request (validation, limits, credentials). `details.provider` names the provider. The message is generic; the gateway's own text is only logged. |
-         *     | `rate_limited` | 429 | Too many failed attempts. `details.retry_after_seconds` and the `Retry-After` header say when to retry. |
+         *     | `rate_limited` | 429 | Too many failed attempts: sign-in and setup per IP and email, `/v1` authentication failures per IP and per API key, rejected gateway callbacks per IP and per connection. `details.retry_after_seconds` and the `Retry-After` header say when to retry. |
          *     | `internal_error` | 500 | Unexpected server error. |
          *     | `provider_unavailable` | 503 | The gateway could not be reached, timed out, or answered with a server error. Retry with the same `order_id`. |
+         *     | `auth_unavailable` | 503 | The store behind `/v1` replay protection and failure limits did not answer, so the request was not authenticated or processed. Retry later with the same `Idempotency-Key` or `order_id`. |
+         *     | `setup_token_not_configured` | 503 | First-run setup is refused because the server runs in production without `SETUP_TOKEN`. Set it and restart. |
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "validation_failed" | "invalid_cursor" | "unauthorized" | "invalid_credentials" | "missing_token" | "invalid_token" | "missing_signature_headers" | "invalid_timestamp" | "timestamp_out_of_range" | "unknown_api_key" | "invalid_signature" | "replayed_request" | "invalid_callback_token" | "tenant_inactive" | "not_found" | "conflict" | "internal_error" | "session_required" | "session_expired" | "forbidden" | "password_change_required" | "invalid_csrf_token" | "invalid_setup_token" | "setup_completed" | "last_owner" | "cannot_modify_self" | "rate_limited" | "api_key_revoked" | "api_key_expired" | "idempotency_key_reused" | "connection_in_use" | "delivery_not_replayable" | "run_in_progress" | "run_not_succeeded" | "no_eligible_connection" | "provider_rejected" | "provider_unavailable";
+        ErrorCode: "invalid_request" | "validation_failed" | "invalid_cursor" | "unauthorized" | "invalid_credentials" | "missing_token" | "invalid_token" | "missing_signature_headers" | "invalid_timestamp" | "timestamp_out_of_range" | "unknown_api_key" | "invalid_signature" | "replayed_request" | "invalid_callback_token" | "tenant_inactive" | "not_found" | "conflict" | "internal_error" | "session_required" | "session_expired" | "forbidden" | "password_change_required" | "invalid_csrf_token" | "invalid_setup_token" | "setup_completed" | "last_owner" | "cannot_modify_self" | "rate_limited" | "api_key_revoked" | "api_key_expired" | "idempotency_key_reused" | "connection_in_use" | "delivery_not_replayable" | "run_in_progress" | "run_not_succeeded" | "request_too_large" | "auth_unavailable" | "setup_token_not_configured" | "no_eligible_connection" | "provider_rejected" | "provider_unavailable";
         /**
          * @example {
          *       "error": {
@@ -3175,10 +3178,23 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
+        /** @description `request_too_large`: the body is over the route's limit (64 KiB on `/v1`, 1 MiB elsewhere). */
+        PayloadTooLarge: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["ErrorResponse"];
+            };
+        };
         /**
          * @description `provider_unavailable`: the gateway could not be reached, timed
          *     out, or answered with a server error. No payment was stored; retry
-         *     with the same `order_id`.
+         *     with the same `order_id`. `auth_unavailable`: the store behind
+         *     `/v1` replay protection and failure limits did not answer; nothing
+         *     was processed, retry later. `setup_token_not_configured`: a
+         *     production server refuses first-run setup until `SETUP_TOKEN` is
+         *     set.
          */
         ServiceUnavailable: {
             headers: {
@@ -3188,7 +3204,7 @@ export interface components {
                 "application/json": components["schemas"]["ErrorResponse"];
             };
         };
-        /** @description `rate_limited`: too many failed attempts. Retry after `Retry-After` seconds (also in `details.retry_after_seconds`). */
+        /** @description `rate_limited`: too many failed attempts from this client, key or connection. Retry after `Retry-After` seconds (also in `details.retry_after_seconds`). */
         TooManyRequests: {
             headers: {
                 "Retry-After": components["headers"]["RetryAfter"];
@@ -3375,7 +3391,9 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
             422: components["responses"]["UnprocessableEntity"];
+            429: components["responses"]["TooManyRequests"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["ServiceUnavailable"];
         };
@@ -3410,7 +3428,9 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            429: components["responses"]["TooManyRequests"];
             500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     receiveConnectionCallback: {
@@ -3443,6 +3463,8 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            429: components["responses"]["TooManyRequests"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -3471,6 +3493,8 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
+            413: components["responses"]["PayloadTooLarge"];
+            429: components["responses"]["TooManyRequests"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -3521,8 +3545,10 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
             429: components["responses"]["TooManyRequests"];
             500: components["responses"]["InternalError"];
+            503: components["responses"]["ServiceUnavailable"];
         };
     };
     adminLogin: {
@@ -3551,6 +3577,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            413: components["responses"]["PayloadTooLarge"];
             429: components["responses"]["TooManyRequests"];
             500: components["responses"]["InternalError"];
         };
@@ -3624,6 +3651,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            413: components["responses"]["PayloadTooLarge"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -3682,6 +3710,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -3749,6 +3778,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -3904,6 +3934,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -3970,6 +4001,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            413: components["responses"]["PayloadTooLarge"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -4103,6 +4135,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            413: components["responses"]["PayloadTooLarge"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -4248,6 +4281,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            413: components["responses"]["PayloadTooLarge"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -4346,6 +4380,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            413: components["responses"]["PayloadTooLarge"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -4382,6 +4417,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            413: components["responses"]["PayloadTooLarge"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -4482,6 +4518,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            413: components["responses"]["PayloadTooLarge"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -4589,6 +4626,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -4658,6 +4696,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -4694,6 +4733,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            413: components["responses"]["PayloadTooLarge"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -4827,6 +4867,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            413: components["responses"]["PayloadTooLarge"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -5046,6 +5087,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+            413: components["responses"]["PayloadTooLarge"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -5257,6 +5299,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            413: components["responses"]["PayloadTooLarge"];
             500: components["responses"]["InternalError"];
         };
     };
@@ -5501,6 +5544,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            413: components["responses"]["PayloadTooLarge"];
         };
     };
     paymentEventWebhookV1: {
@@ -5529,6 +5573,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            413: components["responses"]["PayloadTooLarge"];
         };
     };
 }

@@ -410,8 +410,12 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '422':
           $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '500':
           $ref: '#/components/responses/InternalError'
         '503':
@@ -444,8 +448,12 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /webhooks/{provider}/{connection_id}:
     post:
@@ -517,6 +525,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -556,6 +568,10 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -618,10 +634,14 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '500':
           $ref: '#/components/responses/InternalError'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
 
   /admin/login:
     post:
@@ -665,6 +685,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '500':
@@ -750,6 +772,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -812,6 +836,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -881,6 +907,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -1069,6 +1097,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -1147,6 +1177,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -1281,6 +1313,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -1428,6 +1462,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -1501,6 +1537,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
     delete:
@@ -1573,6 +1611,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -1686,6 +1726,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -1825,6 +1867,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -1897,6 +1941,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -1941,6 +1987,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -2097,6 +2145,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -2379,6 +2429,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -2601,6 +2653,8 @@ paths:
           $ref: '#/components/responses/NotFound'
         '409':
           $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -2934,6 +2988,8 @@ webhooks:
       responses:
         '200':
           description: Acknowledged. Any 2xx status works.
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
   paymentEventV1:
     post:
       operationId: paymentEventWebhookV1
@@ -2981,6 +3037,8 @@ webhooks:
       responses:
         '200':
           description: Acknowledged. Any 2xx status works.
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
 
 components:
   securitySchemes:
@@ -3340,17 +3398,27 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    PayloadTooLarge:
+      description: '`request_too_large`: the body is over the route''s limit (64 KiB on `/v1`, 1 MiB elsewhere).'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
     ServiceUnavailable:
       description: |
         `provider_unavailable`: the gateway could not be reached, timed
         out, or answered with a server error. No payment was stored; retry
-        with the same `order_id`.
+        with the same `order_id`. `auth_unavailable`: the store behind
+        `/v1` replay protection and failure limits did not answer; nothing
+        was processed, retry later. `setup_token_not_configured`: a
+        production server refuses first-run setup until `SETUP_TOKEN` is
+        set.
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     TooManyRequests:
-      description: '`rate_limited`: too many failed attempts. Retry after `Retry-After` seconds (also in `details.retry_after_seconds`).'
+      description: '`rate_limited`: too many failed attempts from this client, key or connection. Retry after `Retry-After` seconds (also in `details.retry_after_seconds`).'
       headers:
         Retry-After:
           $ref: '#/components/headers/RetryAfter'
@@ -3407,11 +3475,14 @@ components:
         | `run_in_progress` | 409 | The reconciliation run is `queued` or `running`: it cannot be re-run, and its items cannot be resolved, until it finishes. |
         | `run_not_succeeded` | 409 | The reconciliation run failed, so its items cannot be resolved. Re-run it first. |
         | `connection_in_use` | 409 | The connection is some app's default connection. `details.apps` lists up to 10 (`AppSummary`), `details.app_count` counts them. |
+        | `request_too_large` | 413 | The request body is over the route's limit: 64 KiB on `/v1`, 1 MiB on `/admin` and on gateway callbacks. |
         | `no_eligible_connection` | 422 | No connection can take the payment. `details.reasons` is a list of strings: `no_default_connection`, `connection_disabled`. More reasons may be added. |
         | `provider_rejected` | 422 | The gateway refused the request (validation, limits, credentials). `details.provider` names the provider. The message is generic; the gateway's own text is only logged. |
-        | `rate_limited` | 429 | Too many failed attempts. `details.retry_after_seconds` and the `Retry-After` header say when to retry. |
+        | `rate_limited` | 429 | Too many failed attempts: sign-in and setup per IP and email, `/v1` authentication failures per IP and per API key, rejected gateway callbacks per IP and per connection. `details.retry_after_seconds` and the `Retry-After` header say when to retry. |
         | `internal_error` | 500 | Unexpected server error. |
         | `provider_unavailable` | 503 | The gateway could not be reached, timed out, or answered with a server error. Retry with the same `order_id`. |
+        | `auth_unavailable` | 503 | The store behind `/v1` replay protection and failure limits did not answer, so the request was not authenticated or processed. Retry later with the same `Idempotency-Key` or `order_id`. |
+        | `setup_token_not_configured` | 503 | First-run setup is refused because the server runs in production without `SETUP_TOKEN`. Set it and restart. |
       enum:
         - invalid_request
         - validation_failed
@@ -3448,6 +3519,9 @@ components:
         - delivery_not_replayable
         - run_in_progress
         - run_not_succeeded
+        - request_too_large
+        - auth_unavailable
+        - setup_token_not_configured
         - no_eligible_connection
         - provider_rejected
         - provider_unavailable

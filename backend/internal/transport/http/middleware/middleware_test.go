@@ -88,6 +88,26 @@ func TestAbortHandlerCutsTheConnection(t *testing.T) {
 	}
 }
 
+// Regression: a broken percent-escape made Go drop the pair, so
+// cursor=%%% answered the first page instead of an error.
+func TestValidQuery(t *testing.T) {
+	r := newEngine(ValidQuery())
+	for _, q := range []string{"", "cursor=abc&limit=10", "q=%C3%BC", "flag", "a=1&a=2"} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x?"+q, nil))
+		if w.Code != http.StatusOK {
+			t.Errorf("%q: status %d", q, w.Code)
+		}
+	}
+	for _, q := range []string{"cursor=%%%", "limit=%zz", "a=%", "x=1;y=2"} {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/x", nil)
+		req.URL.RawQuery = q
+		r.ServeHTTP(w, req)
+		assertEnvelope(t, w, http.StatusBadRequest, domain.CodeInvalidRequest)
+	}
+}
+
 func TestRecoverReturnsEnvelope(t *testing.T) {
 	r := newEngine(func(*gin.Context) { panic("boom: secret detail") })
 	w := httptest.NewRecorder()

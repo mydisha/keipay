@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"strconv"
+	"testing"
+)
 
 // Amounts convert exactly, with the currency's exponent.
 func TestMinorUnitsConversion(t *testing.T) {
@@ -28,6 +31,35 @@ func TestMinorUnitsConversion(t *testing.T) {
 	for _, bad := range []string{"", "abc", "1e999999999", "1/3", "99999999999999999999"} {
 		if _, err := MinorUnits(bad, "IDR"); err == nil {
 			t.Errorf("MinorUnits(%q) succeeded", bad)
+		}
+	}
+}
+
+// Minor amounts convert back to the major decimal gateways expect.
+func TestMajorUnitsConversion(t *testing.T) {
+	cases := []struct {
+		minor    int64
+		currency string
+		want     float64
+	}{
+		{150000, "IDR", 150000},
+		{16777217, "IDR", 16777217},
+		{1050, "USD", 10.5},
+		{1999, "usd", 19.99},
+		{0, "SGD", 0},
+		{-1235, "USD", -12.35},
+		{10, "VND", 10},
+		{1000, "XYZ", 10},
+	}
+	for _, tc := range cases {
+		if got := MajorUnits(tc.minor, tc.currency); got != tc.want {
+			t.Errorf("MajorUnits(%d, %s) = %v; want %v", tc.minor, tc.currency, got, tc.want)
+		}
+	}
+	for _, minor := range []int64{1, 99, 1999, 123456789} {
+		back, err := MinorUnits(strconv.FormatFloat(MajorUnits(minor, "USD"), 'f', -1, 64), "USD")
+		if err != nil || back != minor {
+			t.Errorf("round trip %d = %d, %v", minor, back, err)
 		}
 	}
 }

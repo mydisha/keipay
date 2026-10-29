@@ -64,3 +64,12 @@ func MinorUnits(decimal, currency string) (int64, error) {
 	}
 	return q.Int64(), nil
 }
+
+// MajorUnits converts an amount in currency's minor unit to the decimal major
+// amount gateways expect (1050 USD cents is 10.5). It is the nearest float64,
+// exact for any amount below 2^53 minor units.
+func MajorUnits(minor int64, currency string) float64 {
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(CurrencyExponent(currency))), nil)
+	f, _ := new(big.Rat).SetFrac(big.NewInt(minor), scale).Float64()
+	return f
+}

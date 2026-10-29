@@ -9,7 +9,7 @@ import {
   signOut,
 } from "./helpers";
 
-// T-55 / T-60: sign in with email, visit every section and the app detail
+// Sign in with email, visit every section and the app detail
 // tabs, sign out; mobile fits. The seeded Demo App is a test app, and the
 // Apps list starts at the live mode, so the specs pick All first.
 

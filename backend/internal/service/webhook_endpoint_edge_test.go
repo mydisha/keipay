@@ -9,7 +9,7 @@ import (
 	"github.com/mydisha/keipay/backend/internal/domain"
 )
 
-// AC-3 / T-B8: once deleted, an endpoint takes no more writes. Every mutation
+// Once deleted, an endpoint takes no more writes. Every mutation
 // answers not found and records nothing, and no test event is created.
 func TestEndpointMutationsAfterDelete(t *testing.T) {
 	f := newWebhookFixture(t)
@@ -56,7 +56,7 @@ func TestEndpointMutationsAfterDelete(t *testing.T) {
 	}
 }
 
-// AC-3: length limits count code points, not bytes, at both edges.
+// Length limits count code points, not bytes, at both edges.
 func TestEndpointLimitsCountCodePoints(t *testing.T) {
 	f := newWebhookFixture(t)
 	// 500 two-byte runes (1000 bytes) is within the limit; 501 is not.
@@ -91,7 +91,7 @@ func TestEndpointLimitsCountCodePoints(t *testing.T) {
 	assertFieldErrors(t, err, domain.FieldError{Field: "headers.0.name", Rule: "header_name"})
 }
 
-// AC-2: the header hint shows the last 4 code points only for values of at
+// The header hint shows the last 4 code points only for values of at
 // least 12 code points, so short values are never half-revealed.
 func TestEndpointHeaderHintEdges(t *testing.T) {
 	f := newWebhookFixture(t)
@@ -108,7 +108,7 @@ func TestEndpointHeaderHintEdges(t *testing.T) {
 	assertNoEndpointSecrets(t, f, strings.Repeat("k", 11), "wxyz", "日本語!")
 }
 
-// AC-3: a PATCH changing the URL of a live app's endpoint to http is refused
+// A PATCH changing the URL of a live app's endpoint to http is refused
 // with https, together with other field errors.
 func TestEndpointUpdateCollectsErrorsOnLiveApp(t *testing.T) {
 	f := newWebhookFixture(t)

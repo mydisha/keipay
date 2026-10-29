@@ -9,7 +9,7 @@ import {
   type EndpointFormValues,
 } from "./endpoint-form";
 
-// F-2: the client rules mirror CreateWebhookEndpointRequest.
+// The client rules mirror CreateWebhookEndpointRequest.
 
 const e = strings.endpoints;
 
@@ -23,7 +23,7 @@ function issues(input: EndpointFormValues, environment: "test" | "live" = "test"
   return Object.fromEntries(result.error.issues.map((issue) => [issue.path.join("."), issue.message]));
 }
 
-describe("endpointFormSchema (F-2)", () => {
+describe("endpointFormSchema", () => {
   it("accepts the defaults with a URL and one event", () => {
     expect(issues(values())).toEqual({});
   });
@@ -133,7 +133,7 @@ describe("requests from the form", () => {
     expect(withHeaders.headers).toEqual([{ name: "Authorization", value: " Bearer x " }]);
   });
 
-  it("updates only what changed (F-4)", () => {
+  it("updates only what changed", () => {
     const endpoint = webhookEndpoint({ headers: [{ name: "Authorization", value_last4: null }] });
     const unchanged = defaultEndpointValues(endpoint);
     expect(toUpdateRequest(endpoint, unchanged)).toEqual({});

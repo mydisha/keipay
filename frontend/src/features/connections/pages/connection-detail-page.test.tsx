@@ -5,8 +5,6 @@ import { errorBody, json, mockApi } from "@/test/http";
 import { setViewport } from "@/test/media";
 import { renderApp } from "@/test/render";
 
-// T-54: the connection detail page.
-
 const DETAIL = `GET /admin/connections/${CON_ID}`;
 const PATH = `/connections/${CON_ID}`;
 const providers = { "GET /admin/providers": { data: [provider()] } };
@@ -23,7 +21,7 @@ function region(name: string) {
   return screen.getByRole("region", { name });
 }
 
-describe("Connection detail (T-54)", () => {
+describe("Connection detail", () => {
   it("shows the header, facts, callback URL and credential hints without values", async () => {
     mockApi({
       ...providers,

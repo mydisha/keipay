@@ -19,7 +19,6 @@ func (f *connFixture) addApp(t *testing.T, slug string, env domain.Environment) 
 	return a
 }
 
-// T-19 / AC-23
 func TestImportLegacyXendit(t *testing.T) {
 	f := newConnFixture(t)
 	ctx := context.Background()

@@ -12,8 +12,6 @@ import { applyConnectionErrors } from "../schemas/connection-form";
 import { hasUnsupportedField, schemaDefaults, schemaFormSchema, type SchemaValues } from "../schemas/schema-form";
 import { SchemaFields } from "./schema-fields";
 
-// T-51: the schema renderer and server field errors.
-
 interface Values {
   credentials: SchemaValues;
   settings: SchemaValues;
@@ -66,7 +64,7 @@ function Harness({
 
 const { credential_schema, settings_schema } = provider();
 
-describe("SchemaFields (T-51)", () => {
+describe("SchemaFields", () => {
   it("renders a secret as a password input with a toggle and no autocomplete", async () => {
     const { user } = renderWithProviders(
       <Harness credentials={credential_schema.fields} settings={settings_schema.fields} />,

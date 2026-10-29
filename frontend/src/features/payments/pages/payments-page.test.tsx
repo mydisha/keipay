@@ -5,7 +5,7 @@ import { errorBody, json, mockApi } from "@/test/http";
 import { setViewport } from "@/test/media";
 import { renderApp } from "@/test/render";
 
-// T-46: payments use the cursor list, `pay_` ids and the app summary.
+// Payments use the cursor list, `pay_` ids and the app summary.
 
 const GLOBEX_ID = "app_01JBKQ7Z8M4X2Y6V3N9T5R1W0F";
 const globex = app({ id: GLOBEX_ID, name: "Globex", slug: "globex", environment: "live" });
@@ -19,7 +19,7 @@ function lastQuery(api: ReturnType<typeof mockApi>) {
   return new URL(requests[requests.length - 1]!.url).searchParams;
 }
 
-describe("Payments page (T-46)", () => {
+describe("Payments page", () => {
   it("shows pay_ ids, the app name and environment, money and status text", async () => {
     mockApi({
       "GET /admin/apps": page([app()]),

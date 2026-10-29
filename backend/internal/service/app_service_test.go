@@ -70,7 +70,6 @@ func (f *appFixture) actions() []string {
 	return out
 }
 
-// T-7
 func TestAppCreate(t *testing.T) {
 	for _, env := range []domain.Environment{domain.EnvTest, domain.EnvLive} {
 		t.Run(string(env), func(t *testing.T) {
@@ -97,7 +96,7 @@ func TestAppCreate(t *testing.T) {
 				k.Hash != keygen.HashAPIKey(c.APIKey) {
 				t.Fatalf("key = %+v", k)
 			}
-			// T-B33: apps no longer get a webhook secret; endpoints have their own.
+			// Apps no longer get a webhook secret; endpoints have their own.
 			if a.WebhookSecretEnc != "" || k.SecretEnc != "enc("+c.APISecret+")" {
 				t.Fatalf("secrets: webhook %q api %q", a.WebhookSecretEnc, k.SecretEnc)
 			}
@@ -165,7 +164,7 @@ func TestAppCreateFieldRules(t *testing.T) {
 		domain.FieldError{Field: "metadata.a", Rule: "type"},
 		domain.FieldError{Field: "metadata.b", Rule: "type"},
 	)
-	// T-B33: webhook_url alone is refused too.
+	// webhook_url alone is refused too.
 	_, err = f.svc.Create(adminCtx(), CreateAppInput{Name: "A", Slug: "acme", Environment: domain.EnvTest, WebhookURL: true})
 	assertFields(t, err, domain.FieldError{Field: "webhook_url", Rule: "moved"})
 	_, err = f.svc.Create(adminCtx(), CreateAppInput{Name: strings.Repeat("n", 101), Slug: "", Environment: ""})
@@ -179,7 +178,7 @@ func TestAppCreateFieldRules(t *testing.T) {
 	}
 }
 
-// AC-12: the app, its key and both entries roll back together.
+// The app, its key and both entries roll back together.
 func TestAppCreateAuditFailureRollsBack(t *testing.T) {
 	f := newAppFixture(t)
 	f.audit.Err = errAuditDown
@@ -194,7 +193,6 @@ func TestAppCreateAuditFailureRollsBack(t *testing.T) {
 	}
 }
 
-// T-8
 func TestAppUpdate(t *testing.T) {
 	f := newAppFixture(t)
 	c := f.create(t, "acme", domain.EnvLive)
@@ -318,7 +316,6 @@ func TestAppListAndGet(t *testing.T) {
 	}
 }
 
-// T-9
 func TestCreateKey(t *testing.T) {
 	f := newAppFixture(t)
 	app := f.create(t, "acme", domain.EnvTest).App
@@ -516,7 +513,6 @@ func TestKeysOfAnotherAppAreNotFound(t *testing.T) {
 	}
 }
 
-// T-10
 func TestLookup(t *testing.T) {
 	f := newAppFixture(t)
 	live := f.create(t, "acme", domain.EnvLive)
@@ -629,7 +625,6 @@ func (f *appFixture) addConnection(t *testing.T, name string, env domain.Environ
 	return c
 }
 
-// T-16 / AC-14
 func TestAppDefaultConnection(t *testing.T) {
 	f := newAppFixture(t)
 	app := f.create(t, "acme", domain.EnvTest).App

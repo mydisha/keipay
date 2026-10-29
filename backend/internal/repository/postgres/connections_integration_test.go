@@ -42,7 +42,8 @@ func tableExists(t *testing.T, pool *pgxpool.Pool, table string) bool {
 	return ok
 }
 
-// T-40 / AC-24: 000008 runs up, down and up on a database with phase 2 data.
+// 000008 runs up, down and up on a database that already has apps and
+// payments.
 func TestIntegrationMigration8UpDownUp(t *testing.T) {
 	db := pgtest.New(t, 7)
 	pool := openPool(t, db.DSN)
@@ -109,7 +110,6 @@ func newConnection(t *testing.T, repo *postgres.ConnectionRepo, merchantID int64
 	return c
 }
 
-// T-41 / AC-5, AC-10
 func TestIntegrationConnectionRepo(t *testing.T) {
 	db := pgtest.New(t, 0)
 	pool := openPool(t, db.DSN)
@@ -242,8 +242,8 @@ func TestIntegrationConnectionRepo(t *testing.T) {
 	}
 }
 
-// T-42 / AC-14: the database refuses an app default of another environment
-// or merchant even without the service.
+// The database refuses an app default of another environment or merchant even
+// without the service.
 func TestIntegrationDefaultConnectionForeignKey(t *testing.T) {
 	db := pgtest.New(t, 0)
 	pool := openPool(t, db.DSN)
@@ -278,7 +278,7 @@ func TestIntegrationDefaultConnectionForeignKey(t *testing.T) {
 	}
 }
 
-// T-43 / AC-23: two servers importing at the same time import once.
+// Two servers importing at the same time import once.
 func TestIntegrationConcurrentLegacyImport(t *testing.T) {
 	db := pgtest.New(t, 0)
 	ctx := context.Background()
@@ -357,7 +357,7 @@ func (c *countingTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx
 
 func (c *countingTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
-// T-44 / AC-14: listing apps with their default connections is one query.
+// Listing apps with their default connections is one query.
 func TestIntegrationAppListLoadsDefaultsInOneQuery(t *testing.T) {
 	db := pgtest.New(t, 0)
 	ctx := context.Background()

@@ -140,8 +140,8 @@ func jsonEqual(t *testing.T, label string, got []byte, want any) {
 	}
 }
 
-// AC-12: every app and key mutation writes its entries in the same
-// transaction, with no secret material.
+// Every app and key mutation writes its entries in the same transaction, with
+// no secret material.
 func TestIntegrationAppMutationsWriteTheirEntries(t *testing.T) {
 	f := newAuditFixture(t)
 	svc := f.service(f.audit)
@@ -187,7 +187,6 @@ func TestIntegrationAppMutationsWriteTheirEntries(t *testing.T) {
 	jsonEqual(t, "revoke before", rows[4].before, map[string]any{"revoked_at": nil})
 }
 
-// T-30 / AC-12: a failing audit insert rolls the update back.
 func TestIntegrationFailedAuditRollsBackUpdate(t *testing.T) {
 	f := newAuditFixture(t)
 	created, err := f.service(f.audit).Create(actorCtx(), service.CreateAppInput{Name: "Before", Slug: f.slug, Environment: domain.EnvLive})
@@ -225,8 +224,8 @@ func TestIntegrationFailedCreateLeavesNoApp(t *testing.T) {
 	}
 }
 
-// AC-9: a duplicate slug inside the audit transaction is a conflict; the same
-// slug in the other environment is fine.
+// A duplicate slug inside the audit transaction is a conflict; the same slug
+// in the other environment is fine.
 func TestIntegrationDuplicateSlugInsideTxIsConflict(t *testing.T) {
 	f := newAuditFixture(t)
 	svc := f.service(f.audit)

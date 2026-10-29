@@ -16,7 +16,7 @@ async function submit(user: User, current: string, next: string, confirm: string
 
 const NEW = "a new long password";
 
-describe("Change password page (T-46)", () => {
+describe("Change password page", () => {
   it("requires a signed-in session", async () => {
     mockApi({ "GET /admin/me": signedOut });
     const { router } = renderApp("/change-password");

@@ -385,8 +385,6 @@ func TestListAndGetUsers(t *testing.T) {
 	}
 }
 
-// --- T-22 recovery (reset-admin) ---
-
 func cliCtx() context.Context {
 	return domain.WithActor(context.Background(), domain.SystemActor("cli"))
 }

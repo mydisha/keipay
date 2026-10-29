@@ -39,7 +39,7 @@ async function submit(user: User) {
   await user.click(screen.getByRole("button", { name: "Create owner account" }));
 }
 
-describe("Setup page (T-44)", () => {
+describe("Setup page", () => {
   it("asks for the setup token only when the server requires it", async () => {
     setupApi({ tokenRequired: false });
     const { unmount } = renderApp("/setup");
@@ -136,7 +136,7 @@ describe("Setup page (T-44)", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't complete setup. Try again.");
   });
 
-  it("signs the owner in and lands on the dashboard (AC-22)", async () => {
+  it("signs the owner in and lands on the dashboard", async () => {
     const api = setupApi();
     const { user, router, queryClient } = renderApp("/setup");
     await fill(user, valid);

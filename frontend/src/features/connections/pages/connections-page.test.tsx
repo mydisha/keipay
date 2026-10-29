@@ -6,8 +6,6 @@ import { errorBody, json, mockApi } from "@/test/http";
 import { setViewport } from "@/test/media";
 import { renderApp } from "@/test/render";
 
-// T-52: the Connections list.
-
 const LIVE_ID = "con_01JBKQ7Z8M4X2Y6V3N9T5R1W0H";
 const providers = { data: [provider(), provider({ name: "acmepay", display_name: "Acme Pay" })] };
 
@@ -37,7 +35,7 @@ const imported = connectionListItem({
   last_tested_at: "2026-01-01T00:00:00Z",
 });
 
-describe("Connections page (T-52)", () => {
+describe("Connections page", () => {
   it("lists connections with text statuses and the last test", async () => {
     mockApi({
       "GET /admin/providers": providers,

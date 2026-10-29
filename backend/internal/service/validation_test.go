@@ -10,7 +10,6 @@ import (
 	"github.com/mydisha/keipay/backend/internal/domain"
 )
 
-// T-3
 func TestNormalizeSlug(t *testing.T) {
 	cases := []struct{ in, want, rule string }{
 		{" Acme-Shop ", "acme-shop", ""},
@@ -43,7 +42,6 @@ func TestEnvironmentRule(t *testing.T) {
 	}
 }
 
-// T-4
 func TestNormalizeURL(t *testing.T) {
 	long := "https://a.example/" + strings.Repeat("x", 2048-len("https://a.example/"))
 	cases := []struct{ in, want, rule string }{
@@ -98,7 +96,6 @@ func TestExpiresAtRule(t *testing.T) {
 	}
 }
 
-// T-5
 func TestParseMetadata(t *testing.T) {
 	keys := func(n int) string {
 		parts := make([]string, n)
@@ -257,7 +254,6 @@ func TestStoredNumberLimit(t *testing.T) {
 	}
 }
 
-// T-6
 func TestIdempotencyKeyRule(t *testing.T) {
 	cases := []struct{ key, want string }{
 		{"", ""},

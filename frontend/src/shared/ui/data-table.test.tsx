@@ -36,7 +36,7 @@ function renderTable(props: Partial<Parameters<typeof DataTable<Row>>[0]> = {}) 
   );
 }
 
-describe("DataTable (T-23)", () => {
+describe("DataTable", () => {
   it("renders rows in a table on desktop", () => {
     setViewport("desktop");
     renderTable();

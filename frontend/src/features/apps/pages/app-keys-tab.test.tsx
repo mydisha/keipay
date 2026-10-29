@@ -5,8 +5,6 @@ import { errorBody, json, mockApi } from "@/test/http";
 import { setViewport } from "@/test/media";
 import { renderApp } from "@/test/render";
 
-// T-44: the API keys tab.
-
 const DETAIL = `GET /admin/apps/${APP_ID}`;
 const KEYS = `/admin/apps/${APP_ID}/keys`;
 const KEY_ID = apiKey().id;
@@ -48,7 +46,7 @@ function row(text: string) {
   return screen.getByText(text, { selector: "td *" }).closest("tr")!;
 }
 
-describe("API keys tab (T-44)", () => {
+describe("API keys tab", () => {
   it("lists keys as prefix…last4 with status text, Never and expiry", async () => {
     mockApi({ [DETAIL]: { app: app() }, [`GET ${KEYS}`]: page([apiKey(), used, expired, revoked, legacy]) });
     renderApp(`/apps/${APP_ID}/keys`);

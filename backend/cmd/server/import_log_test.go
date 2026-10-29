@@ -14,8 +14,8 @@ import (
 	"github.com/mydisha/keipay/backend/internal/service"
 )
 
-// AC-23: the start-up log says what the XENDIT_* import did, at the level
-// the requirements ask for, and the server keeps running on every outcome.
+// The start-up log says what the XENDIT_* import did, at a level that
+// matches the outcome, and the server keeps running on every outcome.
 func TestLogLegacyImport(t *testing.T) {
 	conn := &domain.Connection{PublicID: "con_01JBKQ7Z8M4X2Y6V3N9T5R1W0D", Name: "xendit-imported", Environment: domain.EnvTest}
 	other := domain.AppSummary{PublicID: "app_01JBKQ7Z8M4X2Y6V3N9T5R1W0E", Slug: "globex", Environment: domain.EnvLive}

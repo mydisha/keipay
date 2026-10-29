@@ -11,7 +11,7 @@ import {
   signInToDashboard,
 } from "./helpers";
 
-// T-57: the owner adds a viewer and an admin; each sees only what their
+// The owner adds a viewer and an admin; each sees only what their
 // permissions allow; disabling the viewer ends their session at once.
 
 requireOwnerCredentials();
@@ -104,7 +104,7 @@ test("roles shape the console and disabling ends a session", async ({ page, brow
   await showAllEnvironments(viewer.page);
   await expect(viewer.page.getByText("Demo App").first()).toBeVisible();
   await expect(viewer.page.getByRole("button", { name: "Create app" })).toHaveCount(0);
-  // The app's pages are readable but offer no write action (T-61).
+  // The app's pages are readable but offer no write action.
   await viewer.page.getByRole("link", { name: "Demo App" }).first().click();
   await expect(viewer.page.getByRole("heading", { level: 1, name: "Demo App" })).toBeVisible();
   for (const name of ["Edit", "Disable", "Enable"]) {

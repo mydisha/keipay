@@ -7,8 +7,8 @@ import {
   signInToDashboard,
 } from "./helpers";
 
-// AC-29: the connection screens that T-64 does not reach (detail, its
-// dialogs, the post-create wizard steps and the app Overview default
+// The connection screens that connections.spec.ts does not reach at 375px
+// (detail, its dialogs, the post-create wizard steps and the app Overview default
 // connection) fit at 375px in light and dark mode, with text statuses. Uses
 // the imported `xendit-imported` connection and never runs a connection test,
 // so nothing calls Xendit and nothing is changed.
@@ -42,7 +42,7 @@ async function expectDialogFits(page: Page, name: string) {
   await expect(dialog).toHaveCount(0);
 }
 
-test.describe("connection screens at 375px (AC-29)", () => {
+test.describe("connection screens at 375px", () => {
   test.use({ viewport: { width: 375, height: 812 }, hasTouch: true });
 
   for (const theme of ["light", "dark"] as const) {

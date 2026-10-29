@@ -22,7 +22,6 @@ var testSchema = provider.Schema{Fields: []provider.Field{
 
 func fe(field, rule string) domain.FieldError { return domain.FieldError{Field: field, Rule: rule} }
 
-// T-1 / AC-4
 func TestValidateValues(t *testing.T) {
 	cases := []struct {
 		name string

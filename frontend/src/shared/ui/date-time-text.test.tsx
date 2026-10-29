@@ -14,7 +14,7 @@ function renderText(value: string | null) {
   );
 }
 
-describe("DateTimeText (T-21)", () => {
+describe("DateTimeText", () => {
   it("shows relative time from the injected now in a <time> element", () => {
     renderText("2026-01-01T18:30:00Z");
     const time = screen.getByText("5 minutes ago");

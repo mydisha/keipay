@@ -11,7 +11,6 @@ import (
 	"github.com/mydisha/keipay/backend/internal/domain"
 )
 
-// T-3
 func TestCanonicalEmail(t *testing.T) {
 	nfd := norm.NFD.String("üser@example.com")
 	if nfd == "üser@example.com" {
@@ -33,7 +32,6 @@ func TestCanonicalEmail(t *testing.T) {
 	}
 }
 
-// T-3
 func TestEmailRule(t *testing.T) {
 	valid := []string{
 		"ops@example.com",
@@ -85,7 +83,6 @@ func TestEmailRule(t *testing.T) {
 	}
 }
 
-// T-4
 func TestNormalizeName(t *testing.T) {
 	cases := []struct {
 		in, want, rule string
@@ -108,7 +105,6 @@ func TestNormalizeName(t *testing.T) {
 	}
 }
 
-// T-5
 func TestPasswordRule(t *testing.T) {
 	cases := []struct {
 		name, in, rule string
@@ -130,7 +126,7 @@ func TestPasswordRule(t *testing.T) {
 	}
 }
 
-// T-5: passwords are hashed exactly as sent, surrounding spaces included.
+// Passwords are hashed exactly as sent, surrounding spaces included.
 func TestPasswordHashedWithoutTrimming(t *testing.T) {
 	h := NewBcryptHasher(bcrypt.MinCost)
 	hash, err := h.Hash("  padded-pass  ")
@@ -161,7 +157,6 @@ func TestBcryptHasherCost(t *testing.T) {
 	}
 }
 
-// T-6
 func TestTemporaryPassword(t *testing.T) {
 	seen := map[string]bool{}
 	counts := map[rune]int{}
@@ -206,7 +201,6 @@ func mustTemp(t *testing.T) string {
 	return p
 }
 
-// T-6
 func TestNewToken(t *testing.T) {
 	seen := map[string]bool{}
 	for range 1000 {

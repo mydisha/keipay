@@ -28,7 +28,7 @@ func assertNoEndpointSecrets(t *testing.T, f *webhookFixture, values ...string) 
 	}
 }
 
-// T-B4 / AC-2: create returns the secret once, keeps it and the header values
+// Create returns the secret once, keeps it and the header values
 // encrypted, and audits neither.
 func TestEndpointCreate(t *testing.T) {
 	f := newWebhookFixture(t)
@@ -106,7 +106,7 @@ func assertFieldErrors(t *testing.T, err error, want ...domain.FieldError) {
 	}
 }
 
-// T-B5 / AC-3: every failing field comes back in one response.
+// Every failing field comes back in one response.
 func TestEndpointCreateFieldErrors(t *testing.T) {
 	f := newWebhookFixture(t)
 	headers := make([]WebhookHeaderInput, 11)
@@ -162,7 +162,7 @@ func TestEndpointCreateFieldErrors(t *testing.T) {
 		RetryPolicy: &RetryPolicyInput{MaxAttempts: ptr(20), IntervalSeconds: ptr(10), Backoff: ptr("fixed")}})
 }
 
-// T-B6 / AC-3: at most 10 endpoints per app; deleted ones do not count.
+// At most 10 endpoints per app; deleted ones do not count.
 func TestEndpointLimit(t *testing.T) {
 	f := newWebhookFixture(t)
 	var first *EndpointWithSecret
@@ -185,7 +185,7 @@ func TestEndpointLimit(t *testing.T) {
 	f.addEndpoint(t, f.addApp(t, "globex", domain.EnvTest), CreateWebhookEndpointInput{})
 }
 
-// T-B7 / AC-3: PATCH audits only what changed and refuses what cannot change.
+// PATCH audits only what changed and refuses what cannot change.
 func TestEndpointUpdate(t *testing.T) {
 	f := newWebhookFixture(t)
 	created := f.addEndpoint(t, f.app, CreateWebhookEndpointInput{URL: "https://hooks.example.com/a",
@@ -256,7 +256,7 @@ func TestEndpointUpdate(t *testing.T) {
 	}
 }
 
-// T-B8: a deleted endpoint is gone from reads and lists, its deliveries stay.
+// A deleted endpoint is gone from reads and lists, its deliveries stay.
 func TestEndpointDelete(t *testing.T) {
 	f := newWebhookFixture(t)
 	e := f.addEndpoint(t, f.app, CreateWebhookEndpointInput{}).Endpoint
@@ -289,7 +289,7 @@ func TestEndpointDelete(t *testing.T) {
 	}
 }
 
-// T-B9 / AC-7: rotation keeps the current secret as the previous one for the
+// Rotation keeps the current secret as the previous one for the
 // overlap; a second rotation drops the oldest.
 func TestEndpointRotateSecret(t *testing.T) {
 	f := newWebhookFixture(t)
@@ -350,7 +350,7 @@ func TestEndpointRotateSecret(t *testing.T) {
 	}
 }
 
-// T-B10 / AC-10: disable and enable are idempotent and audited once; enable
+// Disable and enable are idempotent and audited once; enable
 // resets the failure counter.
 func TestEndpointDisableEnable(t *testing.T) {
 	f := newWebhookFixture(t)
@@ -382,7 +382,7 @@ func TestEndpointDisableEnable(t *testing.T) {
 	assertJSON(t, "enable after", logs[1].After, map[string]any{"status": "active", "disabled_reason": nil, "consecutive_failures": 0})
 }
 
-// T-B26 / AC-12: a test send is one test event with the catalog example and
+// A test send is one test event with the catalog example and
 // one single-attempt delivery to this endpoint, whatever its state.
 func TestEndpointSendTest(t *testing.T) {
 	f := newWebhookFixture(t)

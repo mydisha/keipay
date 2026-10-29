@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// T-2: formats, uniqueness and a known hash vector.
+// Formats, uniqueness and a known hash vector.
 func TestFormats(t *testing.T) {
 	keyRe := regexp.MustCompile(`^kp_(test|live)_[0-9a-f]{32}$`)
 	secretRe := regexp.MustCompile(`^kps_(test|live)_[0-9a-f]{48}$`)

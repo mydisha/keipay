@@ -30,7 +30,7 @@ func deliveredOnce(t *testing.T, f *webhookFixture, status domain.WebhookDeliver
 	return e, f.hooks.AllDeliveries()[0]
 }
 
-// T-B25 / AC-11: a finished delivery gets exactly one more manual attempt
+// A finished delivery gets exactly one more manual attempt
 // with the same event and body; nothing new is created.
 func TestReplay(t *testing.T) {
 	for _, status := range []domain.WebhookDeliveryStatus{domain.WebhookDeliveryFailed, domain.WebhookDeliveryDelivered} {
@@ -76,7 +76,7 @@ func assertNotReplayable(t *testing.T, err error, reason string) {
 	}
 }
 
-// T-B25: deliveries that cannot take another attempt get 409 with a reason.
+// Deliveries that cannot take another attempt get 409 with a reason.
 func TestReplayRefused(t *testing.T) {
 	cases := map[string]func(t *testing.T, f *webhookFixture) string{
 		"in_progress": func(t *testing.T, f *webhookFixture) string {

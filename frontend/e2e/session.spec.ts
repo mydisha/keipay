@@ -1,7 +1,7 @@
 import { expect, request as playwrightRequest, test } from "@playwright/test";
 import { errorCode, ownerEmail, ownerPassword, requireOwnerCredentials, signIn, signInToDashboard, signOut } from "./helpers";
 
-// T-56: cookie session and CSRF as the browser sees them.
+// Cookie session and CSRF as the browser sees them.
 
 requireOwnerCredentials();
 

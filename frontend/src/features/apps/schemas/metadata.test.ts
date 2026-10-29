@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { strings } from "@/shared/lib/strings";
 import { metadataText, metadataToText, parseMetadataText } from "./metadata";
 
-// T-42: the metadata editor's rules mirror the API's Metadata schema.
+// The metadata editor's rules mirror the API's Metadata schema.
 
 const keys = (n: number) => JSON.stringify(Object.fromEntries(Array.from({ length: n }, (_, i) => [`k${i}`, i])));
 const emoji = "😀"; // one code point, two UTF-16 units, four UTF-8 bytes
@@ -12,7 +12,7 @@ function message(text: string) {
   return result.ok ? null : result.message;
 }
 
-describe("parseMetadataText (T-42)", () => {
+describe("parseMetadataText", () => {
   it.each([
     ["empty", ""],
     ["whitespace", "  \n "],

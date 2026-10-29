@@ -8,7 +8,7 @@ const secrets = [
   { label: "API secret", value: "s3cr3t-value" },
 ];
 
-describe("SecretRevealDialog (T-26)", () => {
+describe("SecretRevealDialog", () => {
   it("cannot close until 'I have saved this' is checked", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();

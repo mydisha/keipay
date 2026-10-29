@@ -97,7 +97,7 @@ func TestLoad_NoEnvFileReportsMissingKeys(t *testing.T) {
 	}
 }
 
-// T-20: the deprecated Xendit settings are optional, but only as a pair.
+// The deprecated Xendit settings are optional, but only as a pair.
 func TestLoad_XenditSettingsBothOrNeither(t *testing.T) {
 	cases := []struct {
 		name, key, token string
@@ -132,7 +132,7 @@ func TestLoad_XenditSettingsBothOrNeither(t *testing.T) {
 	}
 }
 
-// T-B36 / AC-10: endpoints are disabled after 5 exhausted deliveries by
+// Endpoints are disabled after 5 exhausted deliveries by
 // default; 0 turns it off; a negative value is a configuration error.
 func TestLoad_WebhookDisableAfterFailures(t *testing.T) {
 	root := chdirBackend(t)

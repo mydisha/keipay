@@ -47,7 +47,7 @@ function lastQuery(api: ReturnType<typeof routes>, path: string): URLSearchParam
   return new URL(requests[requests.length - 1]!.url).searchParams;
 }
 
-describe("Outbound deliveries (F-8)", () => {
+describe("Outbound deliveries", () => {
   it("lists deliveries with app, endpoint, status, attempts, response and the Test badge", async () => {
     routes({
       [`GET ${DELIVERIES}`]: page([
@@ -179,7 +179,7 @@ describe("Outbound deliveries (F-8)", () => {
   });
 });
 
-describe("Delivery detail (F-9)", () => {
+describe("Delivery detail", () => {
   const PATH = `/webhooks?tab=outbound&id=${DLV_ID}`;
 
   it("shows ids, facts, payload and the attempt timeline with redacted headers", async () => {
@@ -294,7 +294,7 @@ describe("Delivery detail (F-9)", () => {
   });
 });
 
-describe("Inbound webhooks (F-10)", () => {
+describe("Inbound webhooks", () => {
   it("lists callbacks with result and signature as text, filtered by mode", async () => {
     const api = routes({
       [`GET ${INBOUND}`]: page([

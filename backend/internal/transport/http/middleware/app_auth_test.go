@@ -127,8 +127,8 @@ func (failingResolver) Lookup(context.Context, string) (*domain.App, *domain.API
 	return nil, nil, errors.New("db down")
 }
 
-// T-11 / AC-3: the check order of the spec. Key and app state are only
-// reported to a caller that signed with the key's secret.
+// Checks run in the order api/openapi.yaml documents for /v1. Key and app
+// state are only reported to a caller that signed with the key's secret.
 func TestAppAuthOrder(t *testing.T) {
 	f := newAuthFixture(t)
 	past := time.Now().Add(-time.Minute)
@@ -194,8 +194,8 @@ func TestAppAuthOrder(t *testing.T) {
 	}
 }
 
-// T-11: a replayed signature is refused and does not touch the key again;
-// the app and key reach the handler.
+// A replayed signature is refused and does not touch the key again; the app
+// and key reach the handler.
 func TestAppAuthReplayAndContext(t *testing.T) {
 	f := newAuthFixture(t)
 	c := f.addKey(t, "acme", domain.EnvTest, nil)
@@ -222,7 +222,7 @@ func TestAppAuthReplayAndContext(t *testing.T) {
 	}
 }
 
-// AC-6: a failing touch is logged and never fails the request.
+// A failing touch is logged and never fails the request.
 func TestAppAuthTouchFailureIsLogged(t *testing.T) {
 	f := newAuthFixture(t)
 	c := f.addKey(t, "acme", domain.EnvLive, nil)
@@ -235,8 +235,8 @@ func TestAppAuthTouchFailureIsLogged(t *testing.T) {
 	}
 }
 
-// T-10 / AC-4: a key whose row or header environment disagrees with its app
-// looks unknown to the caller and is a high-severity security event.
+// A key whose row or header environment disagrees with its app looks unknown
+// to the caller and is a high-severity security event.
 func TestAppAuthEnvironmentMismatch(t *testing.T) {
 	f := newAuthFixture(t)
 	rowMismatch := f.addKey(t, "acme", domain.EnvLive, func(k *domain.APIKey) {
@@ -268,8 +268,8 @@ func TestAppAuthEnvironmentMismatch(t *testing.T) {
 	}
 }
 
-// T-11 / AC-11: security logs name the app and key by public id and hint,
-// never the full key, its hash, the secret or the body.
+// Security logs name the app and key by public id and hint, never the full
+// key, its hash, the secret or the body.
 func TestAppAuthLogsNoSecrets(t *testing.T) {
 	f := newAuthFixture(t)
 	past := time.Now().Add(-time.Minute)

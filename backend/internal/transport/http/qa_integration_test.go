@@ -29,8 +29,8 @@ func countOrders(t *testing.T, e *e2e, orderID string) int {
 	return n
 }
 
-// AC-15: concurrent duplicates of one order_id without an Idempotency-Key
-// still create exactly one payment, and every caller gets that payment.
+// Concurrent duplicates of one order_id without an Idempotency-Key still
+// create exactly one payment, and every caller gets that payment.
 func TestIntegrationConcurrentOrderWithoutIdempotencyKey(t *testing.T) {
 	e := newE2E(t)
 
@@ -69,8 +69,8 @@ func TestIntegrationConcurrentOrderWithoutIdempotencyKey(t *testing.T) {
 	}
 }
 
-// AC-15: concurrent requests for one order_id with different amounts create
-// one payment; the losers with another amount get 409 conflict.
+// Concurrent requests for one order_id with different amounts create one
+// payment; the losers with another amount get 409 conflict.
 func TestIntegrationConcurrentOrderConflictingAmounts(t *testing.T) {
 	e := newE2E(t)
 
@@ -117,7 +117,7 @@ func TestIntegrationConcurrentOrderConflictingAmounts(t *testing.T) {
 	}
 }
 
-// AC-10: concurrent rotations never pass the 10 usable keys limit.
+// Concurrent rotations never pass the 10 usable keys limit.
 func TestIntegrationConcurrentRotateRespectsLimit(t *testing.T) {
 	e := newE2E(t)
 	actor := domain.WithActor(context.Background(), domain.SystemActor("test"))
@@ -157,8 +157,8 @@ func TestIntegrationConcurrentRotateRespectsLimit(t *testing.T) {
 	}
 }
 
-// AC-14: GET /v1/payments/{id} is scoped to the calling app for both the
-// legacy integer and the pay_ id.
+// GET /v1/payments/{id} is scoped to the calling app for both the legacy
+// integer and the pay_ id.
 func TestIntegrationGetPaymentScopedToCallingApp(t *testing.T) {
 	e := newE2E(t)
 	actor := domain.WithActor(context.Background(), domain.SystemActor("test"))
@@ -180,9 +180,9 @@ func TestIntegrationGetPaymentScopedToCallingApp(t *testing.T) {
 	expectError(t, e.call(http.MethodGet, "/v1/payments/acme:ord-1", legacyKey, legacySecret, ""), http.StatusBadRequest, domain.CodeInvalidRequest)
 }
 
-// AC-5, AC-6: against Postgres, revocation and disabling take effect on the
-// next request with no cache, rotation keeps both keys working, and
-// last_used_at is written once per minute.
+// Against Postgres, revocation and disabling take effect on the next request
+// with no cache, rotation keeps both keys working, and last_used_at is
+// written once per minute.
 func TestIntegrationKeyStateTakesEffectImmediately(t *testing.T) {
 	e := newE2E(t)
 	actor := domain.WithActor(context.Background(), domain.SystemActor("test"))

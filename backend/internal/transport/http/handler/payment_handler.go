@@ -1,16 +1,5 @@
-// Package handler contains HTTP handlers for the KeiPay API.
-//
-// Handler Responsibilities:
-// - Parse HTTP requests (JSON body, query params, path params)
-// - Validate input using DTO binding tags
-// - Call service layer with validated data
-// - Return HTTP responses using the response package
-//
-// Handlers MUST NOT contain business logic. All business rules belong in the
-// service layer. This separation ensures:
-// - Testability: Services can be tested without HTTP overhead
-// - Reusability: Business logic can be exposed via other transports (gRPC, etc.)
-// - Maintainability: Changes to HTTP concerns don't affect business logic
+// Package handler holds the Gin handlers: parse the request, call a service,
+// write the response. Business rules live in the service layer.
 package handler
 
 import (

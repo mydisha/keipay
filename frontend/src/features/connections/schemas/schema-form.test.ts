@@ -11,7 +11,7 @@ import {
   type SchemaValues,
 } from "./schema-form";
 
-// T-50: the zod builder behind every provider form.
+// The zod builder behind every provider form.
 
 function field(overrides: Partial<SchemaField> & Pick<SchemaField, "key" | "type">): SchemaField {
   return { label: overrides.key, description: "", secret: false, required: false, default: null, ...overrides };
@@ -32,7 +32,7 @@ function errors(fields: SchemaField[], values: SchemaValues, mode: "create" | "r
 const credentials = provider().credential_schema.fields;
 const settings = provider().settings_schema.fields;
 
-describe("schemaFormSchema (T-50)", () => {
+describe("schemaFormSchema", () => {
   it("requires required fields in create mode, after trimming", () => {
     expect(errors(credentials, { secret_key: "  ", callback_token: "" })).toEqual({
       secret_key: "This field is required.",
@@ -107,7 +107,7 @@ describe("schemaFormSchema (T-50)", () => {
   });
 });
 
-describe("schema defaults and payloads (T-50)", () => {
+describe("schema defaults and payloads", () => {
   it("prefills defaults and current values but never secrets", () => {
     const fields = [
       field({ key: "lifetime", type: "integer", default: 3600 }),

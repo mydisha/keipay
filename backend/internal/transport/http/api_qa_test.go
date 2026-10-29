@@ -11,10 +11,8 @@ import (
 	"github.com/mydisha/keipay/backend/internal/domain"
 )
 
-// Cases found missing at the HTTP level during QA of phase 1.
-
-// AC-11, AC-18: an email that differs only in case or Unicode normalization
-// is the same account, for creating, renaming and signing in.
+// An email that differs only in case or Unicode normalization is the same
+// account, for creating, renaming and signing in.
 func TestEmailVariantsAreOneAccountOverHTTP(t *testing.T) {
 	f := newAPI(t, "")
 	owner := f.signIn(t, f.owner)
@@ -51,8 +49,8 @@ func TestEmailVariantsAreOneAccountOverHTTP(t *testing.T) {
 	}
 }
 
-// AC-7, AC-19: logout without a session (or with a dead one) is a quiet 204
-// that writes no audit row and still clears the cookie.
+// Logout without a session (or with a dead one) is a quiet 204 that writes no
+// audit row and still clears the cookie.
 func TestLogoutWithoutSessionWritesNoAudit(t *testing.T) {
 	f := newAPI(t, "")
 	before := len(f.audit.actions())
@@ -86,7 +84,7 @@ func TestLogoutWithoutSessionWritesNoAudit(t *testing.T) {
 	}
 }
 
-// AC-17: the password gate applies to permission-free routes too; only the
+// The password gate applies to permission-free routes too; only the
 // allow-list passes, and logout ends the pending user's session.
 func TestPendingPasswordChangeCanSignOut(t *testing.T) {
 	f := newAPI(t, "")

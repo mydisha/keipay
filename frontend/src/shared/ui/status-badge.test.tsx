@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { StatusBadge, statusTone } from "./status-badge";
 
-describe("StatusBadge (T-24)", () => {
+describe("StatusBadge", () => {
   it.each([
     ["PENDING", "Pending", "warning"],
     ["PAID", "Paid", "success"],

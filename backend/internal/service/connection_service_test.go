@@ -105,7 +105,6 @@ func (f *connFixture) stored(t *testing.T, publicID string) provider.Credentials
 	return acc.Credentials
 }
 
-// T-10 / AC-5, AC-6
 func TestConnectionCreate(t *testing.T) {
 	f := newConnFixture(t)
 	d, err := f.svc.Create(adminCtx(), CreateConnectionInput{
@@ -205,7 +204,6 @@ func TestConnectionCreateDuplicateNameConflicts(t *testing.T) {
 	}
 }
 
-// T-11 / AC-8
 func TestConnectionUpdate(t *testing.T) {
 	f := newConnFixture(t)
 	c := f.addConnection(t, "fake-test", domain.EnvTest)
@@ -263,7 +261,6 @@ func TestConnectionUpdate(t *testing.T) {
 	}
 }
 
-// T-12 / AC-9
 func TestConnectionUpdateCredentials(t *testing.T) {
 	f := newConnFixture(t)
 	c := f.addConnection(t, "fake-test", domain.EnvTest)
@@ -319,7 +316,6 @@ func TestConnectionUpdateCredentials(t *testing.T) {
 	}
 }
 
-// T-13 / AC-10
 func TestConnectionReplaceChannels(t *testing.T) {
 	f := newConnFixture(t)
 	c := f.addConnection(t, "fake-test", domain.EnvTest)
@@ -374,7 +370,6 @@ func TestConnectionReplaceChannels(t *testing.T) {
 	}
 }
 
-// T-14 / AC-11
 func TestConnectionTestOutcomes(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -448,7 +443,6 @@ func TestConnectionTestDecryptFailureIsAnError(t *testing.T) {
 	}
 }
 
-// T-15 / AC-12
 func TestConnectionDisableEnable(t *testing.T) {
 	f := newConnFixture(t)
 	ctx := adminCtx()

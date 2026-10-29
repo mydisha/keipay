@@ -41,7 +41,7 @@ func (q *fakeQueue) DeleteTask(queue, id string) error {
 	return nil
 }
 
-// T-B27 / AC-9: overdue deliveries get their next attempt queued now; a task
+// Overdue deliveries get their next attempt queued now; a task
 // still holding the id (archived) is replaced; an active one is left alone.
 func TestSweeper(t *testing.T) {
 	x := newFwdFixture(t, 5)

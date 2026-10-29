@@ -108,8 +108,12 @@ postgres implementation → migration in `backend/migrations/` → wire in main.
    `(app_id, idempotency_key)` (checked first, with a request fingerprint)
    and per `(app_id, order_id)`.
 3. **HMAC both ways, different secrets**: inbound `/v1/*` signs
-   `"{timestamp}.{rawBody}"` with the secret of the API key used (+ Redis
-   nonce). Outbound events are signed per webhook endpoint (`whe_…`) as
+   `"{timestamp}.{rawBody}"` (version 1) or, with `X-Signature-Version: 2`,
+   `"{timestamp}.{X-Nonce}.{METHOD}.{path}.{rawBody}"` with the secret of
+   the API key used; the signature (v1) or the nonce (v2) is remembered in
+   Redis for 15 minutes, and the replay check fails closed (`503
+   auth_unavailable`) when Redis does not answer. Failed authentications
+   are limited per IP and per key. Outbound events are signed per webhook endpoint (`whe_…`) as
    `X-KeiPay-Signature: t=…,v1=…` over `"{t}.{body}"`, one `v1` per valid
    secret during a rotation overlap; endpoints migrated from an app's old
    `webhook_url` also send `X-Kei-Signature` (raw body, current secret) and

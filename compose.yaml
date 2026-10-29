@@ -5,8 +5,11 @@ name: keipay
 # For local development, `make up` starts only postgres + redis.
 #
 # Required in .env (or the shell): ENCRYPTION_KEY (`openssl rand -hex 32`).
-# Set HTTP_BASE_URL to the public URL gateways call back. Optional: SETUP_TOKEN,
-# TRUSTED_PROXIES, COOKIE_SECURE and the session/sign-in limits (.env.example).
+# Set HTTP_BASE_URL to the public URL gateways call back, and SETUP_TOKEN
+# (required in production, the default APP_ENV here). Optional:
+# TRUSTED_PROXIES, COOKIE_SECURE, HSTS_ENABLED and the session, sign-in,
+# /v1 and callback limits (.env.example). Change POSTGRES_PASSWORD from its
+# default and give Redis a password before exposing the stack.
 # XENDIT_SECRET_KEY and XENDIT_CALLBACK_TOKEN are deprecated: imported once into
 # a connection on first start, then ignored.
 # They are not enforced here so `make up` works before .env is filled in;
@@ -37,11 +40,18 @@ x-keipay-env: &keipay-env
   XENDIT_CALLBACK_TOKEN: ${XENDIT_CALLBACK_TOKEN:-}
   ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
   COOKIE_SECURE: ${COOKIE_SECURE:-auto}
+  HSTS_ENABLED: ${HSTS_ENABLED:-auto}
   SESSION_IDLE_TIMEOUT: ${SESSION_IDLE_TIMEOUT:-30m}
   SESSION_ABSOLUTE_TIMEOUT: ${SESSION_ABSOLUTE_TIMEOUT:-12h}
   LOGIN_MAX_FAILURES_PER_IP: ${LOGIN_MAX_FAILURES_PER_IP:-20}
   LOGIN_MAX_FAILURES_PER_EMAIL: ${LOGIN_MAX_FAILURES_PER_EMAIL:-5}
   LOGIN_FAILURE_WINDOW: ${LOGIN_FAILURE_WINDOW:-15m}
+  V1_AUTH_MAX_FAILURES_PER_IP: ${V1_AUTH_MAX_FAILURES_PER_IP:-100}
+  V1_AUTH_MAX_FAILURES_PER_KEY: ${V1_AUTH_MAX_FAILURES_PER_KEY:-50}
+  V1_AUTH_FAILURE_WINDOW: ${V1_AUTH_FAILURE_WINDOW:-15m}
+  CALLBACK_MAX_REJECTED_PER_IP: ${CALLBACK_MAX_REJECTED_PER_IP:-60}
+  CALLBACK_MAX_REJECTED_PER_CONNECTION: ${CALLBACK_MAX_REJECTED_PER_CONNECTION:-60}
+  CALLBACK_REJECTED_WINDOW: ${CALLBACK_REJECTED_WINDOW:-15m}
   TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
   SETUP_TOKEN: ${SETUP_TOKEN:-}
   RUN_WORKER: "true"

@@ -1,21 +1,13 @@
-import type { ReactNode } from "react";
 import { strings } from "@/shared/lib/strings";
-import { Card } from "@/shared/ui/card";
+import { Card, CardContent } from "@/shared/ui/card";
 import { DateTimeText } from "@/shared/ui/date-time-text";
+import { Fact, FactList } from "@/shared/ui/fact-list";
 import { JsonViewer } from "@/shared/ui/json-viewer";
+import { Section } from "@/shared/ui/section";
 import { StatusBadge } from "@/shared/ui/status-badge";
 import { DefaultConnection } from "../components/default-connection";
 import { EnvironmentBadge } from "../components/environment-badge";
 import { useDetailApp } from "./app-detail-page";
-
-function Fact({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="grid min-w-0 gap-1 sm:grid-cols-[12rem_minmax(0,1fr)] sm:gap-4">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="min-w-0">{children}</dd>
-    </div>
-  );
-}
 
 function UrlValue({ value }: { value: string }) {
   if (!value) return <span className="text-muted-foreground">{strings.common.notSet}</span>;
@@ -33,57 +25,49 @@ export function AppOverviewTab() {
 
   return (
     <div className="grid gap-6">
-      <section className="grid gap-3" aria-labelledby="app-details-heading">
-        <h2 id="app-details-heading" className="text-base font-semibold">
-          {strings.apps.detailsTitle}
-        </h2>
-        <Card className="p-4">
-          <dl className="grid gap-3 text-sm">
-            <Fact label={strings.apps.slug}>
-              <span className="font-mono text-[0.8125rem]">{app.slug}</span>
-            </Fact>
-            <Fact label={strings.apps.environment}>
-              <EnvironmentBadge environment={app.environment} />
-            </Fact>
-            <Fact label={strings.apps.status}>
-              <StatusBadge status={app.status} />
-            </Fact>
-            <Fact label={strings.apps.created}>
-              <DateTimeText value={app.created_at} />
-            </Fact>
-            <Fact label={strings.apps.updated}>
-              <DateTimeText value={app.updated_at} />
-            </Fact>
-            <Fact label={strings.apps.redirectSuccessUrl}>
-              <UrlValue value={app.redirect_success_url} />
-            </Fact>
-            <Fact label={strings.apps.redirectFailureUrl}>
-              <UrlValue value={app.redirect_failure_url} />
-            </Fact>
-          </dl>
+      <Section id="app-details-heading" title={strings.apps.detailsTitle}>
+        <Card>
+          <CardContent>
+            <FactList>
+              <Fact label={strings.apps.slug} mono>
+                {app.slug}
+              </Fact>
+              <Fact label={strings.apps.environment}>
+                <EnvironmentBadge environment={app.environment} />
+              </Fact>
+              <Fact label={strings.apps.status}>
+                <StatusBadge status={app.status} />
+              </Fact>
+              <Fact label={strings.apps.created}>
+                <DateTimeText value={app.created_at} />
+              </Fact>
+              <Fact label={strings.apps.updated}>
+                <DateTimeText value={app.updated_at} />
+              </Fact>
+              <Fact label={strings.apps.redirectSuccessUrl}>
+                <UrlValue value={app.redirect_success_url} />
+              </Fact>
+              <Fact label={strings.apps.redirectFailureUrl}>
+                <UrlValue value={app.redirect_failure_url} />
+              </Fact>
+            </FactList>
+          </CardContent>
         </Card>
-      </section>
-      <section className="grid gap-3" aria-labelledby="app-connection-heading">
-        <div className="grid gap-1">
-          <h2 id="app-connection-heading" className="text-base font-semibold">
-            {strings.apps.defaultConnection}
-          </h2>
-          <p className="text-sm text-muted-foreground">{strings.apps.defaultConnectionBody}</p>
-        </div>
-        <Card className="p-4 text-sm">
-          <DefaultConnection app={app} />
+      </Section>
+      <Section id="app-connection-heading" title={strings.apps.defaultConnection} description={strings.apps.defaultConnectionBody}>
+        <Card>
+          <CardContent className="text-sm">
+            <DefaultConnection app={app} />
+          </CardContent>
         </Card>
-      </section>
-      <section className="grid gap-3" aria-labelledby="app-metadata-heading">
-        <h2 id="app-metadata-heading" className="text-base font-semibold">
-          {strings.apps.metadata}
-        </h2>
+      </Section>
+      <Section id="app-metadata-heading" title={strings.apps.metadata}>
         {hasMetadata ? (
           <JsonViewer value={app.metadata} label={strings.apps.metadata} defaultOpen />
         ) : (
           <p className="text-sm text-muted-foreground">{strings.apps.noMetadata}</p>
         )}
-      </section>
+      </Section>
     </div>
   );
 }

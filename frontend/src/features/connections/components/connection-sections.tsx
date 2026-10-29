@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { CircleAlertIcon, KeyRoundIcon, Loader2Icon } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -8,7 +8,7 @@ import { errorMessage } from "@/shared/api/error-message";
 import { strings } from "@/shared/lib/strings";
 import { Alert, AlertDescription } from "@/shared/ui/alert";
 import { Button } from "@/shared/ui/button";
-import { Card } from "@/shared/ui/card";
+import { Card, CardContent } from "@/shared/ui/card";
 import { DateTimeText } from "@/shared/ui/date-time-text";
 import {
   Dialog,
@@ -18,9 +18,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/shared/ui/dialog";
+import { Fact, FactList } from "@/shared/ui/fact-list";
 import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from "@/shared/ui/form";
 import { IdText } from "@/shared/ui/id-text";
 import { Input } from "@/shared/ui/input";
+import { Section } from "@/shared/ui/section";
 import {
   useUpdateConnection,
   type Connection,
@@ -33,69 +35,35 @@ import { LastTest } from "./last-test";
 import { ReplaceCredentialsForm } from "./replace-credentials-form";
 import { SchemaFields } from "./schema-fields";
 
-export function Section({
-  id,
-  title,
-  description,
-  action,
-  children,
-}: {
-  id: string;
-  title: string;
-  description?: string;
-  action?: ReactNode;
-  children: ReactNode;
-}) {
-  const headingId = `connection-${id}-heading`;
-  return (
-    <section className="grid gap-3" aria-labelledby={headingId}>
-      <div className="flex flex-wrap items-end justify-between gap-2">
-        <div className="grid gap-1">
-          <h2 id={headingId} className="text-base font-semibold">
-            {title}
-          </h2>
-          {description && <p className="text-sm text-muted-foreground">{description}</p>}
-        </div>
-        {action}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function Fact({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="grid min-w-0 gap-1 sm:grid-cols-[12rem_minmax(0,1fr)] sm:gap-4">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="min-w-0">{children}</dd>
-    </div>
-  );
-}
+/** The heading id of a section of the connection detail page. */
+export const connectionHeadingId = (id: string) => `connection-${id}-heading`;
 
 /** Id, provider, times and the last test with its message. */
 export function ConnectionFacts({ connection, providerName }: { connection: Connection; providerName: string }) {
   return (
-    <Card className="p-4">
-      <dl className="grid gap-3 text-sm">
-        <Fact label={strings.connections.connectionId}>
-          <IdText value={connection.id} label={strings.connections.connectionId} />
-        </Fact>
-        <Fact label={strings.connections.provider}>{providerName}</Fact>
-        <Fact label={strings.connections.created}>
-          <DateTimeText value={connection.created_at} />
-        </Fact>
-        <Fact label={strings.connections.updated}>
-          <DateTimeText value={connection.updated_at} />
-        </Fact>
-        <Fact label={strings.connections.lastTest}>
-          <div className="grid gap-1">
-            <LastTest connection={connection} />
-            {connection.last_test_status === "failed" && connection.last_test_error && (
-              <p className="text-sm">{connection.last_test_error}</p>
-            )}
-          </div>
-        </Fact>
-      </dl>
+    <Card>
+      <CardContent>
+        <FactList>
+          <Fact label={strings.connections.connectionId}>
+            <IdText value={connection.id} label={strings.connections.connectionId} />
+          </Fact>
+          <Fact label={strings.connections.provider}>{providerName}</Fact>
+          <Fact label={strings.connections.created}>
+            <DateTimeText value={connection.created_at} />
+          </Fact>
+          <Fact label={strings.connections.updated}>
+            <DateTimeText value={connection.updated_at} />
+          </Fact>
+          <Fact label={strings.connections.lastTest}>
+            <div className="grid gap-1">
+              <LastTest connection={connection} />
+              {connection.last_test_status === "failed" && connection.last_test_error && (
+                <p className="text-sm">{connection.last_test_error}</p>
+              )}
+            </div>
+          </Fact>
+        </FactList>
+      </CardContent>
     </Card>
   );
 }
@@ -116,10 +84,10 @@ export function CredentialHints({
 
   return (
     <Section
-      id="credentials"
+      id={connectionHeadingId("credentials")}
       title={strings.connections.credentialsTitle}
       description={strings.connections.credentialsSectionBody}
-      action={
+      actions={
         canWrite && (
           <Button variant="outline" onClick={() => setReplacing(true)}>
             <KeyRoundIcon aria-hidden="true" />
@@ -128,16 +96,16 @@ export function CredentialHints({
         )
       }
     >
-      <Card className="p-4">
-        <dl className="grid gap-3 text-sm">
-          {connection.credentials.map((hint) => (
-            <Fact key={hint.key} label={labelOf(hint.key)}>
-              <span className="font-mono text-[0.8125rem]">
+      <Card>
+        <CardContent>
+          <FactList>
+            {connection.credentials.map((hint) => (
+              <Fact key={hint.key} label={labelOf(hint.key)} mono>
                 {hint.last4 ? strings.connections.maskedHint(hint.last4) : strings.connections.stored}
-              </span>
-            </Fact>
-          ))}
-        </dl>
+              </Fact>
+            ))}
+          </FactList>
+        </CardContent>
       </Card>
       <Dialog open={replacing} onOpenChange={setReplacing}>
         {replacing && (
@@ -236,54 +204,56 @@ export function DetailsForm({
   }
 
   return (
-    <Card className="p-4">
-      <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} noValidate className="grid gap-5">
-          {formError && (
-            <Alert variant="danger">
-              <CircleAlertIcon aria-hidden="true" />
-              <AlertDescription>{formError}</AlertDescription>
-            </Alert>
-          )}
-          <fieldset disabled={pending || readOnly} className="grid gap-5">
-            <FormField
-              control={form.control}
-              name="name"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>{strings.connections.name}</FormLabel>
-                  <FormControl>
-                    <Input autoComplete="off" autoCapitalize="off" spellCheck={false} className="font-mono" {...field} />
-                  </FormControl>
-                  <FormDescription>{strings.connections.nameHint}</FormDescription>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-            <div className="grid gap-4 border-t pt-4">
-              <h3 className="text-sm font-semibold">{strings.connections.settingsTitle}</h3>
-              {settingsFields.length === 0 ? (
-                <p className="text-sm text-muted-foreground">{strings.connections.noSettings}</p>
-              ) : (
-                <SchemaFields
-                  control={form.control}
-                  prefix="settings"
-                  fields={settingsFields}
-                  disabled={pending || readOnly}
-                />
-              )}
-            </div>
-          </fieldset>
-          {!readOnly && (
-            <div className="flex justify-end">
-              <Button type="submit" disabled={pending || unsupported}>
-                {pending && <Loader2Icon className="animate-spin" aria-hidden="true" />}
-                {pending ? strings.common.saving : strings.connections.saveDetails}
-              </Button>
-            </div>
-          )}
-        </form>
-      </Form>
+    <Card>
+      <CardContent>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} noValidate className="grid gap-5">
+            {formError && (
+              <Alert variant="danger">
+                <CircleAlertIcon aria-hidden="true" />
+                <AlertDescription>{formError}</AlertDescription>
+              </Alert>
+            )}
+            <fieldset disabled={pending || readOnly} className="grid gap-5">
+              <FormField
+                control={form.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{strings.connections.name}</FormLabel>
+                    <FormControl>
+                      <Input autoComplete="off" autoCapitalize="off" spellCheck={false} className="font-mono" {...field} />
+                    </FormControl>
+                    <FormDescription>{strings.connections.nameHint}</FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <div className="grid gap-4 border-t pt-4">
+                <h3 className="text-sm font-semibold">{strings.connections.settingsTitle}</h3>
+                {settingsFields.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">{strings.connections.noSettings}</p>
+                ) : (
+                  <SchemaFields
+                    control={form.control}
+                    prefix="settings"
+                    fields={settingsFields}
+                    disabled={pending || readOnly}
+                  />
+                )}
+              </div>
+            </fieldset>
+            {!readOnly && (
+              <div className="flex justify-end">
+                <Button type="submit" disabled={pending || unsupported}>
+                  {pending && <Loader2Icon className="animate-spin" aria-hidden="true" />}
+                  {pending ? strings.common.saving : strings.connections.saveDetails}
+                </Button>
+              </div>
+            )}
+          </form>
+        </Form>
+      </CardContent>
     </Card>
   );
 }

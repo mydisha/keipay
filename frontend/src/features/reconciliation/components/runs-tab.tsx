@@ -10,6 +10,7 @@ import { DataTable, type DataColumn } from "@/shared/ui/data-table";
 import { DateTimeText } from "@/shared/ui/date-time-text";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { IdText } from "@/shared/ui/id-text";
+import { Section } from "@/shared/ui/section";
 import { isRunStatus, RUN_STATUSES, useReconciliationRuns, type ReconciliationRun } from "../api/runs";
 import { formatRunRange } from "../lib/format-range";
 import { runPath, type ReconciliationSearch } from "../lib/reconciliation-search";
@@ -89,13 +90,7 @@ export function RunsTab({ search }: { search: ReconciliationSearch }) {
   const clearFilters = () => search.setFilter("status", null);
 
   return (
-    <section className="grid gap-3" aria-labelledby="runs-heading">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 id="runs-heading" className="text-base font-semibold">
-          {strings.reconciliation.runsTitle}
-        </h2>
-        {canWrite && <RunButton />}
-      </div>
+    <Section id="runs-heading" title={strings.reconciliation.runsTitle} actions={canWrite && <RunButton />}>
       <DataTable
         caption={strings.reconciliation.runsTitle}
         columns={columns}
@@ -145,6 +140,6 @@ export function RunsTab({ search }: { search: ReconciliationSearch }) {
           )
         }
       />
-    </section>
+    </Section>
   );
 }

@@ -7,6 +7,7 @@ import { Button } from "@/shared/ui/button";
 import { DataTable, type DataColumn } from "@/shared/ui/data-table";
 import { DateTimeText } from "@/shared/ui/date-time-text";
 import { EmptyState } from "@/shared/ui/empty-state";
+import { Section } from "@/shared/ui/section";
 import { useAuditLogs, type AuditLog } from "../api/audit-logs";
 import { AuditEntryDialog } from "./audit-entry-dialog";
 
@@ -58,13 +59,7 @@ export function AuditLogSection() {
   ];
 
   return (
-    <section className="grid gap-3" aria-labelledby="audit-log-heading">
-      <div className="space-y-1">
-        <h2 id="audit-log-heading" className="text-base font-semibold">
-          {strings.settings.auditTitle}
-        </h2>
-        <p className="text-sm text-muted-foreground">{strings.settings.auditDescription}</p>
-      </div>
+    <Section id="audit-log-heading" title={strings.settings.auditTitle} description={strings.settings.auditDescription}>
       <DataTable
         caption={strings.settings.auditTitle}
         columns={columns}
@@ -91,6 +86,6 @@ export function AuditLogSection() {
         }
       />
       <AuditEntryDialog entry={selected} onClose={() => setSelected(null)} />
-    </section>
+    </Section>
   );
 }

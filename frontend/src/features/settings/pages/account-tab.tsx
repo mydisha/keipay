@@ -4,8 +4,10 @@ import { Link } from "react-router";
 import { useMe } from "@/features/auth/api/auth";
 import { strings } from "@/shared/lib/strings";
 import { Button } from "@/shared/ui/button";
-import { Card } from "@/shared/ui/card";
+import { Card, CardContent, CardFooter } from "@/shared/ui/card";
 import { ErrorState } from "@/shared/ui/error-state";
+import { Fact, FactList } from "@/shared/ui/fact-list";
+import { Section } from "@/shared/ui/section";
 import { Skeleton } from "@/shared/ui/skeleton";
 
 export function AccountTab() {
@@ -15,14 +17,15 @@ export function AccountTab() {
   if (me.data) {
     const { user } = me.data;
     details = (
-      <dl className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-6 gap-y-2 text-sm">
-        <dt className="text-muted-foreground">{strings.settings.name}</dt>
-        <dd className="min-w-0 break-words">{user.name}</dd>
-        <dt className="text-muted-foreground">{strings.settings.email}</dt>
-        <dd className="min-w-0 break-all">{user.email}</dd>
-        <dt className="text-muted-foreground">{strings.settings.role}</dt>
-        <dd>{strings.roles[user.role] ?? user.role}</dd>
-      </dl>
+      <FactList labelWidth="sm">
+        <Fact label={strings.settings.name}>
+          <span className="break-words">{user.name}</span>
+        </Fact>
+        <Fact label={strings.settings.email}>
+          <span className="break-all">{user.email}</span>
+        </Fact>
+        <Fact label={strings.settings.role}>{strings.roles[user.role] ?? user.role}</Fact>
+      </FactList>
     );
   } else if (me.isError) {
     details = <ErrorState error={me.error} onRetry={() => void me.refetch()} />;
@@ -37,16 +40,10 @@ export function AccountTab() {
   }
 
   return (
-    <section className="grid gap-3" aria-labelledby="account-heading">
-      <div className="space-y-1">
-        <h2 id="account-heading" className="text-base font-semibold">
-          {strings.settings.accountTitle}
-        </h2>
-        <p className="text-sm text-muted-foreground">{strings.settings.accountBody}</p>
-      </div>
-      <Card className="grid gap-4 p-4">
-        {details}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+    <Section id="account-heading" title={strings.settings.accountTitle} description={strings.settings.accountBody}>
+      <Card>
+        <CardContent>{details}</CardContent>
+        <CardFooter className="justify-between">
           <p className="text-sm text-muted-foreground">{strings.settings.accountPasswordBody}</p>
           <Button asChild variant="outline">
             <Link to="/change-password">
@@ -54,8 +51,8 @@ export function AccountTab() {
               {strings.shell.changePassword}
             </Link>
           </Button>
-        </div>
+        </CardFooter>
       </Card>
-    </section>
+    </Section>
   );
 }

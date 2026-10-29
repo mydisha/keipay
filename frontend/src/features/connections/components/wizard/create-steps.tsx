@@ -195,7 +195,7 @@ export function CreateConnectionSteps({ providers, initialEnvironment, onCreated
                           <Label
                             key={provider.name}
                             htmlFor={itemId}
-                            className="flex cursor-pointer items-start gap-3 rounded-lg border bg-card p-3 font-normal has-[[data-state=checked]]:border-primary"
+                            className="flex cursor-pointer items-start gap-3 rounded-lg border bg-card p-4 font-normal shadow-xs has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:ring-1 has-[[data-state=checked]]:ring-primary"
                           >
                             <RadioGroupItem id={itemId} value={provider.name} className="mt-0.5" />
                             <span className="grid gap-0.5">

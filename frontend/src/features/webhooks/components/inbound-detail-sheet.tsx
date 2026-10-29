@@ -12,7 +12,7 @@ import { useInboundWebhook, type InboundWebhookDetail } from "../api/inbound";
 import { parseJsonBody } from "../lib/inbound-labels";
 import { eventDeliveriesPath } from "../lib/webhooks-search";
 import { isNotFound } from "./delivery-detail-sheet";
-import { DetailSection, DetailSkeleton, Fact } from "./detail-parts";
+import { DetailSection, DetailSkeleton, Fact, Facts } from "./detail-parts";
 import { ResultBadge, SignatureBadge } from "./inbound-badges";
 
 const linkClass =
@@ -52,7 +52,7 @@ function InboundDetail({ inbound }: { inbound: InboundWebhookDetail }) {
         </div>
         {inbound.result_detail && <p className="text-sm">{inbound.result_detail}</p>}
       </div>
-      <dl className="grid gap-3 text-sm">
+      <Facts>
         <Fact label={strings.webhooks.inboundId}>
           <IdText value={inbound.id} label={strings.webhooks.inboundId} />
         </Fact>
@@ -95,7 +95,7 @@ function InboundDetail({ inbound }: { inbound: InboundWebhookDetail }) {
             <span className="text-muted-foreground">{strings.common.none}</span>
           )}
         </Fact>
-      </dl>
+      </Facts>
       <RawBody inbound={inbound} />
     </div>
   );

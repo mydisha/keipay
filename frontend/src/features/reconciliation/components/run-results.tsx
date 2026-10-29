@@ -7,6 +7,8 @@ import { DataTable, type DataColumn } from "@/shared/ui/data-table";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { IdText } from "@/shared/ui/id-text";
 import { MoneyText } from "@/shared/ui/money-text";
+import { Section } from "@/shared/ui/section";
+import { StatCard } from "@/shared/ui/stat-card";
 import { StatusBadge } from "@/shared/ui/status-badge";
 import {
   isReconciliationResult,
@@ -76,13 +78,10 @@ function itemColumns(onOpen: (item: ReconciliationItem) => void): DataColumn<Rec
 /** One button per result with its count; pressing one filters the items. */
 function ResultCards({ summary, search }: { summary: RunSummary; search: RunSearch }) {
   return (
-    <section className="grid gap-3" aria-labelledby="results-heading">
-      <h2 id="results-heading" className="text-base font-semibold">
-        {strings.reconciliation.resultsTitle}
-      </h2>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8">
-        <Stat label={strings.reconciliation.total} value={summary.total} />
-        <Stat label={strings.reconciliation.unresolved} value={summary.unresolved} />
+    <Section id="results-heading" title={strings.reconciliation.resultsTitle}>
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 xl:grid-cols-8">
+        <StatCard label={strings.reconciliation.total} value={summary.total.toLocaleString("id-ID")} />
+        <StatCard label={strings.reconciliation.unresolved} value={summary.unresolved.toLocaleString("id-ID")} />
         {RECONCILIATION_RESULTS.map((result) => {
           const pressed = search.filters.result === result;
           return (
@@ -93,26 +92,17 @@ function ResultCards({ summary, search }: { summary: RunSummary; search: RunSear
               aria-label={`${strings.reconciliation.filterByResult(resultLabel(result))}: ${summary.results[result]}`}
               onClick={() => search.setResult(pressed ? null : result)}
               className={cn(
-                "grid gap-1 rounded-lg border bg-card p-3 text-left shadow-xs transition-colors outline-none hover:bg-accent focus-visible:ring-[3px] focus-visible:ring-ring/50",
+                "grid content-start gap-1 rounded-lg border bg-card p-4 text-left shadow-xs transition-colors outline-none hover:bg-muted/40 focus-visible:ring-[3px] focus-visible:ring-ring/50",
                 pressed && "border-primary ring-1 ring-primary",
               )}
             >
               <ResultBadge result={result} />
-              <span className="text-lg font-semibold tabular-nums">{summary.results[result].toLocaleString("id-ID")}</span>
+              <span className="text-2xl font-semibold tracking-tight tabular-nums">{summary.results[result].toLocaleString("id-ID")}</span>
             </button>
           );
         })}
       </div>
-    </section>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="grid gap-1 rounded-lg border bg-muted/40 p-3">
-      <span className="text-xs text-muted-foreground">{label}</span>
-      <span className="text-lg font-semibold tabular-nums">{value.toLocaleString("id-ID")}</span>
-    </div>
+    </Section>
   );
 }
 
@@ -126,10 +116,7 @@ function ItemsTable({ run, search }: { run: ReconciliationRun; search: RunSearch
   const resolvedValue = filters.resolved === null ? RESOLVED_ALL : filters.resolved ? "resolved" : "unresolved";
 
   return (
-    <section className="grid gap-3" aria-labelledby="items-heading">
-      <h2 id="items-heading" className="text-base font-semibold">
-        {strings.reconciliation.itemsTitle}
-      </h2>
+    <Section id="items-heading" title={strings.reconciliation.itemsTitle}>
       <DataTable
         caption={strings.reconciliation.itemsTitle}
         columns={itemColumns((item) => search.openItem(item.id))}
@@ -177,7 +164,7 @@ function ItemsTable({ run, search }: { run: ReconciliationRun; search: RunSearch
           />
         }
       />
-    </section>
+    </Section>
   );
 }
 

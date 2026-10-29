@@ -3,13 +3,15 @@ import { Link, useParams } from "react-router";
 import { RequirePermission, usePermission } from "@/features/auth/components/can";
 import { strings } from "@/shared/lib/strings";
 import { Alert, AlertDescription, AlertTitle } from "@/shared/ui/alert";
+import { BackLink } from "@/shared/ui/back-link";
 import { Button } from "@/shared/ui/button";
+import { Card, CardContent } from "@/shared/ui/card";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { ErrorState } from "@/shared/ui/error-state";
 import { PageHeader } from "@/shared/ui/page-header";
 import { itemsExportUrl, useReconciliationRun, type ReconciliationRun } from "../api/runs";
 import { ItemSheet } from "../components/item-sheet";
-import { BackToRuns, RunHeader, RunHeaderSkeleton } from "../components/run-header";
+import { backToRuns, RunHeader, RunHeaderSkeleton } from "../components/run-header";
 import { RunResults } from "../components/run-results";
 import { isNotFound } from "../lib/is-not-found";
 import { RUNS_TAB_PATH, useRunSearch } from "../lib/reconciliation-search";
@@ -41,15 +43,17 @@ function RunFailed({ run }: { run: ReconciliationRun }) {
 
 function RunInProgress({ run }: { run: ReconciliationRun }) {
   return (
-    <div role="status" className="flex items-start gap-3 rounded-lg border bg-card p-4" data-testid="run-progress">
-      <Loader2Icon className="mt-0.5 size-5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" aria-hidden="true" />
-      <div className="grid gap-1">
-        <p className="font-medium">{strings.reconciliation.progressTitle}</p>
-        <p className="text-sm text-muted-foreground">
-          {run.status === "queued" ? strings.reconciliation.progressQueued : strings.reconciliation.progressRunning}
-        </p>
-      </div>
-    </div>
+    <Card size="compact" role="status" data-testid="run-progress">
+      <CardContent className="flex items-start gap-3">
+        <Loader2Icon className="mt-0.5 size-5 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none" aria-hidden="true" />
+        <div className="grid gap-1">
+          <p className="font-medium">{strings.reconciliation.progressTitle}</p>
+          <p className="text-sm text-muted-foreground">
+            {run.status === "queued" ? strings.reconciliation.progressQueued : strings.reconciliation.progressRunning}
+          </p>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -71,7 +75,7 @@ function RunDetail({ id }: { id: string }) {
   if (run.isError) {
     return (
       <>
-        <BackToRuns />
+        <BackLink {...backToRuns} />
         <PageHeader title={strings.reconciliation.runTitle} />
         {isNotFound(run.error) ? (
           <EmptyState

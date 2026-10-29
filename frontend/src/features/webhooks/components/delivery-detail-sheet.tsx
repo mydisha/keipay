@@ -18,7 +18,7 @@ import { Timeline, type TimelineItem } from "@/shared/ui/timeline";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { useDelivery, useReplayDelivery, type WebhookDeliveryAttempt, type WebhookDeliveryDetail } from "../api/deliveries";
 import { TagBadge } from "./endpoint-badges";
-import { DetailSection, DetailSkeleton, Fact } from "./detail-parts";
+import { DetailSection, DetailSkeleton, Fact, Facts } from "./detail-parts";
 
 export function isNotFound(error: unknown): boolean {
   return isApiError(error) && (error.code === "not_found" || error.code === "invalid_request");
@@ -181,7 +181,7 @@ function DeliveryDetail({ delivery }: { delivery: WebhookDeliveryDetail }) {
         {canReplay && <ReplayButton delivery={delivery} />}
       </div>
 
-      <dl className="grid gap-3 text-sm">
+      <Facts>
         <Fact label={strings.webhooks.deliveryId}>
           <IdText value={delivery.id} label={strings.webhooks.deliveryId} />
         </Fact>
@@ -224,7 +224,7 @@ function DeliveryDetail({ delivery }: { delivery: WebhookDeliveryDetail }) {
             <span className="break-words text-danger-foreground">{delivery.last_error}</span>
           </Fact>
         )}
-      </dl>
+      </Facts>
 
       <JsonViewer value={delivery.payload} label={strings.webhooks.payload} />
 

@@ -9,8 +9,8 @@ import { isApiError } from "@/shared/api/errors";
 import { strings } from "@/shared/lib/strings";
 import { Button } from "@/shared/ui/button";
 import { ConfirmDialog } from "@/shared/ui/confirm-dialog";
+import { DetailHeader, DetailHeaderSkeleton } from "@/shared/ui/detail-header";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/shared/ui/dialog";
-import { Skeleton } from "@/shared/ui/skeleton";
 import { StatusBadge } from "@/shared/ui/status-badge";
 import {
   useDisableConnection,
@@ -19,8 +19,9 @@ import {
   type AppSummary,
   type Connection,
 } from "../api/connections";
-import { BackToConnections } from "./back-to-connections";
 import { LegacyUrlBadge } from "./legacy-url-badge";
+
+export const backToConnections = { to: "/connections", label: strings.connections.backToConnections };
 
 interface InUse {
   apps: AppSummary[];
@@ -89,44 +90,45 @@ export function ConnectionHeader({ connection, providerName }: { connection: Con
   }
 
   return (
-    <div className="grid gap-3">
-      <BackToConnections />
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="grid min-w-0 gap-2">
-          <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <h1 className="min-w-0 truncate font-mono text-xl font-semibold tracking-tight" title={connection.name}>
-              {connection.name}
-            </h1>
+    <>
+      <DetailHeader
+        back={backToConnections}
+        title={connection.name}
+        titleMono
+        description={providerName}
+        badges={
+          <>
             <EnvironmentBadge environment={connection.environment} />
             <StatusBadge status={connection.status} />
             {connection.legacy_webhook_alias && <LegacyUrlBadge />}
-          </div>
-          <p className="text-sm text-muted-foreground">{providerName}</p>
-        </div>
-        {canWrite && (
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={runTest} disabled={test.isPending}>
-              {test.isPending ? (
-                <Loader2Icon className="animate-spin" aria-hidden="true" />
+          </>
+        }
+        actions={
+          canWrite && (
+            <>
+              <Button variant="outline" onClick={runTest} disabled={test.isPending}>
+                {test.isPending ? (
+                  <Loader2Icon className="animate-spin" aria-hidden="true" />
+                ) : (
+                  <RotateCwIcon aria-hidden="true" />
+                )}
+                {test.isPending ? strings.connections.testing : strings.connections.testConnection}
+              </Button>
+              {isDisabled ? (
+                <Button variant="outline" onClick={() => setConfirming("enable")}>
+                  <CircleCheckIcon aria-hidden="true" />
+                  {strings.connections.enable}
+                </Button>
               ) : (
-                <RotateCwIcon aria-hidden="true" />
+                <Button variant="outline" onClick={() => setConfirming("disable")}>
+                  <BanIcon aria-hidden="true" />
+                  {strings.connections.disable}
+                </Button>
               )}
-              {test.isPending ? strings.connections.testing : strings.connections.testConnection}
-            </Button>
-            {isDisabled ? (
-              <Button variant="outline" onClick={() => setConfirming("enable")}>
-                <CircleCheckIcon aria-hidden="true" />
-                {strings.connections.enable}
-              </Button>
-            ) : (
-              <Button variant="outline" onClick={() => setConfirming("disable")}>
-                <BanIcon aria-hidden="true" />
-                {strings.connections.disable}
-              </Button>
-            )}
-          </div>
-        )}
-      </div>
+            </>
+          )
+        }
+      />
 
       <ConfirmDialog
         open={confirming === "disable"}
@@ -151,7 +153,7 @@ export function ConnectionHeader({ connection, providerName }: { connection: Con
         onConfirm={confirm}
       />
       <InUseDialog inUse={inUse} onClose={() => setInUse(null)} />
-    </div>
+    </>
   );
 }
 
@@ -191,11 +193,5 @@ function InUseDialog({ inUse, onClose }: { inUse: InUse | null; onClose: () => v
 }
 
 export function ConnectionHeaderSkeleton() {
-  return (
-    <div className="grid gap-3" aria-busy="true" data-testid="connection-header-skeleton">
-      <Skeleton className="h-4 w-32" />
-      <Skeleton className="h-7 w-64 max-w-full" />
-      <Skeleton className="h-4 w-40 max-w-full" />
-    </div>
-  );
+  return <DetailHeaderSkeleton testId="connection-header-skeleton" />;
 }

@@ -6,9 +6,11 @@ import (
 	"time"
 )
 
-// PaymentFilter narrows payment lists. AppPublicID is a canonical app_ id.
+// PaymentFilter narrows payment lists; nil fields match everything.
+// AppPublicID is a canonical app_ id; Environment is the owning app's.
 type PaymentFilter struct {
 	AppPublicID *string
+	Environment *Environment
 	Status      *PaymentStatus
 	From        *time.Time
 	To          *time.Time

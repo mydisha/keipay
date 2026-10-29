@@ -115,6 +115,7 @@ func main() {
 	auditRepo := postgres.NewAuditRepo(pool)
 	connRepo := postgres.NewConnectionRepo(pool)
 	merchantRepo := postgres.NewMerchantRepo(pool)
+	dashboardRepo := postgres.NewDashboardRepo(pool)
 	txMgr := postgres.NewTxManager(pool)
 
 	// The /v1 nonce store. API keys and apps are not cached, so a
@@ -211,6 +212,12 @@ func main() {
 		Log:        log,
 	})
 	inboundSvc := service.NewInboundService(inboundRepo)
+	dashboardSvc := service.NewDashboardService(service.DashboardDeps{
+		Dashboard:   dashboardRepo,
+		Connections: connRepo,
+		Payments:    paymentRepo,
+		Runs:        reconRepo,
+	})
 	hasher := service.NewBcryptHasher(service.DefaultBcryptCost)
 	userSvc := service.NewUserService(userRepo, txMgr, auditSvc, hasher)
 	authSvc, err := service.NewAuthService(service.AuthDeps{
@@ -270,6 +277,7 @@ func main() {
 		Payment:        handler.NewPaymentHandler(paymentSvc),
 		Webhook:        handler.NewWebhookHandler(webhookSvc, connSvc, log),
 		Admin:          handler.NewAdminHandler(paymentSvc, auditSvc),
+		Dashboard:      handler.NewDashboardHandler(dashboardSvc),
 		Reports:        handler.NewReportHandler(reportSvc, log),
 		Reconciliation: handler.NewReconciliationHandler(reconSvc, log),
 		Apps:           handler.NewAppHandler(appSvc),

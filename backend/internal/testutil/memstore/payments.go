@@ -157,7 +157,8 @@ func (s *Payments) List(_ context.Context, f domain.PaymentFilter, p domain.Page
 		if app, err := s.apps.GetByID(context.Background(), v.AppID); err == nil {
 			v.App = app.Summary()
 		}
-		if (f.AppPublicID != nil && v.App.PublicID != *f.AppPublicID) || (f.Status != nil && v.Status != *f.Status) ||
+		if (f.AppPublicID != nil && v.App.PublicID != *f.AppPublicID) || (f.Environment != nil && v.App.Environment != *f.Environment) ||
+			(f.Status != nil && v.Status != *f.Status) ||
 			(f.From != nil && v.CreatedAt.Before(*f.From)) || (f.To != nil && v.CreatedAt.After(*f.To)) {
 			continue
 		}

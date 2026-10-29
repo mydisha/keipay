@@ -40,6 +40,7 @@ type Deps struct {
 	Payment        *handler.PaymentHandler
 	Webhook        *handler.WebhookHandler
 	Admin          *handler.AdminHandler
+	Dashboard      *handler.DashboardHandler
 	Reports        *handler.ReportHandler
 	Reconciliation *handler.ReconciliationHandler
 	Apps           *handler.AppHandler
@@ -140,6 +141,7 @@ func adminRoutes(d Deps) []adminRoute {
 		permitted(http.MethodPost, "/connections/:id/disable", domain.PermConnectionsWrite, d.Connections.Disable),
 		permitted(http.MethodPost, "/connections/:id/enable", domain.PermConnectionsWrite, d.Connections.Enable),
 
+		permitted(http.MethodGet, "/dashboard", domain.PermPaymentsRead, d.Dashboard.Get),
 		permitted(http.MethodGet, "/payments", domain.PermPaymentsRead, d.Admin.ListPayments),
 		permitted(http.MethodGet, "/payment-reports", domain.PermPaymentsRead, d.Reports.List),
 		permitted(http.MethodGet, "/payment-reports/summary", domain.PermPaymentsRead, d.Reports.Summary),

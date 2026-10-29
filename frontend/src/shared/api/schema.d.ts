@@ -1049,6 +1049,59 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get the console dashboard
+         * @description Everything the console's Dashboard page shows, in one response.
+         *     `range` picks the period: the last 7 (default) or 30 WIB days,
+         *     today included, so `to` is the next midnight Asia/Jakarta and
+         *     `from` is `range` days before it. Every count is also given for
+         *     the period of the same length before that (`previous_from` to
+         *     `from`) where it says so. `environment` narrows everything to the
+         *     apps and connections of that environment; without it every
+         *     environment counts.
+         *
+         *     - `payments.by_currency`: the payments *created* in each period,
+         *       per currency, counted by status. `gross` adds up the amount of
+         *       the paid and settled ones in that currency's minor unit;
+         *       amounts of different currencies are never added together.
+         *       `success_rate` is successful over finished (successful, expired
+         *       or failed) payments, `null` when none finished.
+         *     - `payments.series`: one point per WIB day of the current period,
+         *       days without payments included, oldest first; `gross` lists
+         *       every currency seen in the period, in the same order on every
+         *       point.
+         *     - `deliveries`: the webhook deliveries created in the current
+         *       period, by status; `success_rate` is delivered over finished
+         *       (delivered or failed), `null` when none finished.
+         *     - `inbound`: the gateway callbacks received in the current period.
+         *       `problems` counts every result except `applied`, `stale` and
+         *       `duplicate`.
+         *     - `connections`: every connection of the environment, active ones
+         *       first, then by name.
+         *     - `reconciliation`: the unresolved items of every succeeded run
+         *       (not only the period's) and the newest run, `null` when there
+         *       is none.
+         *     - `recent_payments`: the 8 newest payments.
+         *
+         *     Errors: `400 invalid_request` with `range` or `environment` rule
+         *     `oneof`.
+         */
+        get: operations["getDashboard"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/payments": {
         parameters: {
             query?: never;
@@ -2443,6 +2496,170 @@ export interface components {
             /** Format: date-time */
             to: string;
             data: components["schemas"]["PaymentReportSummaryRow"][];
+        };
+        /**
+         * @description How many WIB days the dashboard covers, today included: the last 7 (default) or 30.
+         * @default 7d
+         * @enum {string}
+         */
+        DashboardRange: "7d" | "30d";
+        /** @description The payments created in one period and one currency, counted by status. */
+        DashboardPaymentTotals: {
+            /**
+             * Format: int64
+             * @description Every payment created in the period.
+             */
+            created: number;
+            /** Format: int64 */
+            pending: number;
+            /** Format: int64 */
+            paid: number;
+            /** Format: int64 */
+            settled: number;
+            /** Format: int64 */
+            expired: number;
+            /** Format: int64 */
+            failed: number;
+            /**
+             * Format: int64
+             * @description `paid + settled`.
+             */
+            successful: number;
+            /**
+             * Format: int64
+             * @description Amount of the successful payments, in the currency's minor unit.
+             */
+            gross: number;
+            /** @description `successful / (successful + expired + failed)`; `null` when no payment finished. */
+            success_rate: number | null;
+        };
+        DashboardCurrencyTotals: {
+            /** @description ISO 4217 code. */
+            currency: string;
+            current: components["schemas"]["DashboardPaymentTotals"];
+            previous: components["schemas"]["DashboardPaymentTotals"];
+        };
+        DashboardCurrencyAmount: {
+            /** @description ISO 4217 code. */
+            currency: string;
+            /**
+             * Format: int64
+             * @description In the currency's minor unit.
+             */
+            amount: number;
+        };
+        /** @description One WIB day of the current period. */
+        DashboardSeriesPoint: {
+            /**
+             * Format: date-time
+             * @description Inclusive start of the day, in UTC.
+             */
+            period_start: string;
+            /**
+             * Format: date-time
+             * @description Exclusive end of the day, in UTC.
+             */
+            period_end: string;
+            /**
+             * Format: int64
+             * @description Payments created that day, every currency.
+             */
+            created: number;
+            /**
+             * Format: int64
+             * @description Of those, the paid or settled ones.
+             */
+            successful: number;
+            /** @description Amount of the successful payments per currency, every currency of the period, sorted by code. */
+            gross: components["schemas"]["DashboardCurrencyAmount"][];
+        };
+        DashboardPayments: {
+            /** @description One entry per currency seen in either period, sorted by code. */
+            by_currency: components["schemas"]["DashboardCurrencyTotals"][];
+            /** @description One point per day of the current period, oldest first. */
+            series: components["schemas"]["DashboardSeriesPoint"][];
+        };
+        /** @description The webhook deliveries created in the current period, by status. */
+        DashboardDeliveries: {
+            /** Format: int64 */
+            total: number;
+            /** Format: int64 */
+            pending: number;
+            /** Format: int64 */
+            delivered: number;
+            /** Format: int64 */
+            failed: number;
+            /** @description `delivered / (delivered + failed)`; `null` when no delivery finished. */
+            success_rate: number | null;
+        };
+        /** @description Callbacks per `InboundWebhookResult`; every result is present. */
+        DashboardInboundResults: {
+            /** Format: int64 */
+            applied: number;
+            /** Format: int64 */
+            stale: number;
+            /** Format: int64 */
+            duplicate: number;
+            /** Format: int64 */
+            mismatch: number;
+            /** Format: int64 */
+            unmapped: number;
+            /** Format: int64 */
+            invalid_signature: number;
+            /** Format: int64 */
+            invalid_payload: number;
+            /** Format: int64 */
+            error: number;
+        };
+        /** @description The gateway callbacks received in the current period. */
+        DashboardInbound: {
+            /** Format: int64 */
+            total: number;
+            /** Format: int64 */
+            applied: number;
+            /**
+             * Format: int64
+             * @description Every result except `applied`, `stale` and `duplicate`.
+             */
+            problems: number;
+            by_result: components["schemas"]["DashboardInboundResults"];
+        };
+        DashboardReconciliation: {
+            /**
+             * Format: int64
+             * @description Unresolved items of every succeeded run of the environment's connections.
+             */
+            unresolved_items: number;
+            /** @description The newest run, whatever its status; `null` when there is none. */
+            latest_run: components["schemas"]["ReconciliationRun"] | null;
+        };
+        DashboardResponse: {
+            /** @description The environment the dashboard is narrowed to; `null` when every environment counts. */
+            environment: components["schemas"]["AppEnvironment"] | null;
+            range: components["schemas"]["DashboardRange"];
+            /**
+             * Format: date-time
+             * @description Inclusive start of the current period, in UTC (a WIB midnight).
+             */
+            from: string;
+            /**
+             * Format: date-time
+             * @description Exclusive end of the current period, in UTC (the next WIB midnight).
+             */
+            to: string;
+            /**
+             * Format: date-time
+             * @description Inclusive start of the previous period, in UTC; it ends at `from`.
+             */
+            previous_from: string;
+            payments: components["schemas"]["DashboardPayments"];
+            deliveries: components["schemas"]["DashboardDeliveries"];
+            inbound: components["schemas"]["DashboardInbound"];
+            /** @description Every connection of the environment, active ones first, then by name. */
+            connections: components["schemas"]["ConnectionListItem"][];
+            reconciliation: components["schemas"]["DashboardReconciliation"];
+            /** @description The 8 newest payments, newest first. */
+            recent_payments: components["schemas"]["Payment"][];
         };
         /**
          * @description `queued` (waiting for the worker), `running`, `succeeded` (items
@@ -4894,6 +5111,34 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             413: components["responses"]["PayloadTooLarge"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getDashboard: {
+        parameters: {
+            query?: {
+                /** @description Only the apps and connections of this environment. */
+                environment?: components["schemas"]["AppEnvironment"];
+                range?: components["schemas"]["DashboardRange"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The dashboard. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DashboardResponse"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             500: components["responses"]["InternalError"];
         };
     };

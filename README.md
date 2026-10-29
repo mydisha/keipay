@@ -748,8 +748,10 @@ When the callback does not carry that field, the fee and net are unknown,
 and the run does not compare fees for that payment. On the gateway side the
 fee is Xendit's fee plus its VAT.
 
-Without a worker, runs stay `queued`. A run that is still queued or
-running after 15 minutes without progress can be re-run.
+Without a worker, runs stay `queued`. At most two runs work at a time, on
+workers of their own, so a long run never delays webhook forwarding; the
+rest wait in their queue. A run that is still queued or running after 15
+minutes without progress can be re-run.
 
 ## Admin API
 

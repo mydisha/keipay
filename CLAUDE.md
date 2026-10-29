@@ -143,7 +143,9 @@ postgres implementation → migration in `backend/migrations/` → wire in main.
    `domain.GatewayTransaction` rows by payment reference. Gateway rows come
    through a `TransactionSource`; today that pages through adapters that
    implement the optional `provider.TransactionLister` (declared by
-   `Capabilities.ListTransactions`). A run (`rec_…`) is an asynq job; its
+   `Capabilities.ListTransactions`). A run (`rec_…`) is an asynq job on
+   its own server (`worker.Pool`: 2 workers, apart from the 10 that
+   forward webhooks); its
    items (`rci_…`) are upserted per `(run_id, reference)`, so a re-run of the
    same run never duplicates them. `ledger_entries` is a read-only leftover;
    `payment_reports` replaced it. CSV exports stream from a Postgres cursor.

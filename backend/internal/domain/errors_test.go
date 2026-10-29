@@ -46,8 +46,8 @@ func TestErrorCodesAreUnique(t *testing.T) {
 		}
 		seen[c] = true
 	}
-	if len(seen) != 37 {
-		t.Fatalf("got %d codes, want 37", len(seen))
+	if len(seen) != 38 {
+		t.Fatalf("got %d codes, want 38", len(seen))
 	}
 }
 

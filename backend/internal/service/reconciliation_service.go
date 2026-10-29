@@ -357,6 +357,8 @@ func (s *ReconciliationService) ResolveItem(ctx context.Context, publicID, note 
 		switch {
 		case run.Status.Active():
 			return domain.RunInProgress()
+		case run.Status != domain.RunSucceeded:
+			return domain.RunNotSucceeded()
 		case item.Result == domain.ResultMatched:
 			return errMatchedItem
 		case item.Resolution != nil:

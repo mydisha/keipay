@@ -857,6 +857,7 @@ export const strings = {
     rerun_toast: "Run queued again",
     rerunFailed: "Couldn't re-run.",
     runInProgress: "This run is still in progress. Try again when it finishes.",
+    runNotSucceeded: "This run failed, so its items can't be resolved. Re-run it first.",
     failedTitle: "This run failed",
     failedCode: (code: string) => `Error code: ${code}`,
     failedRerunHint: "Re-run it to try again.",

@@ -19,6 +19,7 @@ export function resolveErrorMessage(error: unknown): string {
   if (isApiError(error)) {
     if (error.code === "conflict") return strings.reconciliation.alreadyResolved;
     if (error.code === "run_in_progress") return strings.reconciliation.runInProgress;
+    if (error.code === "run_not_succeeded") return strings.reconciliation.runNotSucceeded;
     if (error.code === "validation_failed") return strings.reconciliation.matchedNotResolvable;
   }
   return errorMessage(error, strings.reconciliation.resolveFailed);

@@ -647,6 +647,25 @@ func TestResolveItem(t *testing.T) {
 	if _, err := f.svc.ResolveItem(adminCtx(), refs["kp_pay_b"], "now", &f.admin.ID); !errors.Is(err, domain.RunInProgress()) {
 		t.Fatalf("run in progress: %v", err)
 	}
+
+	// Regression: a failed re-run keeps the earlier run count's items, which
+	// are stale; resolving one would change the count of a failed run.
+	f.fake.ListErrs = []error{provider.ErrUnknownOutcome, provider.ErrUnknownOutcome, provider.ErrUnknownOutcome}
+	if err := f.execute(t, f.run(t, run.PublicID)); err != nil {
+		t.Fatal(err)
+	}
+	failed := f.run(t, run.PublicID)
+	if failed.Status != domain.RunFailed {
+		t.Fatalf("re-run status = %s", failed.Status)
+	}
+	audits := len(f.audit.Logs())
+	if _, err := f.svc.ResolveItem(adminCtx(), refs["kp_pay_b"], "now", &f.admin.ID); !errors.As(err, &coded) ||
+		coded.Code != domain.CodeRunNotSucceeded || !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("failed run: %v", err)
+	}
+	if len(f.audit.Logs()) != audits || f.run(t, run.PublicID).UnresolvedCount != failed.UnresolvedCount {
+		t.Fatal("a resolution on a failed run wrote")
+	}
 }
 
 func TestGetItem(t *testing.T) {

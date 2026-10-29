@@ -56,6 +56,7 @@ const (
 	CodeProviderRejected        ErrorCode = "provider_rejected"
 	CodeProviderUnavailable     ErrorCode = "provider_unavailable"
 	CodeRunInProgress           ErrorCode = "run_in_progress"
+	CodeRunNotSucceeded         ErrorCode = "run_not_succeeded"
 )
 
 // ErrorCodes returns every defined error code.
@@ -71,7 +72,7 @@ func ErrorCodes() []ErrorCode {
 		CodeSetupCompleted, CodeLastOwner, CodeCannotModifySelf, CodeRateLimited,
 		CodeAPIKeyRevoked, CodeAPIKeyExpired, CodeIdempotencyKeyReused,
 		CodeConnectionInUse, CodeDeliveryNotReplayable, CodeNoEligibleConnection, CodeProviderRejected, CodeProviderUnavailable,
-		CodeRunInProgress,
+		CodeRunInProgress, CodeRunNotSucceeded,
 	}
 }
 
@@ -216,6 +217,17 @@ func RunInProgress() *Error {
 	return &Error{
 		Code:    CodeRunInProgress,
 		Message: "the reconciliation run is queued or running",
+		Err:     ErrConflict,
+	}
+}
+
+// RunNotSucceeded refuses resolving the items of a reconciliation run that
+// failed: they are the results of an earlier run count, which the next
+// successful re-run recomputes.
+func RunNotSucceeded() *Error {
+	return &Error{
+		Code:    CodeRunNotSucceeded,
+		Message: "the reconciliation run did not succeed",
 		Err:     ErrConflict,
 	}
 }

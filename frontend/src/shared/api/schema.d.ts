@@ -1330,7 +1330,7 @@ export interface paths {
          *     `invalid_character` (contains U+0000, which cannot be stored);
          *     `400 validation_failed` for a `matched` item; `409 conflict` when
          *     the item is already resolved; `409 run_in_progress` while its run
-         *     is queued or running. Records `reconciliation_item.resolve`
+         *     is queued or running; `409 run_not_succeeded` when its run failed. Records `reconciliation_item.resolve`
          *     (`before`: `{result, resolved: false}`, `after`:
          *     `{result, resolved: true, note}`), in the same transaction.
          */
@@ -1575,6 +1575,7 @@ export interface components {
          *     | `cannot_modify_self` | 409 | Owners cannot disable themselves or reset their own password through the users API. |
          *     | `delivery_not_replayable` | 409 | The delivery cannot be replayed now. `details.reason`: `in_progress` (still `PENDING`), `no_endpoint`, `endpoint_deleted` or `endpoint_disabled`. |
          *     | `run_in_progress` | 409 | The reconciliation run is `queued` or `running`: it cannot be re-run, and its items cannot be resolved, until it finishes. |
+         *     | `run_not_succeeded` | 409 | The reconciliation run failed, so its items cannot be resolved. Re-run it first. |
          *     | `connection_in_use` | 409 | The connection is some app's default connection. `details.apps` lists up to 10 (`AppSummary`), `details.app_count` counts them. |
          *     | `no_eligible_connection` | 422 | No connection can take the payment. `details.reasons` is a list of strings: `no_default_connection`, `connection_disabled`. More reasons may be added. |
          *     | `provider_rejected` | 422 | The gateway refused the request (validation, limits, credentials). `details.provider` names the provider. The message is generic; the gateway's own text is only logged. |
@@ -1583,7 +1584,7 @@ export interface components {
          *     | `provider_unavailable` | 503 | The gateway could not be reached, timed out, or answered with a server error. Retry with the same `order_id`. |
          * @enum {string}
          */
-        ErrorCode: "invalid_request" | "validation_failed" | "invalid_cursor" | "unauthorized" | "invalid_credentials" | "missing_token" | "invalid_token" | "missing_signature_headers" | "invalid_timestamp" | "timestamp_out_of_range" | "unknown_api_key" | "invalid_signature" | "replayed_request" | "invalid_callback_token" | "tenant_inactive" | "not_found" | "conflict" | "internal_error" | "session_required" | "session_expired" | "forbidden" | "password_change_required" | "invalid_csrf_token" | "invalid_setup_token" | "setup_completed" | "last_owner" | "cannot_modify_self" | "rate_limited" | "api_key_revoked" | "api_key_expired" | "idempotency_key_reused" | "connection_in_use" | "delivery_not_replayable" | "run_in_progress" | "no_eligible_connection" | "provider_rejected" | "provider_unavailable";
+        ErrorCode: "invalid_request" | "validation_failed" | "invalid_cursor" | "unauthorized" | "invalid_credentials" | "missing_token" | "invalid_token" | "missing_signature_headers" | "invalid_timestamp" | "timestamp_out_of_range" | "unknown_api_key" | "invalid_signature" | "replayed_request" | "invalid_callback_token" | "tenant_inactive" | "not_found" | "conflict" | "internal_error" | "session_required" | "session_expired" | "forbidden" | "password_change_required" | "invalid_csrf_token" | "invalid_setup_token" | "setup_completed" | "last_owner" | "cannot_modify_self" | "rate_limited" | "api_key_revoked" | "api_key_expired" | "idempotency_key_reused" | "connection_in_use" | "delivery_not_replayable" | "run_in_progress" | "run_not_succeeded" | "no_eligible_connection" | "provider_rejected" | "provider_unavailable";
         /**
          * @example {
          *       "error": {
@@ -3150,7 +3151,8 @@ export interface components {
          *     connection name or email, or an `order_id` reused with a different
          *     amount or currency), `idempotency_key_reused`, `setup_completed`,
          *     `last_owner`, `cannot_modify_self`, `connection_in_use`,
-         *     `delivery_not_replayable`, or `run_in_progress`.
+         *     `delivery_not_replayable`, `run_in_progress`, or
+         *     `run_not_succeeded`.
          */
         Conflict: {
             headers: {

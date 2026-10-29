@@ -149,7 +149,8 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 
 ## Detail page pattern
 
-Used from phase 2 on (app, payment, connection details):
+Used by every resource detail page (app, connection, reconciliation run, and
+payment once it has one):
 
 1. A "Back to …" link to the list.
 2. Header: the resource name as the page `h1` (or its id in `IdText` when it
@@ -167,8 +168,9 @@ Used from phase 2 on (app, payment, connection details):
 States: a header-shaped skeleton while loading; an unknown or malformed id
 (`404 not_found` or `400 invalid_request`) shows "App not found" with a
 "Back to apps" action, not an error; other failures show `ErrorState` with
-retry, and `403 forbidden` shows `ForbiddenState`. A tab for a later phase is
-an `EmptyState` that says what will live there and makes no API call.
+retry, and `403 forbidden` shows `ForbiddenState`. A tab for a feature that
+is not built yet is an `EmptyState` that says what will live there and makes
+no API call.
 
 Dialogs (such as an audit entry) follow the same order on a smaller scale.
 

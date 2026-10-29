@@ -69,7 +69,7 @@ Service-layer (ports-and-adapters); dependencies point inward to
   the only place routes are registered.
 - `internal/repository/{postgres,redis}`: implementations of domain interfaces,
   no business logic.
-- `internal/worker`: asynq enqueuer, webhook forwarder, sweeper.
+- `internal/worker`: asynq enqueuer, webhook forwarder, sweeper, reconciliation run job.
 - `internal/provider`: gateway port (`Provider`, `Registry`, schemas,
   capabilities, error classes); one adapter package per gateway
   (`internal/provider/xendit`), registered in `cmd/server/main.go`.
@@ -99,7 +99,7 @@ postgres implementation → migration in `backend/migrations/` → wire in main.
    (`inb_…`, raw body, `signature_valid`, `result`). `WebhookService.Process`
    claims `(connection_id, event_key, provider_status)` through a partial
    unique index in the same transaction (`domain.TxManager`) as the payment
-   row lock, the status update, the ledger entry, the `events` row and the
+   row lock, the status update, the payment report, the `events` row and the
    delivery rows; a lost claim is recorded as `duplicate`. There is no Redis
    fast path any more. Status only moves forward per
    `PaymentStatus.CanTransitionTo`; amount/currency or connection mismatches
@@ -138,6 +138,15 @@ postgres implementation → migration in `backend/migrations/` → wire in main.
    `keipay_csrf` cookie and the session's token. Permissions per role are data
    in `internal/domain`; each route declares one in `router.go`, and a test
    checks them against `x-keipay-permission` in the spec.
+6. **Reconciliation is source-agnostic**: a pure matcher compares KeiPay
+   rows (payment reports + payments of one connection) with normalized
+   `domain.GatewayTransaction` rows by payment reference. Gateway rows come
+   through a `TransactionSource`; today that pages through adapters that
+   implement the optional `provider.TransactionLister` (declared by
+   `Capabilities.ListTransactions`). A run (`rec_…`) is an asynq job; its
+   items (`rci_…`) are upserted per `(run_id, reference)`, so a re-run of the
+   same run never duplicates them. `ledger_entries` is a read-only leftover;
+   `payment_reports` replaced it. CSV exports stream from a Postgres cursor.
 
 ## Conventions
 
@@ -145,8 +154,8 @@ postgres implementation → migration in `backend/migrations/` → wire in main.
   `internal/domain`, mapped only in `response.Error`, and mirrored in the
   spec's `ErrorCode`.
 - Public IDs: `<prefix>_<ULID>` via `internal/pkg/id`; bigint ids stay
-  internal (`/v1` `payment_id`, delivery and ledger ids are the remaining
-  exceptions until their entity migrates).
+  internal (`/v1` `payment_id` and the v1 webhook body are the only
+  remaining exception, kept for existing integrations).
 - New lists use cursor pagination (`limit`, `cursor` → `data`,
   `next_cursor`); see `internal/domain/pagination.go`.
 - Every admin mutation records an audit entry in the same transaction via

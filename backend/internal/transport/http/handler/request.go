@@ -75,11 +75,11 @@ func decodeJSON(c *gin.Context, dst any) error {
 		}
 		return readError(err)
 	}
-	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+	if _, err := dec.Token(); err == nil || !errors.Is(err, io.EOF) {
 		// A second value, or garbage after the first one: the decoder would
 		// silently ignore it and the caller would never learn its request
 		// was not what it meant to send.
-		return readError(err)
+		return invalidBody()
 	}
 	return nil
 }

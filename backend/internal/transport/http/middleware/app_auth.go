@@ -15,6 +15,7 @@ import (
 
 	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/pkg/hmac"
+	"github.com/mydisha/keipay/backend/internal/pkg/keygen"
 	"github.com/mydisha/keipay/backend/internal/pkg/logger"
 	"github.com/mydisha/keipay/backend/internal/service"
 	"github.com/mydisha/keipay/backend/internal/transport/http/response"
@@ -68,10 +69,12 @@ type SecretDecryptor interface {
 	Decrypt(ciphertext string) (string, error)
 }
 
-// AuthLimits bound the authentication failures a client IP and an API key
-// may accumulate in a window before their requests are refused outright.
-// Only failures count (unknown key, bad signature, replay), so a busy app
-// with a correct integration never meets them.
+// AuthLimits bound the authentication failures a client IP, and a client IP
+// using one API key, may accumulate in a window before their requests are
+// refused outright. Only failures count (unknown key, bad signature,
+// replay), so a busy app with a correct integration never meets them, and
+// the key counter is per sender, so someone who knows an app's key but not
+// its secret cannot lock the app itself out.
 type AuthLimits struct {
 	MaxFailuresPerIP  int
 	MaxFailuresPerKey int
@@ -80,7 +83,7 @@ type AuthLimits struct {
 
 // AppAuthDeps are the collaborators of AppAuth. Limiter may be nil, which
 // disables the failure limits; Nonces may not: replay protection is not
-// optional, and a nil store refuses every request.
+// optional, and a nil store makes AppAuth refuse every request.
 type AppAuthDeps struct {
 	Resolver AppResolver
 	Nonces   NonceStore
@@ -105,6 +108,14 @@ func AppAuth(d AppAuthDeps) gin.HandlerFunc {
 	log := d.Log
 	if log == nil {
 		log = zap.NewNop()
+	}
+	if d.Nonces == nil {
+		// Replay protection is not optional: without a store, no request
+		// can be authenticated.
+		return func(c *gin.Context) {
+			logger.Security(log, logger.EventAuthStoreUnavailable, logger.SeverityHigh, c.ClientIP(), c.GetString(ctxRequestID), "no nonce store")
+			response.Error(c, domain.AuthUnavailable(errors.New("nonce store not configured")))
+		}
 	}
 	return func(c *gin.Context) {
 		ip := c.ClientIP()
@@ -150,61 +161,60 @@ func AppAuth(d AppAuthDeps) gin.HandlerFunc {
 			response.Error(c, invalidHeader("X-Nonce", "format"))
 			return
 		}
-		headerPrefix := zap.String("api_key_prefix", apiKeyPrefix(apiKey))
+		keyPrefixField := zap.String("api_key_prefix", apiKeyPrefix(apiKey))
 
 		ts, err := strconv.ParseInt(tsStr, 10, 64)
 		if err != nil {
-			security(logger.EventAuthInvalidTimestamp, logger.SeverityLow, "invalid timestamp", headerPrefix)
+			security(logger.EventAuthInvalidTimestamp, logger.SeverityLow, "invalid timestamp", keyPrefixField)
 			abort(c, domain.CodeInvalidTimestamp, "invalid timestamp")
 			return
 		}
-		if d := time.Since(time.Unix(ts, 0)); d > timestampSkew || d < -timestampSkew {
-			security(logger.EventAuthTimestampSkew, logger.SeverityMedium, "timestamp out of range", headerPrefix)
+		if age := time.Since(time.Unix(ts, 0)); age > timestampSkew || age < -timestampSkew {
+			security(logger.EventAuthTimestampSkew, logger.SeverityMedium, "timestamp out of range", keyPrefixField)
 			abort(c, domain.CodeTimestampOutOfRange, "timestamp out of range")
 			return
 		}
 
+		// Refuse a client with too many recent failures before the key is
+		// even looked up, so a blocked caller learns nothing and costs no
+		// query. The key counter is named by the key's hash, which is what
+		// the lookup uses, and by the sender.
 		ipKey := "ip:" + ip
-		app, key, lookupErr := d.Resolver.Lookup(ctx, apiKey)
-		fields := keyFields(app, key)
-
-		// Refuse a client or key with too many recent failures before saying
-		// anything about the key, so a blocked caller learns nothing new.
+		keyKey := "key:" + keygen.HashAPIKey(apiKey) + ":" + ip
 		if d.Limiter != nil {
-			limits := []domain.FailureLimit{{Key: ipKey, Max: d.Limits.MaxFailuresPerIP}}
-			if lookupErr == nil {
-				limits = append(limits, domain.FailureLimit{Key: "key:" + key.Hash, Max: d.Limits.MaxFailuresPerKey})
-			}
-			blocked, wait, err := d.Limiter.Blocked(ctx, limits...)
+			blocked, wait, err := d.Limiter.Blocked(ctx, d.Limits.Window,
+				domain.FailureLimit{Key: ipKey, Max: d.Limits.MaxFailuresPerIP},
+				domain.FailureLimit{Key: keyKey, Max: d.Limits.MaxFailuresPerKey})
 			if err != nil {
-				unavailable("failure limiter unavailable", err, append(fields, headerPrefix)...)
+				unavailable("failure limiter unavailable", err, keyPrefixField)
 				return
 			}
 			if blocked {
-				security(logger.EventAuthRateLimited, logger.SeverityMedium, "too many failed attempts", append(fields, headerPrefix)...)
+				security(logger.EventAuthRateLimited, logger.SeverityMedium, "too many failed attempts", keyPrefixField)
 				response.Error(c, domain.RateLimited(int(math.Ceil(wait.Seconds()))))
 				return
 			}
 		}
 
+		app, key, err := d.Resolver.Lookup(ctx, apiKey)
 		switch {
-		case errors.Is(lookupErr, service.ErrKeyEnvironmentMismatch):
+		case errors.Is(err, service.ErrKeyEnvironmentMismatch):
 			security(logger.EventAuthAPIKeyEnvMismatch, logger.SeverityHigh, "api key environment mismatch",
-				append(fields, headerPrefix)...)
+				append(keyFields(app, key), keyPrefixField)...)
 			fail(ipKey)
 			response.Error(c, domain.ErrUnknownAPIKey)
 			return
-		case errors.Is(lookupErr, domain.ErrUnknownAPIKey):
-			security(logger.EventAuthUnknownAPIKey, logger.SeverityMedium, "unknown api key", headerPrefix)
+		case errors.Is(err, domain.ErrUnknownAPIKey):
+			security(logger.EventAuthUnknownAPIKey, logger.SeverityMedium, "unknown api key", keyPrefixField)
 			fail(ipKey)
 			response.Error(c, domain.ErrUnknownAPIKey)
 			return
-		case lookupErr != nil:
-			security(logger.EventAuthLookupFailed, logger.SeverityHigh, "auth lookup failed", zap.Error(lookupErr))
-			response.Error(c, domain.Internal(fmt.Errorf("auth lookup: %w", lookupErr)))
+		case err != nil:
+			security(logger.EventAuthLookupFailed, logger.SeverityHigh, "auth lookup failed", zap.Error(err))
+			response.Error(c, domain.Internal(fmt.Errorf("auth lookup: %w", err)))
 			return
 		}
-		keyKey := "key:" + key.Hash
+		fields := keyFields(app, key)
 
 		body, err := io.ReadAll(c.Request.Body)
 		if err != nil {
@@ -241,10 +251,6 @@ func AppAuth(d AppAuthDeps) gin.HandlerFunc {
 		nonceKey := "nonce:" + key.Hash + ":" + sig
 		if version == SignatureV2 {
 			nonceKey = "nonce:" + key.Hash + ":" + nonce
-		}
-		if d.Nonces == nil {
-			unavailable("no nonce store", errors.New("nonce store not configured"), fields...)
-			return
 		}
 		fresh, err := d.Nonces.Acquire(ctx, nonceKey)
 		if err != nil {

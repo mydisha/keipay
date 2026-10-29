@@ -113,7 +113,8 @@ postgres implementation → migration in `backend/migrations/` → wire in main.
    the API key used; the signature (v1) or the nonce (v2) is remembered in
    Redis for 15 minutes, and the replay check fails closed (`503
    auth_unavailable`) when Redis does not answer. Failed authentications
-   are limited per IP and per key. Outbound events are signed per webhook endpoint (`whe_…`) as
+   are limited per IP and per (IP, key). Outbound events are signed per
+   webhook endpoint (`whe_…`) as
    `X-KeiPay-Signature: t=…,v1=…` over `"{t}.{body}"`, one `v1` per valid
    secret during a rotation overlap; endpoints migrated from an app's old
    `webhook_url` also send `X-Kei-Signature` (raw body, current secret) and

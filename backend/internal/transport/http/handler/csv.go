@@ -23,7 +23,7 @@ const csvFlushEvery = 500
 // long export off mid-stream, so the stream moves its own deadline forward
 // at every flush: a healthy client can download for as long as it takes,
 // a stalled one still frees the handler within this grace.
-var csvWriteGrace = 60 * time.Second
+const csvWriteGrace = 60 * time.Second
 
 // wib is Asia/Jakarta. Indonesia has no daylight saving time, so a fixed
 // zone is exact and needs no tzdata in the image.
@@ -36,6 +36,7 @@ type csvStream struct {
 	c        *gin.Context
 	filename string
 	header   []string
+	grace    time.Duration
 	w        *csv.Writer
 	rows     int
 }
@@ -45,7 +46,13 @@ type csvStream struct {
 // it the response is cut off, so the client sees an incomplete download
 // rather than a short file that looks complete.
 func streamCSV(c *gin.Context, log *zap.Logger, filename string, header []string, produce func(write func([]string) error) error) {
-	s := &csvStream{c: c, filename: filename, header: header}
+	streamCSVWithGrace(c, log, filename, header, csvWriteGrace, produce)
+}
+
+// streamCSVWithGrace is streamCSV with the write grace per flush spelled
+// out, so a test can shorten it.
+func streamCSVWithGrace(c *gin.Context, log *zap.Logger, filename string, header []string, grace time.Duration, produce func(write func([]string) error) error) {
+	s := &csvStream{c: c, filename: filename, header: header, grace: grace}
 	err := produce(s.write)
 	if err == nil {
 		err = s.finish()
@@ -118,10 +125,10 @@ func (s *csvStream) flush() error {
 	return nil
 }
 
-// extendDeadline gives the next chunk csvWriteGrace to reach the client.
+// extendDeadline gives the next chunk the grace to reach the client.
 // Writers that have no deadline (test recorders) are left alone.
 func (s *csvStream) extendDeadline() {
-	_ = http.NewResponseController(s.c.Writer).SetWriteDeadline(time.Now().Add(csvWriteGrace))
+	_ = http.NewResponseController(s.c.Writer).SetWriteDeadline(time.Now().Add(s.grace))
 }
 
 // csvText guards a text cell against spreadsheet formula injection.

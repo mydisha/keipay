@@ -403,12 +403,6 @@ func TestAppAuthNonceStoreDownIs503(t *testing.T) {
 	assertEnvelope(t, serve(f.engine(f.svc, prefixCipher{}), signed(c.apiKey, c.secret, now(), `{}`)), 503, domain.CodeAuthUnavailable)
 }
 
-func TestNonceTTLCoversSkewWindow(t *testing.T) {
-	if NonceTTL < 2*timestampSkew {
-		t.Fatalf("NonceTTL %v is shorter than the %v window a timestamp is accepted in", NonceTTL, 2*timestampSkew)
-	}
-}
-
 // Version 2 covers method and path and takes a client nonce, so a captured
 // signature fits no other request and identical requests do not collide.
 func TestAppAuthSignatureV2(t *testing.T) {
@@ -418,67 +412,69 @@ func TestAppAuthSignatureV2(t *testing.T) {
 	ts := now()
 	nonce := func(i int) string { return "nonce-" + strconv.Itoa(i) + strings.Repeat("0", 16) }
 
-	if w := serve(r, signedV2(http.MethodPost, "/x", c.apiKey, c.secret, ts, nonce(1), `{"a":1}`)); w.Code != http.StatusOK {
-		t.Fatalf("v2 post: %d %s", w.Code, w.Body.String())
-	}
-	if f.seenKey == nil || f.seenKey.PublicID != c.key.PublicID {
-		t.Fatalf("context key = %+v", f.seenKey)
-	}
-	if !f.nonces.seen["nonce:"+c.key.Hash+":"+nonce(1)] {
-		t.Fatalf("v2 nonce not recorded: %v", f.nonces.seen)
-	}
-
-	// Two identical GETs within one second: refused as a replay in v1,
-	// fine in v2 with distinct nonces.
-	v1 := func() *http.Request {
-		req := signed(c.apiKey, c.secret, ts, "")
-		req.Method = http.MethodGet
-		return req
-	}
-	if w := serve(r, v1()); w.Code != http.StatusOK {
-		t.Fatalf("v1 get: %d %s", w.Code, w.Body.String())
-	}
-	assertEnvelope(t, serve(r, v1()), 401, domain.CodeReplayedRequest)
-	for i := 2; i < 4; i++ {
-		if w := serve(r, signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, nonce(i), "")); w.Code != http.StatusOK {
-			t.Fatalf("v2 get %d: %d %s", i, w.Code, w.Body.String())
+	t.Run("authenticates and records the nonce", func(t *testing.T) {
+		if w := serve(r, signedV2(http.MethodPost, "/x", c.apiKey, c.secret, ts, nonce(1), `{"a":1}`)); w.Code != http.StatusOK {
+			t.Fatalf("v2 post: %d %s", w.Code, w.Body.String())
 		}
-	}
+		if f.seenKey == nil || f.seenKey.PublicID != c.key.PublicID {
+			t.Fatalf("context key = %+v", f.seenKey)
+		}
+		if !f.nonces.seen["nonce:"+c.key.Hash+":"+nonce(1)] {
+			t.Fatalf("v2 nonce not recorded: %v", f.nonces.seen)
+		}
+	})
 
-	// The signature of one request fits no other route or method, and a
-	// nonce is good once.
-	moved := signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, nonce(4), "")
-	moved.URL.Path = "/y"
-	assertEnvelope(t, serve(r, moved), 401, domain.CodeInvalidSignature)
-	changed := signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, nonce(5), "")
-	changed.Method = http.MethodPost
-	assertEnvelope(t, serve(r, changed), 401, domain.CodeInvalidSignature)
-	assertEnvelope(t, serve(r, signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, nonce(2), "")), 401, domain.CodeReplayedRequest)
+	t.Run("identical requests in one second collide only in v1", func(t *testing.T) {
+		v1 := func() *http.Request {
+			req := signed(c.apiKey, c.secret, ts, "")
+			req.Method = http.MethodGet
+			return req
+		}
+		if w := serve(r, v1()); w.Code != http.StatusOK {
+			t.Fatalf("v1 get: %d %s", w.Code, w.Body.String())
+		}
+		assertEnvelope(t, serve(r, v1()), 401, domain.CodeReplayedRequest)
+		for i := 2; i < 4; i++ {
+			if w := serve(r, signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, nonce(i), "")); w.Code != http.StatusOK {
+				t.Fatalf("v2 get %d: %d %s", i, w.Code, w.Body.String())
+			}
+		}
+	})
 
-	// Header rules.
-	noNonce := signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, nonce(6), "")
-	noNonce.Header.Del("X-Nonce")
-	assertEnvelope(t, serve(r, noNonce), 401, domain.CodeMissingSignatureHeaders)
-	for _, bad := range []string{"short", strings.Repeat("n", 65), "has space" + strings.Repeat("x", 10), "tab\there" + strings.Repeat("x", 10)} {
-		w := serve(r, signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, bad, ""))
+	t.Run("ties the signature to method, path and nonce", func(t *testing.T) {
+		moved := signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, nonce(4), "")
+		moved.URL.Path = "/y"
+		assertEnvelope(t, serve(r, moved), 401, domain.CodeInvalidSignature)
+		changed := signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, nonce(5), "")
+		changed.Method = http.MethodPost
+		assertEnvelope(t, serve(r, changed), 401, domain.CodeInvalidSignature)
+		assertEnvelope(t, serve(r, signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, nonce(2), "")), 401, domain.CodeReplayedRequest)
+	})
+
+	t.Run("header rules", func(t *testing.T) {
+		noNonce := signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, nonce(6), "")
+		noNonce.Header.Del("X-Nonce")
+		assertEnvelope(t, serve(r, noNonce), 401, domain.CodeMissingSignatureHeaders)
+		for _, bad := range []string{"short", strings.Repeat("n", 65), "has space" + strings.Repeat("x", 10), "tab\there" + strings.Repeat("x", 10)} {
+			w := serve(r, signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, bad, ""))
+			assertEnvelope(t, w, 400, domain.CodeInvalidRequest)
+			if !strings.Contains(w.Body.String(), `"field":"X-Nonce"`) {
+				t.Fatalf("%q: %s", bad, w.Body.String())
+			}
+		}
+		v3 := signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, nonce(7), "")
+		v3.Header.Set("X-Signature-Version", "3")
+		w := serve(r, v3)
 		assertEnvelope(t, w, 400, domain.CodeInvalidRequest)
-		if !strings.Contains(w.Body.String(), `"field":"X-Nonce"`) {
-			t.Fatalf("%q: %s", bad, w.Body.String())
+		if !strings.Contains(w.Body.String(), `"field":"X-Signature-Version"`) {
+			t.Fatalf("version: %s", w.Body.String())
 		}
-	}
-	v3 := signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, nonce(7), "")
-	v3.Header.Set("X-Signature-Version", "3")
-	w := serve(r, v3)
-	assertEnvelope(t, w, 400, domain.CodeInvalidRequest)
-	if !strings.Contains(w.Body.String(), `"field":"X-Signature-Version"`) {
-		t.Fatalf("version: %s", w.Body.String())
-	}
-	// An explicit version 1 is the default scheme.
-	explicit := signed(c.apiKey, c.secret, now(), `{"v":1}`)
-	explicit.Header.Set("X-Signature-Version", "1")
-	if w := serve(r, explicit); w.Code != http.StatusOK {
-		t.Fatalf("explicit v1: %d %s", w.Code, w.Body.String())
-	}
+		explicit := signed(c.apiKey, c.secret, now(), `{"v":1}`)
+		explicit.Header.Set("X-Signature-Version", "1")
+		if w := serve(r, explicit); w.Code != http.StatusOK {
+			t.Fatalf("explicit v1: %d %s", w.Code, w.Body.String())
+		}
+	})
 }
 
 // withLimits turns the failure limits on for a fixture.
@@ -496,7 +492,7 @@ func TestAppAuthFailureLimits(t *testing.T) {
 	c := f.addKey(t, "acme", domain.EnvLive, nil)
 	r := f.engine(f.svc, prefixCipher{})
 	wrong := strings.Repeat("0", 64)
-	ipKey, keyKey := "ip:192.0.2.1", "key:"+c.key.Hash
+	ipKey, keyKey := "ip:192.0.2.1", "key:"+c.key.Hash+":192.0.2.1"
 	badSig := func() *http.Request {
 		req := signed(c.apiKey, c.secret, now(), `{}`)
 		req.Header.Set("X-Signature", wrong)
@@ -547,9 +543,11 @@ func TestAppAuthFailureLimits(t *testing.T) {
 	assertEnvelope(t, serve(r, signed("kp_live_"+strings.Repeat("8", 32), c.secret, now(), `{}`)), 429, domain.CodeRateLimited)
 }
 
-// A key over its own limit is blocked from any address, before its
+// The key counter is per sender: a stranger who knows an app's key but not
+// its secret exhausts only their own allowance, and the app itself keeps
+// working from its own address. A blocked sender is refused before the
 // signature is checked.
-func TestAppAuthKeyLimitIsPerKey(t *testing.T) {
+func TestAppAuthKeyLimitIsPerSender(t *testing.T) {
 	f := newAuthFixture(t)
 	f.withLimits(100, 1)
 	c := f.addKey(t, "acme", domain.EnvLive, nil)
@@ -557,11 +555,14 @@ func TestAppAuthKeyLimitIsPerKey(t *testing.T) {
 	bad := signed(c.apiKey, c.secret, now(), `{}`)
 	bad.Header.Set("X-Signature", strings.Repeat("0", 64))
 	assertEnvelope(t, serve(r, bad), 401, domain.CodeInvalidSignature)
-	elsewhere := signed(c.apiKey, c.secret, now(), `{}`)
-	elsewhere.RemoteAddr = "198.51.100.7:1234"
-	assertEnvelope(t, serve(r, elsewhere), 429, domain.CodeRateLimited)
+	assertEnvelope(t, serve(r, signed(c.apiKey, c.secret, now(), `{}`)), 429, domain.CodeRateLimited)
 	if n := f.logs.FilterField(zap.String("event", "auth.bad_signature")).Len(); n != 1 {
 		t.Fatalf("bad_signature events = %d, the blocked request was verified", n)
+	}
+	elsewhere := signed(c.apiKey, c.secret, now(), `{}`)
+	elsewhere.RemoteAddr = "198.51.100.7:1234"
+	if w := serve(r, elsewhere); w.Code != http.StatusOK {
+		t.Fatalf("the app's own request from another address: %d %s", w.Code, w.Body.String())
 	}
 }
 

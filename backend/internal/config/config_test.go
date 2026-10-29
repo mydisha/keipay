@@ -179,13 +179,13 @@ func TestLoad_ProductionWarnings(t *testing.T) {
 		t.Fatal(err)
 	}
 	warnings := strings.Join(cfg.Warnings(), "\n")
-	for _, want := range []string{"REDIS_PASSWORD", "sslmode=disable", "SETUP_TOKEN"} {
+	for _, want := range []string{"REDIS_PASSWORD", "sslmode=disable", "SETUP_TOKEN", "TRUSTED_PROXIES"} {
 		if !strings.Contains(warnings, want) {
 			t.Errorf("warnings lack %s: %q", want, warnings)
 		}
 	}
 	cfg, err = loadWith(t, map[string]string{"APP_ENV": "production", "REDIS_PASSWORD": "s3cret", "SETUP_TOKEN": "tok",
-		"POSTGRES_DSN": "host=db user=keipay sslmode=require dbname=keipay"})
+		"TRUSTED_PROXIES": "10.0.0.1", "POSTGRES_DSN": "host=db user=keipay sslmode=require dbname=keipay"})
 	if err != nil {
 		t.Fatal(err)
 	}

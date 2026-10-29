@@ -531,8 +531,6 @@ func withAuthLimits(perIP, perKey int) apiOption {
 // body is 413, and failed authentications are limited per client.
 func TestV1TransportHardeningOverHTTP(t *testing.T) {
 	f := newAPI(t, "", withAuthLimits(3, 100))
-	f.deps.AuthLimiter = f.failures
-	f.router = NewRouter(f.deps)
 	owner := f.signIn(t, f.owner)
 	app := f.createApp(t, owner, `{"name":"Acme","slug":"acme","environment":"test"}`)
 	c := v1Client{f: f, apiKey: app.apiKey, secret: app.apiSecret}
@@ -562,6 +560,6 @@ func TestV1TransportHardeningOverHTTP(t *testing.T) {
 	}
 
 	// The limiter failing closes /v1 with a 503 rather than skipping the checks.
-	f.failures.Err = errors.New("redis down")
+	f.authFailures.Err = errors.New("redis down")
 	expectError(t, c.do(http.MethodGet, "/v1/payments/"+pub, ""), http.StatusServiceUnavailable, domain.CodeAuthUnavailable)
 }

@@ -170,10 +170,12 @@ sequenceDiagram
 A callback for a reference KeiPay does not know yet answers `500`, so the
 gateway retries it. Every callback, accepted or not, is kept in the inbound
 log, with two guards against anyone who learns a callback URL: bodies over
-1 MiB are refused (`413 request_too_large`), and callbacks that fail
-verification or parsing are limited per sender IP and per connection (by
-default 60 each in 15 minutes; `429 rate_limited` after that, without a
-log row). Accepted callbacks are never limited.
+1 MiB are refused (`413 request_too_large`), and rejected callbacks are
+limited per sender IP, and those that fail verification also per
+connection (by default 60 each in 15 minutes; `429 rate_limited` after
+that, without a log row). A verified callback that KeiPay cannot parse is
+still recorded whatever strangers have sent to the same URL, and accepted
+callbacks are never limited.
 
 ### Payment status
 
@@ -402,8 +404,11 @@ docker compose run --rm --entrypoint /app/keipay-migrate keipay -reset-admin -em
 becomes an owner with the email `admin@keipay.invalid` and keeps its
 password. Sign in with that email, then change it in Settings → Users.
 
-Behind a reverse proxy, list the proxy in `TRUSTED_PROXIES` so sign-in rate
-limits and the audit log see the real client IP. Session cookies are
+Behind a reverse proxy, list the proxy in `TRUSTED_PROXIES` so the sign-in,
+`/v1` and callback limits and the audit log see the real client IP; with it
+empty every caller shares the proxy's address and the per-IP limits apply
+to all of them at once (production warns about this at startup). Session
+cookies are
 `Secure` unless `APP_ENV=development`; serve the console over HTTPS, or set
 `COOKIE_SECURE=false` for plain HTTP on a host other than `localhost`
 (refused in production). Every response carries the usual browser
@@ -536,10 +541,12 @@ which also ties a signature to its method and path.
 
 Bodies over 64 KiB are refused with `413 request_too_large`. Failed
 authentications are limited: unknown keys count against your IP, bad
-signatures and replays against your IP and the key (by default 100 per IP
-and 50 per key in 15 minutes), and over the limit every request gets
-`429 rate_limited` with `Retry-After` until the window ends. Successful
-requests never count.
+signatures and replays against your IP and against your IP together with
+the key (by default 100 per IP and 50 per IP and key in 15 minutes), and
+over the limit every request from that address gets `429 rate_limited`
+with `Retry-After` until the window ends. Successful requests never count,
+and the key counter is per sender, so nobody who only knows your key can
+lock you out.
 
 ### Create a payment
 

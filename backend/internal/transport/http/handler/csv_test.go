@@ -56,12 +56,12 @@ func TestCSVCells(t *testing.T) {
 
 // csvServer serves one export through streamCSV on a real server with a
 // short write timeout, so the deadline handling is what net/http applies.
-func csvServer(t *testing.T, writeTimeout time.Duration, produce func(write func([]string) error) error) string {
+func csvServer(t *testing.T, writeTimeout, grace time.Duration, produce func(write func([]string) error) error) (addr string) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
 	r.GET("/export", func(c *gin.Context) {
-		streamCSV(c, zap.NewNop(), "rows.csv", []string{"n"}, produce)
+		streamCSVWithGrace(c, zap.NewNop(), "rows.csv", []string{"n"}, grace, produce)
 	})
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -70,7 +70,7 @@ func csvServer(t *testing.T, writeTimeout time.Duration, produce func(write func
 	srv := &http.Server{Handler: r, WriteTimeout: writeTimeout, ReadHeaderTimeout: time.Second}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
-	return "http://" + ln.Addr().String() + "/export"
+	return ln.Addr().String()
 }
 
 func rows(n int) [][]string {
@@ -84,7 +84,7 @@ func rows(n int) [][]string {
 // An export that outlives the server's write timeout still arrives whole:
 // every flush moves the write deadline forward.
 func TestStreamCSVOutlivesWriteTimeout(t *testing.T) {
-	url := csvServer(t, 250*time.Millisecond, func(write func([]string) error) error {
+	addr := csvServer(t, 250*time.Millisecond, csvWriteGrace, func(write func([]string) error) error {
 		for _, row := range rows(csvFlushEvery) {
 			if err := write(row); err != nil {
 				return err
@@ -98,7 +98,7 @@ func TestStreamCSVOutlivesWriteTimeout(t *testing.T) {
 		}
 		return nil
 	})
-	resp, err := http.Get(url)
+	resp, err := http.Get("http://" + addr + "/export")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,12 +116,9 @@ func TestStreamCSVOutlivesWriteTimeout(t *testing.T) {
 // the next flush fails within the grace instead of blocking the handler for
 // as long as the connection lives.
 func TestStreamCSVStalledClientIsCutOff(t *testing.T) {
-	grace := csvWriteGrace
-	csvWriteGrace = 300 * time.Millisecond
-	t.Cleanup(func() { csvWriteGrace = grace })
 	failed := make(chan error, 1)
 	wide := []string{strings.Repeat("x", 64<<10)}
-	url := csvServer(t, time.Hour, func(write func([]string) error) error {
+	addr := csvServer(t, time.Hour, 300*time.Millisecond, func(write func([]string) error) error {
 		deadline := time.Now().Add(10 * time.Second)
 		for time.Now().Before(deadline) {
 			if err := write(wide); err != nil {
@@ -134,7 +131,7 @@ func TestStreamCSVStalledClientIsCutOff(t *testing.T) {
 	})
 	// A raw client that sends the request and never reads the response, so
 	// the server's writes block once the socket buffers are full.
-	conn, err := net.Dial("tcp", strings.TrimPrefix(url, "http://")[:strings.Index(strings.TrimPrefix(url, "http://"), "/")])
+	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
 	}

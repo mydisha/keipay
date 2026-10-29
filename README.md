@@ -1,23 +1,31 @@
 # KeiPay
 
-Self-hosted payment orchestrator. Your apps call **one API with one credential**;
-KeiPay creates the checkout on the payment gateway, receives the gateway's
-webhook, and forwards a normalized, signed event to the app that asked for it.
-
-```
-App A ─┐                          ┌─► Xendit
-App B ─┼─► KeiPay (1 credential) ─┼─► Midtrans   (planned)
-App C ─┘        ▲                 └─► DOKU       (planned)
-                │  gateway webhook
-                └──► verify → normalize → sign → app webhook endpoints
-```
+Self-hosted payment orchestrator. Your apps call **one API with one
+credential**; KeiPay creates the checkout on your payment gateway account,
+receives the gateway's callback, and forwards a normalized, signed event to
+the webhook endpoints of the app that created the payment. It also
+reconciles its records with the gateway's.
 
 > **Status: early.** Today KeiPay supports **Xendit Invoice**. Gateway
 > accounts are configured in the console as connections (any number, each
-> `test` or `live`), and each app uses one default connection. Per-app
-> routing across connections (`auto`, weighted, fallback) and Midtrans/DOKU
-> adapters are designed in [`docs/design.md`](docs/design.md) and not built
-> yet.
+> `test` or `live`), and each app uses one default connection. Routing an
+> app across several connections (`auto`, weighted, fallback) and Midtrans
+> and DOKU adapters are designed in [`docs/design.md`](docs/design.md) but
+> not built yet.
+
+**Contents:**
+[How it works](#how-it-works) ·
+[Features](#features) ·
+[Quick start](#quick-start-development) ·
+[Docker](#running-everything-with-docker) ·
+[First sign-in](#first-sign-in) ·
+[Connect a gateway](#connect-a-gateway-xendit) ·
+[API contract](#api-contract) ·
+[App API](#app-api) ·
+[Webhooks sent to your app](#webhooks-sent-to-your-app) ·
+[Reconciliation](#reconciliation) ·
+[Admin API](#admin-api) ·
+[Tests](#tests)
 
 ## KeiPay never holds funds
 
@@ -30,6 +38,209 @@ paying them out yourself is a regulated activity in most jurisdictions
 (in Indonesia it needs a Bank Indonesia payment-service licence) and breaks
 most gateway terms of service. KeiPay is not built for, and does not support,
 that use.
+
+## How it works
+
+KeiPay is one Go process (API, background worker and admin console) backed
+by Postgres and Redis. Each gateway account you add is a **connection**;
+each app creates payments on its default connection.
+
+```mermaid
+flowchart LR
+    app["Your app"]
+    customer["Customer"]
+    operator["Operator"]
+
+    subgraph keipay["KeiPay"]
+        v1["App API<br/>/v1/payments"]
+        inbound["Gateway callbacks<br/>/webhooks/{provider}/{connection_id}"]
+        console["Admin console<br/>and /admin API"]
+        worker["Worker (asynq)<br/>deliveries, sweeper, reconciliation"]
+    end
+
+    pg[("Postgres<br/>apps, connections, payments,<br/>events, deliveries, reports")]
+    redis[("Redis<br/>nonces, sessions, job queue")]
+    gateway["Payment gateway<br/>(your Xendit account)"]
+    endpoints["Your app's<br/>webhook endpoints"]
+
+    app -- "signed request" --> v1
+    v1 -- "create invoice" --> gateway
+    customer -- "pays on checkout" --> gateway
+    gateway -- "payment callback" --> inbound
+    worker -- "signed event" --> endpoints
+    worker -- "list transactions" --> gateway
+    operator --> console
+    v1 --- pg
+    inbound --- pg
+    console --- pg
+    worker --- pg
+    v1 --- redis
+    console --- redis
+    worker --- redis
+```
+
+Money moves only between the customer and your gateway account. KeiPay
+stores what happened and tells your app about it.
+
+### Creating a payment
+
+Your app signs each request with its API secret. KeiPay checks the
+signature, returns the original payment for a retried request, and
+otherwise creates an invoice on the app's default connection. See
+[App API](#app-api) for the details.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant App as Your app
+    participant API as KeiPay /v1
+    participant Redis
+    participant DB as Postgres
+    participant GW as Gateway (Xendit)
+    actor Customer
+
+    App->>API: POST /v1/payments<br/>X-Api-Key, X-Timestamp, X-Signature, Idempotency-Key
+    API->>API: X-Timestamp within 5 minutes?
+    API->>DB: find the API key, its app and secret
+    API->>API: HMAC-SHA256 of "{timestamp}.{rawBody}" matches?<br/>key not revoked or expired, app enabled?
+    API->>Redis: claim the signature as a nonce (reuse is 401 replayed_request)
+    API->>DB: payment with this Idempotency-Key or order_id?
+    alt already created
+        API-->>App: 201 original payment, Idempotent-Replayed true
+    else new payment
+        API->>DB: load the app's default connection and its channels
+        API->>GW: create invoice, external_id kp_pay_…
+        GW-->>API: invoice id and checkout URL
+        API->>DB: insert payment (PENDING)
+        API-->>App: 201 id, reference, invoice_url
+    end
+    App->>Customer: send to invoice_url
+    Customer->>GW: pay on the gateway checkout
+```
+
+Without a default connection the request fails with
+`422 no_eligible_connection`; if the gateway refuses or cannot be reached,
+nothing is stored and the request can be retried with the same `order_id`.
+
+### Gateway callbacks and webhook delivery
+
+The gateway calls the URL of the connection the payment was made on. KeiPay
+verifies the callback with that connection's credentials, applies it in one
+database transaction, and delivers a signed event to every endpoint of the
+app that subscribes to it.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant GW as Gateway (Xendit)
+    participant H as KeiPay /webhooks
+    participant DB as Postgres
+    participant Q as Queue (asynq on Redis)
+    participant W as Worker
+    participant E as Your webhook endpoints
+
+    GW->>H: POST /webhooks/xendit/con_…<br/>(or the /webhooks/xendit alias)
+    H->>H: verify x-callback-token with this connection's token
+    alt verification or parsing fails
+        H->>DB: record inbound webhook (rejected)
+        H-->>GW: 401 or 400
+    else verified
+        Note over H,DB: one transaction
+        H->>DB: claim the gateway event for this connection (duplicate stops here)
+        H->>DB: lock the payment by its stored reference
+        H->>DB: other connection, amount or currency? record as mismatch, do not apply
+        H->>DB: status moves forward only? otherwise record as stale
+        H->>DB: update the payment and write its payment report (gross, fee, net)
+        H->>DB: insert the event and one pending delivery per subscribed active endpoint
+        H->>Q: after commit, enqueue the first attempt of each delivery
+        H-->>GW: 200
+    end
+    Q->>W: webhook:forward
+    W->>E: POST event with X-KeiPay-Signature t=…,v1=…
+    alt 2xx within 15 seconds
+        W->>DB: delivery delivered
+    else error, redirect or timeout
+        W->>DB: log the attempt, schedule the next one (backoff)
+        W->>Q: enqueue the next attempt
+    end
+    Note over W,E: After the last attempt the delivery fails. After WEBHOOK_DISABLE_AFTER_FAILURES<br/>failed deliveries in a row, the endpoint is disabled.
+    Note over Q,DB: The sweeper re-enqueues pending deliveries whose attempt is overdue<br/>(for example when the enqueue after commit failed). An admin can replay a delivery.
+```
+
+A callback for a reference KeiPay does not know yet answers `500`, so the
+gateway retries it. Every callback, accepted or not, is kept in the inbound
+log.
+
+### Payment status
+
+Callbacks can arrive out of order, so a payment's status only moves
+forward. A late success after `EXPIRED` or `FAILED` is still applied,
+because the gateway captured the funds.
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING
+    PENDING --> PAID
+    PENDING --> SETTLED
+    PENDING --> EXPIRED
+    PENDING --> FAILED
+    PAID --> SETTLED
+    EXPIRED --> PAID
+    EXPIRED --> SETTLED
+    FAILED --> PAID
+    FAILED --> SETTLED
+    SETTLED --> [*]
+```
+
+Each change sends the matching event: `payment.paid`, `payment.settled`,
+`payment.expired` or `payment.failed`.
+
+### Reconciling with the gateway
+
+An admin starts a run for one connection and date range. The worker pulls
+the gateway's transactions, compares them by reference with KeiPay's
+payments and their payment reports, and stores one item per reference.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Admin
+    participant API as KeiPay /admin
+    participant DB as Postgres
+    participant W as Worker
+    participant GW as Xendit Transactions API
+
+    Admin->>API: POST /admin/reconciliation-runs<br/>connection, from, to (at most 31 days)
+    API->>DB: insert run (queued) and audit log entry
+    API->>W: enqueue reconciliation:run
+    W->>DB: claim the run (running)
+    W->>GW: GET /transactions, type PAYMENT, page by page<br/>range widened by one hour on each side
+    W->>DB: load the connection's payments and payment reports
+    W->>W: match by reference
+    W->>DB: store items and summary (succeeded)
+    Admin->>API: list items, resolve differences with a note, export CSV
+```
+
+```mermaid
+flowchart TD
+    start(["One reference"]) --> inKeipay{"Payment in KeiPay?"}
+    inKeipay -- no --> gwPaid{"Paid at the gateway?"}
+    gwPaid -- yes --> missingKeipay["missing_in_keipay"]
+    gwPaid -- no --> skip["not listed"]
+    inKeipay -- yes --> inGateway{"Transaction at the gateway?"}
+    inGateway -- no --> kpPaid{"Paid in KeiPay?"}
+    kpPaid -- yes --> missingGateway["missing_in_gateway"]
+    kpPaid -- no --> skip
+    inGateway -- yes --> amount{"Same amount and currency?"}
+    amount -- no --> amountMismatch["amount_mismatch"]
+    amount -- yes --> status{"Paid on both sides,<br/>or on neither?"}
+    status -- no --> statusMismatch["status_mismatch"]
+    status -- yes --> fee{"Paid, both fees known<br/>and different?"}
+    fee -- yes --> feeMismatch["fee_mismatch"]
+    fee -- no --> matched["matched"]
+```
+
+"Paid" means `PAID` or `SETTLED`.
 
 ## Features
 
@@ -55,7 +266,12 @@ that use.
   envelope signed with a timestamp; at-least-once delivery with a log of
   every attempt, replay, and automatic disabling of endpoints that keep
   failing.
-- Per-app reporting of gross, fee and net amounts.
+- Reconciliation per connection and period: KeiPay pulls the gateway's
+  transactions, matches them with its own payments by reference, and lists
+  every difference (missing on either side, amount, status or fee
+  mismatch) for an admin to resolve with a note. Payment reports (gross,
+  fee, net) are totalled per app, connection, currency and day or month,
+  and both reports and run results export as streamed CSV.
 - Admin console (React) served by the same process: console users with
   `owner`, `admin` and `viewer` roles, cookie sessions stored in Redis, CSRF
   protection, rate-limited sign-in, and an audit log of every admin change
@@ -127,8 +343,8 @@ docker compose up -d --build
 ```
 
 This starts Postgres, Redis, a one-shot migration, and a single `keipay`
-container serving the API, the webhook worker and the admin console on
-`http://localhost:8080`. Optionally create a demo app (its credentials are
+container serving the API, the background worker and the admin console on
+`http://localhost:8080` (host port `KEIPAY_PORT`). Optionally create a demo app (its credentials are
 printed once):
 
 ```bash
@@ -156,7 +372,7 @@ Owners add more users in **Settings → Users** and pick a role:
 |---|---|
 | `owner` | everything, including users |
 | `admin` | everything except users |
-| `viewer` | read apps (including webhook endpoints), connections, payments, ledger and webhook logs; no changes, no audit log |
+| `viewer` | read apps (including webhook endpoints), connections, payments, payment reports, reconciliation runs and webhook logs; no changes, no audit log |
 
 New users and password resets get a temporary password, shown once, that
 must be changed at first sign-in.
@@ -191,7 +407,9 @@ can reach first: callback URLs are built from it.
    for a Xendit development key `xnd_development_…`, `live` for
    `xnd_production_…`) and a name such as `xendit-live`.
 2. Paste the **secret API key** (Xendit dashboard → Settings → API keys;
-   a restricted key with Invoice read and write is enough) and the
+   a restricted key with Invoice read and write is enough for payments,
+   and [reconciliation](#reconciliation) also needs read access to
+   transactions) and the
    **webhook verification token** (Settings → Webhooks). KeiPay encrypts
    them and from then on shows only their last 4 characters.
 3. KeiPay **tests** the credentials right away. Fix and retest if needed.
@@ -270,6 +488,11 @@ Every `/v1/*` request carries:
 - `X-Api-Key`: the API key
 - `X-Timestamp`: unix seconds (±5 min window)
 - `X-Signature`: hex HMAC-SHA256 of `"{timestamp}.{rawBody}"` keyed with the API secret
+
+Each signature is accepted once: KeiPay stores it in Redis as a nonce, and
+sending the same timestamp and body again gets `401 replayed_request`. To
+retry, sign again with a new timestamp (and keep the same `order_id` or
+`Idempotency-Key`, so the retry returns the original payment).
 
 ### Create a payment
 
@@ -441,14 +664,17 @@ Node.js (`rawBody` is the unparsed body as a `Buffer`):
 import crypto from "node:crypto";
 
 export function verifyKeiPaySignature(header, rawBody, secret, toleranceSeconds = 300) {
-  const parts = header.split(",").map((part) => part.trim().split("="));
+  const parts = (header ?? "").split(",").map((part) => part.trim().split("="));
   const t = parts.find(([key]) => key === "t")?.[1];
-  const sigs = parts.filter(([key]) => key === "v1").map(([, value]) => value);
-  if (!t || Math.abs(Date.now() / 1000 - Number(t)) > toleranceSeconds) return false;
-  const want = crypto.createHmac("sha256", secret).update(`${t}.`).update(rawBody).digest("hex");
-  return sigs.some(
-    (sig) => sig.length === want.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(want)),
-  );
+  const sigs = parts.filter(([key]) => key === "v1").map(([, value]) => value ?? "");
+  if (!/^\d+$/.test(t ?? "") || Math.abs(Date.now() / 1000 - Number(t)) > toleranceSeconds) return false;
+  const want = Buffer.from(crypto.createHmac("sha256", secret).update(`${t}.`).update(rawBody).digest("hex"));
+  return sigs.some((sig) => {
+    // Compare byte lengths, not string lengths: timingSafeEqual throws on
+    // buffers of different sizes, and non-ASCII characters take several bytes.
+    const got = Buffer.from(sig);
+    return got.length === want.length && crypto.timingSafeEqual(got, want);
+  });
 }
 ```
 
@@ -458,15 +684,19 @@ Return any `2xx` within 15 seconds to acknowledge. Anything else (including
 a redirect or a timeout) is retried with the endpoint's retry policy (default
 8 attempts with exponential backoff from 30 seconds, about an hour in all).
 Delivery is **at-least-once**, so dedupe on the event id. Status only moves
-forward (`PENDING` → `PAID` → `SETTLED`); if gateway callbacks arrive out of
-order the stale one is dropped, so you may get `payment.settled` without
-`payment.paid`. Treat settled as paid.
+forward (see [Payment status](#payment-status)); if gateway callbacks arrive
+out of order the stale one is dropped, so you may get `payment.settled`
+without `payment.paid`. Treat settled as paid.
 
-After `WEBHOOK_DISABLE_AFTER_FAILURES` (default 5) deliveries in a row that
-ran out of attempts, KeiPay disables the endpoint and shows why in the
-console. Fix the receiver, enable the endpoint, then replay the failed
-deliveries (Webhooks → Outbound). A replay resends the same event id and
-body once.
+After `WEBHOOK_DISABLE_AFTER_FAILURES` (default 5; `0` never disables)
+deliveries in a row that ran out of attempts, KeiPay disables the endpoint
+and shows why in the console. A successful delivery resets the count. Fix
+the receiver, enable the endpoint, then replay the failed deliveries
+(Webhooks → Outbound). A replay resends the same event id and body once.
+
+If queuing an attempt fails, the delivery stays `pending` in Postgres and a
+sweeper, running every minute in the worker, queues it again once it is
+more than two minutes overdue.
 
 Every gateway callback KeiPay receives is kept with its raw body, whether
 verification passed and what happened to it (Webhooks → Inbound). A callback
@@ -489,6 +719,38 @@ the secret.
 
 `WEBHOOK_MAX_RETRY` is no longer read; retries are set per endpoint.
 
+## Reconciliation
+
+KeiPay never holds funds, so reconciling means checking that KeiPay and the
+gateway agree about every payment (see the
+[diagrams](#reconciling-with-the-gateway) above). In the console, open
+**Reconciliation**:
+
+- **Summary** totals the payment reports (one per paid payment: gross, fee,
+  net) per app, connection and currency for a date range, as one total or
+  per day or month. Dates are Asia/Jakarta (WIB); times are stored in UTC.
+  **Export CSV** downloads the matching reports.
+- **Runs** compare one connection over a date range of at most 31 days.
+  The background worker (`RUN_WORKER=true`, the default) pulls the
+  gateway's transactions (today: Xendit's Transactions API, which needs
+  the secret key's read permission for transactions) and matches them with
+  KeiPay's payments by reference. Each reference becomes an item:
+  `matched`, `missing_in_keipay`, `missing_in_gateway`, `amount_mismatch`,
+  `status_mismatch` or `fee_mismatch`. Resolve the others with a note
+  once you have looked at them; this is recorded in the audit log.
+  **Export CSV** downloads a run's items. **Re-run** recomputes the same
+  run without duplicating items, and an item keeps its resolution while its
+  result stays the same.
+
+**Fees.** KeiPay records the gateway fee from the payment callback: the
+paid amount minus Xendit's `adjusted_received_amount` (what you receive).
+When the callback does not carry that field, the fee and net are unknown,
+and the run does not compare fees for that payment. On the gateway side the
+fee is Xendit's fee plus its VAT.
+
+Without a worker, runs stay `queued`. A run that is still queued or
+running after 15 minutes without progress can be re-run.
+
 ## Admin API
 
 The admin API is for the console. `POST /admin/login` (or `POST /admin/setup`
@@ -509,7 +771,13 @@ Sessions expire after 30 minutes idle or 12 hours in total
 - `GET/POST /admin/connections`, `GET/PATCH /admin/connections/:id`,
   `PATCH /admin/connections/:id/credentials`, `PUT /admin/connections/:id/channels`,
   `POST /admin/connections/:id/test|disable|enable`
-- `GET /admin/payments` (cursor-paginated), `GET /admin/ledger`
+- `GET /admin/payments` (cursor-paginated)
+- `GET /admin/payment-reports` (cursor-paginated), `GET /admin/payment-reports/summary`,
+  `GET /admin/payment-reports/export` (CSV)
+- `GET/POST /admin/reconciliation-runs`, `GET /admin/reconciliation-runs/:id`,
+  `POST /admin/reconciliation-runs/:id/rerun`, `GET /admin/reconciliation-runs/:id/items`,
+  `GET /admin/reconciliation-runs/:id/items/export` (CSV),
+  `GET /admin/reconciliation-items/:id`, `POST /admin/reconciliation-items/:id/resolve`
 - `GET /admin/event-types`
 - `GET/POST /admin/apps/:id/webhook-endpoints`,
   `GET/PATCH/DELETE /admin/webhook-endpoints/:id`,
@@ -521,13 +789,13 @@ Sessions expire after 30 minutes idle or 12 hours in total
 
 Cursor-paginated lists take `limit` and `cursor` and return `next_cursor`.
 Resources use prefixed ids (`app_…`, `key_…`, `pay_…`, `con_…`, `whe_…`,
-`evt_…`, `dlv_…`, `inb_…`, `usr_…`).
+`evt_…`, `dlv_…`, `inb_…`, `rec_…`, `rci_…`, `usr_…`).
 
 The server checks each operation's permission against the caller's role
 (`403 forbidden` otherwise); the table is in the spec and `GET /admin/me`
 returns the caller's permissions.
 
-Every admin change (users, apps, API keys, connections, webhook endpoints, password changes, replays) and every
+Every admin change (users, apps, API keys, connections, webhook endpoints, password changes, replays, reconciliation runs and resolved items) and every
 sign-in, failed sign-in and sign-out is recorded in the audit log with who,
 what, when and before/after values, never secrets or passwords.
 

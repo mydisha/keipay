@@ -297,7 +297,10 @@ Makefile            dev, build, test, gen, ci, docker targets
 
 The backend follows a service-layer (ports-and-adapters) structure:
 handlers stay thin, business rules live in `internal/service`, and
-`internal/domain` has no external dependencies.
+`internal/domain` has no external dependencies. See
+[docs/architecture.md](docs/architecture.md) for a full map of the backend
+and the console, how a request flows through the code, and where to start
+for common changes.
 
 ## Quick start (development)
 

@@ -2,6 +2,7 @@ import { skipToken, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { api, unwrap } from "@/shared/api/client";
 import type { components } from "@/shared/api/schema";
 import { cursorPageOptions } from "@/shared/lib/use-cursor-pages";
+import { withQuery } from "@/shared/lib/url";
 
 export type PaymentReport = components["schemas"]["PaymentReport"];
 export type SummaryRow = components["schemas"]["PaymentReportSummaryRow"];
@@ -36,16 +37,6 @@ export function reportQuery(filters: ReportFilters) {
     connection_id: filters.connectionId ?? undefined,
     currency: filters.currency ?? undefined,
   };
-}
-
-/** Builds `path?query`, leaving out unset values, for `<a href download>` links. */
-export function withQuery(path: string, query: Record<string, string | boolean | undefined>): string {
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(query)) {
-    if (value !== undefined) params.set(key, String(value));
-  }
-  const text = params.toString();
-  return text ? `${path}?${text}` : path;
 }
 
 export function reportsExportUrl(filters: ReportFilters): string {

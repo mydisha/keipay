@@ -28,7 +28,7 @@ export function RunStatusBadge({ status }: { status: RunStatus }) {
   );
 }
 
-export const RESULT_TONES: Record<ReconciliationResult, StatusTone> = {
+const RESULT_TONES: Record<ReconciliationResult, StatusTone> = {
   matched: "success",
   missing_in_keipay: "danger",
   missing_in_gateway: "danger",

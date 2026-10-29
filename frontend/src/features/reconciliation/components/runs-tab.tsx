@@ -2,7 +2,6 @@ import { PanelRightOpenIcon, PlayIcon, ScaleIcon } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { usePermission } from "@/features/auth/components/can";
-import { EnvironmentBadge } from "@/features/apps/components/environment-badge";
 import { useMode } from "@/shared/lib/mode";
 import { strings } from "@/shared/lib/strings";
 import { loadMoreList } from "@/shared/lib/use-cursor-pages";
@@ -15,18 +14,8 @@ import { isRunStatus, RUN_STATUSES, useReconciliationRuns, type ReconciliationRu
 import { formatRunRange } from "../lib/format-range";
 import { runPath, type ReconciliationSearch } from "../lib/reconciliation-search";
 import { RunStatusBadge } from "./badges";
+import { RunConnection } from "./run-connection";
 import { RunDialog } from "./run-dialog";
-
-export function RunConnection({ run }: { run: Pick<ReconciliationRun, "connection"> }) {
-  return (
-    <span className="inline-flex max-w-full min-w-0 items-center gap-2">
-      <span className="truncate font-mono text-[0.8125rem]" title={run.connection.name}>
-        {run.connection.name}
-      </span>
-      <EnvironmentBadge environment={run.connection.environment} />
-    </span>
-  );
-}
 
 function UnresolvedCount({ run }: { run: ReconciliationRun }) {
   if (!run.summary) return <span className="text-muted-foreground">{strings.common.none}</span>;

@@ -843,7 +843,6 @@ export const strings = {
       connectionUnsupported: "This connection's gateway can't list transactions.",
       fromPast: "The start date can't be after today.",
       toAfter: "The end date can't be before the start date.",
-      maxRange31: "Choose a range of at most 31 days.",
     },
     backToRuns: "Back to reconciliation",
     runTitle: "Reconciliation run",

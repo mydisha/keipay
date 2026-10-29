@@ -15,7 +15,7 @@ import type { ReconciliationItem, ResolveItemMutation } from "../api/runs";
 import { MAX_NOTE_LENGTH, noteLength, resolveFormSchema, resolveRuleMessages, type ResolveFormValues } from "../schemas/resolve-form";
 
 /** The message for a refused resolve that has no field to go on. */
-export function resolveErrorMessage(error: unknown): string {
+function resolveErrorMessage(error: unknown): string {
   if (isApiError(error)) {
     if (error.code === "conflict") return strings.reconciliation.alreadyResolved;
     if (error.code === "run_in_progress") return strings.reconciliation.runInProgress;

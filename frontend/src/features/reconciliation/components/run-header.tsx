@@ -15,7 +15,7 @@ import { useRerun, type ReconciliationRun } from "../api/runs";
 import { formatRunRange } from "../lib/format-range";
 import { RUNS_TAB_PATH } from "../lib/reconciliation-search";
 import { RunStatusBadge } from "./badges";
-import { RunConnection } from "./runs-tab";
+import { RunConnection } from "./run-connection";
 
 export function BackToRuns() {
   return (
@@ -30,7 +30,7 @@ export function BackToRuns() {
 }
 
 /** The toast for a failed re-run: `409 run_in_progress` says why. */
-export function rerunErrorMessage(error: unknown): string {
+function rerunErrorMessage(error: unknown): string {
   if (isApiError(error) && error.code === "run_in_progress") return strings.reconciliation.runInProgress;
   return errorMessage(error, strings.reconciliation.rerunFailed);
 }

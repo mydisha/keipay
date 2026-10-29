@@ -12,7 +12,7 @@ import {
   signInToDashboard,
 } from "./helpers";
 
-// T-E1..T-E3: a local receiver gets a signed test event from an endpoint
+// A local receiver gets a signed test event from an endpoint
 // added in the console; the README's Node.js function verifies it, also with
 // the two signatures sent after a rotation; wrong-token and unknown-reference
 // gateway callbacks show up in the Inbound log. Runs at desktop and phone
@@ -118,7 +118,7 @@ for (const { label, viewport, hasTouch } of viewports) {
   test.describe(`webhook router (${label})`, () => {
     test.use({ viewport, hasTouch });
 
-    test("T-E1/T-E2: add an endpoint, send signed test events, rotate with overlap, delete", async ({ page }, testInfo) => {
+    test("add an endpoint, send signed test events, rotate with overlap, delete", async ({ page }, testInfo) => {
       const verify = await readmeVerifier(testInfo.outputPath("verify-keipay-signature.mjs"));
       const receiver = await startReceiver();
       try {
@@ -129,7 +129,7 @@ for (const { label, viewport, hasTouch } of viewports) {
         await signInToDashboard(page);
         const tabPath = await demoAppWebhooks(page);
 
-        // T-E1: add the endpoint (all events, one custom header) and keep its secret.
+        // Add the endpoint (all events, one custom header) and keep its secret.
         await page.getByRole("button", { name: "Add endpoint" }).first().click();
         const sheet = page.getByRole("dialog", { name: "Add endpoint" });
         await expect(sheet).toBeVisible();
@@ -171,7 +171,9 @@ for (const { label, viewport, hasTouch } of viewports) {
         expect(v1Values(signature)).toHaveLength(1);
         expect(verify(signature, got.body, first)).toBe(true);
         expect(verify(signature, Buffer.concat([got.body, Buffer.from(" ")]), first)).toBe(false);
-        expect(verify(signature, got.body, `${first.slice(0, -1)}0`)).toBe(false);
+        // Change the secret's last character to one it is not, so the
+        // tampered secret always differs (a fixed "0" equals it 1 time in 16).
+        expect(verify(signature, got.body, `${first.slice(0, -1)}${first.endsWith("0") ? "1" : "0"}`)).toBe(false);
         const envelope = JSON.parse(got.body.toString("utf8")) as { id: string; type: string; api_version: string };
         expect(envelope).toMatchObject({ type: "payment.paid", api_version: "v2", id: got.headers["x-keipay-event-id"] });
 
@@ -199,7 +201,7 @@ for (const { label, viewport, hasTouch } of viewports) {
           await expect(row.getByText("1/1")).toBeVisible();
         }
 
-        // T-E2: rotate with the default 24 h overlap; the next request carries both signatures.
+        // Rotate with the default 24 h overlap; the next request carries both signatures.
         await page.goto(tabPath);
         await settled(page);
         await endpointAction(page, url, "Rotate secret");
@@ -237,7 +239,7 @@ for (const { label, viewport, hasTouch } of viewports) {
       }
     });
 
-    test("T-E3: wrong-token and unknown-reference callbacks are logged in Inbound", async ({ page, request }) => {
+    test("wrong-token and unknown-reference callbacks are logged in Inbound", async ({ page, request }) => {
       const suffix = `${label}-${Date.now().toString(36)}`;
       const wrongToken = { id: `inv_e2e_bad_${suffix}`, external_id: "kp_pay_unknown", status: "PAID", amount: 1000, currency: "IDR" };
       const unknownRef = { id: `inv_e2e_${suffix}`, external_id: "kp_pay_unknown", status: "PAID", amount: 1000, currency: "IDR" };

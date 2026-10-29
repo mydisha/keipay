@@ -9,7 +9,7 @@ import {
   signInToDashboard,
 } from "./helpers";
 
-// T-62: API key state is enforced on /v1 right away. Credentials come from the
+// API key state is enforced on /v1 right away. Credentials come from the
 // console; requests are signed here like an app would sign them. CI's Xendit
 // key is fake, so only GET /v1/payments/{id} is used: a 404 means the key
 // passed authentication.
@@ -28,12 +28,13 @@ function randomPaymentId() {
 }
 
 // A signature is accepted once and covers only the timestamp and body, so
-// repeated GETs (empty body) need distinct timestamps; stay well inside the
-// 5-minute window.
-let skew = 0;
+// repeated GETs (empty body) need distinct timestamps. Each one is the
+// current second or one before the previous, whichever is earlier: never
+// repeated, and a handful of requests stays well inside the 5-minute window.
+let lastTimestamp = Number.POSITIVE_INFINITY;
 function nextTimestamp() {
-  skew = (skew + 1) % 240;
-  return String(Math.floor(Date.now() / 1000) - skew);
+  lastTimestamp = Math.min(Math.floor(Date.now() / 1000), lastTimestamp - 1);
+  return String(lastTimestamp);
 }
 
 interface Credentials {

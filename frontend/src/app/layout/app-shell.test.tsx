@@ -166,7 +166,7 @@ describe("Routing", () => {
   ])("redirects %s to %s", async (from, to) => {
     mockApi({
       "GET /admin/apps": { data: [], next_cursor: null },
-      "GET /admin/webhook-deliveries": { deliveries: [] },
+      "GET /admin/webhook-deliveries": { data: [], next_cursor: null },
       "GET /admin/ledger": { entries: [], summary: [] },
     });
     const { router } = renderApp(from);

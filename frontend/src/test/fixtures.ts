@@ -14,7 +14,6 @@ export function app(overrides: Partial<Schemas["App"]> = {}): Schemas["App"] {
     environment: "test",
     status: "active",
     metadata: {},
-    webhook_url: "https://demo.example.com/webhooks/kei",
     redirect_success_url: "",
     redirect_failure_url: "",
     default_connection: null,
@@ -53,7 +52,6 @@ export function appCreated(overrides: Partial<Schemas["App"]> = {}): Schemas["Ap
     key: apiKey(),
     api_key: "kp_test_0123456789abcdef0123456789abcdef",
     api_secret: "kps_test_secret-value-shown-once",
-    webhook_secret: "kpwh_webhook-secret-shown-once",
   };
 }
 
@@ -82,29 +80,161 @@ export function payment(overrides: Partial<Schemas["Payment"]> = {}): Schemas["P
   };
 }
 
+export const DLV_ID = "dlv_01JBKQ7Z8M4X2Y6V3N9T5R1W0H";
+export const EVT_ID = "evt_01JBKQ7Z8M4X2Y6V3N9T5R1W0J";
+export const WHE_ID = "whe_01JBKQ7Z8M4X2Y6V3N9T5R1W0K";
+export const INB_ID = "inb_01JBKQ7Z8M4X2Y6V3N9T5R1W0M";
+
 export function delivery(overrides: Partial<Schemas["WebhookDelivery"]> = {}): Schemas["WebhookDelivery"] {
   return {
-    id: 7,
-    payment_id: PAY_ID,
+    id: DLV_ID,
     app: appSummary(),
+    endpoint: { id: WHE_ID, url: "https://shop.example.com/hooks/keipay", description: "", deleted: false },
+    event: { id: EVT_ID, type: "payment.paid", test: false },
     event_type: "payment.paid",
+    payment_id: PAY_ID,
+    status: "FAILED",
+    attempts: 3,
+    max_attempts: 3,
+    next_attempt_at: null,
+    last_attempt_at: "2026-01-01T00:05:00Z",
+    last_response_status: 500,
+    last_error: "status=500",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:05:00Z",
+    ...overrides,
+  };
+}
+
+export function deliveryAttempt(
+  overrides: Partial<Schemas["WebhookDeliveryAttempt"]> = {},
+): Schemas["WebhookDeliveryAttempt"] {
+  return {
+    attempt: 1,
+    manual: false,
+    url: "https://shop.example.com/hooks/keipay",
+    request_headers: {
+      "Content-Type": "application/json",
+      "X-KeiPay-Event-Id": EVT_ID,
+      Authorization: "[REDACTED]",
+    },
+    response_status: 500,
+    response_body: "upstream failed",
+    response_body_truncated: false,
+    error: "status=500",
+    duration_ms: 120,
+    started_at: "2026-01-01T00:00:01Z",
+    ...overrides,
+  };
+}
+
+export function deliveryDetail(
+  overrides: Partial<Schemas["WebhookDeliveryDetail"]> = {},
+): Schemas["WebhookDeliveryDetail"] {
+  return {
+    ...delivery(),
     payload: {
-      event: "payment.paid",
-      payment_id: 10,
-      payment_public_id: PAY_ID,
-      order_id: "order-001",
-      external_id: `kp_${PAY_ID}`,
+      id: EVT_ID,
+      type: "payment.paid",
+      api_version: "v2",
+      created_at: "2026-01-01T00:00:00Z",
+      data: { id: PAY_ID, order_id: "order-001", amount: 150000, currency: "IDR" },
+    },
+    attempt_log: [deliveryAttempt()],
+    ...overrides,
+  };
+}
+
+export function webhookEndpoint(overrides: Partial<Schemas["WebhookEndpoint"]> = {}): Schemas["WebhookEndpoint"] {
+  return {
+    id: WHE_ID,
+    app: appSummary(),
+    url: "https://shop.example.com/hooks/keipay",
+    description: "Order service",
+    events: ["payment.paid", "payment.settled"],
+    api_version: "v2",
+    legacy_signature: false,
+    headers: [],
+    retry_policy: { max_attempts: 8, backoff: "exponential", interval_seconds: 30 },
+    status: "active",
+    disabled_reason: null,
+    disabled_at: null,
+    consecutive_failures: 0,
+    secret_last4: "c0de",
+    previous_secret_expires_at: null,
+    migrated: false,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
+export const WEBHOOK_SECRET = "kpwh_0123456789abcdef0123456789abcdef0123456789abcdef";
+
+function exampleEnvelope(type: Schemas["EventType"]): Schemas["WebhookEnvelope"] {
+  return {
+    id: "evt_01JBKQ7Z8M4X2Y6V3N9T5R1W0C",
+    type,
+    api_version: "v2",
+    created_at: "2026-01-01T10:00:00Z",
+    data: {
+      id: PAY_ID,
+      order_id: "order_1001",
+      reference: `kp_${PAY_ID}`,
       status: "PAID",
       amount: 150000,
       currency: "IDR",
       metadata: {},
-      timestamp: "2026-01-01T00:00:00Z",
+      provider: "xendit",
+      connection_id: CON_ID,
+      paid_at: null,
+      settled_at: null,
     },
-    status: "FAILED",
-    attempts: 3,
-    last_error: "connection refused",
-    created_at: "2026-01-01T00:00:00Z",
-    updated_at: "2026-01-01T00:00:00Z",
+  };
+}
+
+/** A catalog shaped like the server's, with fewer types so tests stay short. */
+export function eventCatalog(): Schemas["EventTypeListResponse"] {
+  const types: [Schemas["EventType"], string][] = [
+    ["payment.paid", "The payer paid."],
+    ["payment.settled", "The gateway settled the funds."],
+    ["payment.expired", "The checkout expired."],
+  ];
+  return {
+    data: types.map(([type, description]) => ({ type, description, example: exampleEnvelope(type) })),
+    wildcards: [
+      { pattern: "payment.*", description: "Every payment event." },
+      { pattern: "*", description: "Every event, including types added later." },
+    ],
+  };
+}
+
+export function inboundWebhook(overrides: Partial<Schemas["InboundWebhook"]> = {}): Schemas["InboundWebhook"] {
+  return {
+    id: INB_ID,
+    connection: connectionSummary(),
+    provider: "xendit",
+    source: "webhook",
+    signature_valid: true,
+    result: "applied",
+    result_detail: "",
+    event_key: "inv_123",
+    provider_status: "PAID",
+    reference: `kp_${PAY_ID}`,
+    payment_id: PAY_ID,
+    event: { id: EVT_ID, type: "payment.paid", test: false },
+    received_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
+export function inboundDetail(
+  overrides: Partial<Schemas["InboundWebhookDetail"]> = {},
+): Schemas["InboundWebhookDetail"] {
+  return {
+    ...inboundWebhook(),
+    raw_body: '{"id":"inv_123","status":"PAID"}',
+    raw_body_truncated: false,
     ...overrides,
   };
 }

@@ -1,4 +1,5 @@
 import type { FieldValues, Path, UseFormSetError } from "react-hook-form";
+import { errorMessage } from "@/shared/api/error-message";
 import { isApiError, type FieldError } from "@/shared/api/errors";
 import { NAME_RULES } from "@/shared/lib/field-errors";
 import { strings } from "@/shared/lib/strings";
@@ -9,7 +10,6 @@ const URL_RULES = { url: strings.apps.urlInvalid };
 const RULE_MESSAGES: Record<string, Record<string, string>> = {
   name: NAME_RULES,
   slug: { required: strings.apps.slugInvalid, slug: strings.apps.slugInvalid },
-  webhook_url: URL_RULES,
   redirect_success_url: URL_RULES,
   redirect_failure_url: URL_RULES,
   metadata: {
@@ -65,4 +65,16 @@ export function applyServerErrors<T extends FieldValues>(
   const placed = error.fields.map(placeError).filter((p) => fieldNames.includes(p.field));
   placed.forEach((p, index) => setError(p.field as Path<T>, { message: p.message }, { shouldFocus: index === 0 }));
   return placed.length > 0 && placed.length === error.fields.length;
+}
+
+/**
+ * The form-level message for an error `applyServerErrors` could not place.
+ * Webhook URLs moved to webhook endpoints (rule `moved`); the forms have no
+ * such field, so it gets its own message instead of the server's text.
+ */
+export function unplacedErrorMessage(error: unknown, fallback: string): string {
+  if (isApiError(error) && error.fields.some((f) => f.field === "webhook_url" && f.rule === "moved")) {
+    return strings.apps.webhookUrlMoved;
+  }
+  return errorMessage(error, fallback);
 }

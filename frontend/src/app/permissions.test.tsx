@@ -1,6 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
-import { apiKey, app, APP_ID, auditLog, delivery, me, page } from "@/test/fixtures";
+import { apiKey, app, APP_ID, auditLog, delivery, deliveryDetail, DLV_ID, eventCatalog, me, page } from "@/test/fixtures";
 import { errorBody, json, mockApi } from "@/test/http";
 import { setViewport } from "@/test/media";
 import { renderApp } from "@/test/render";
@@ -62,25 +62,31 @@ describe("Permission-aware console (T-49, AC-25; T-48)", () => {
     expect(screen.getByRole("button", { name: "Create key" })).toBeInTheDocument();
   });
 
-  it("viewers see deliveries without Replay", async () => {
+  it("viewers see a delivery without Replay", async () => {
     mockApi({
       "GET /admin/me": viewer,
       "GET /admin/apps": page([app()]),
-      "GET /admin/webhook-deliveries": { deliveries: [delivery()] },
+      "GET /admin/event-types": eventCatalog(),
+      "GET /admin/webhook-deliveries": page([delivery()]),
+      [`GET /admin/webhook-deliveries/${DLV_ID}`]: { delivery: deliveryDetail() },
     });
-    renderApp("/webhooks");
-    expect(await screen.findByText("connection refused")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Replay delivery 7" })).not.toBeInTheDocument();
+    renderApp(`/webhooks?tab=outbound&id=${DLV_ID}`);
+    const sheet = await screen.findByRole("dialog", { name: "Delivery" });
+    expect(await within(sheet).findAllByText(DLV_ID)).not.toHaveLength(0);
+    expect(within(sheet).queryByRole("button", { name: "Replay" })).not.toBeInTheDocument();
   });
 
   it("admins keep Replay", async () => {
     mockApi({
       "GET /admin/me": admin,
       "GET /admin/apps": page([app()]),
-      "GET /admin/webhook-deliveries": { deliveries: [delivery()] },
+      "GET /admin/event-types": eventCatalog(),
+      "GET /admin/webhook-deliveries": page([delivery()]),
+      [`GET /admin/webhook-deliveries/${DLV_ID}`]: { delivery: deliveryDetail() },
     });
-    renderApp("/webhooks");
-    expect(await screen.findByRole("button", { name: "Replay delivery 7" })).toBeInTheDocument();
+    renderApp(`/webhooks?tab=outbound&id=${DLV_ID}`);
+    const sheet = await screen.findByRole("dialog", { name: "Delivery" });
+    expect(await within(sheet).findByRole("button", { name: "Replay" })).toBeInTheDocument();
   });
 
   it.each([

@@ -71,11 +71,6 @@ test("revoked keys, rotation and disabled apps take effect on /v1 at once", asyn
   expect(await getPayment(request, first)).toEqual({ status: 404, code: "not_found" });
   // A bad signature fails before any key state is considered.
   expect(await getPayment(request, first, true)).toEqual({ status: 401, code: "invalid_signature" });
-  // The webhook signing secret is not an API secret.
-  expect(await getPayment(request, { apiKey: app.apiKey, apiSecret: app.webhookSecret })).toEqual({
-    status: 401,
-    code: "invalid_signature",
-  });
 
   // Rotate: the new key works and the old one keeps working.
   await openKeys(page, app.id);

@@ -52,8 +52,8 @@ describe("Create app dialog (T-41)", () => {
     await user.type(within(dialog).getByLabelText("Name"), "Acme");
     await user.clear(within(dialog).getByLabelText("Slug"));
     await user.type(within(dialog).getByLabelText("Slug"), "-bad");
-    await user.type(within(dialog).getByLabelText("Webhook URL"), "ftp://nope");
     await user.type(within(dialog).getByLabelText("Success redirect URL"), "/relative");
+    await user.type(within(dialog).getByLabelText("Failure redirect URL"), "ftp://nope");
     await user.type(within(dialog).getByLabelText("Metadata (optional)"), "[[1]");
     await user.click(within(dialog).getByRole("button", { name: "Create app" }));
 
@@ -72,7 +72,7 @@ describe("Create app dialog (T-41)", () => {
           errorBody("invalid_request", "invalid request", {
             fields: [
               { field: "slug", rule: "slug" },
-              { field: "webhook_url", rule: "url" },
+              { field: "redirect_success_url", rule: "url" },
               { field: "metadata.tier", rule: "max" },
             ],
           }),
@@ -80,7 +80,7 @@ describe("Create app dialog (T-41)", () => {
     });
     const { user, dialog } = await openDialog();
     await user.type(within(dialog).getByLabelText("Name"), "Acme");
-    await user.type(within(dialog).getByLabelText("Webhook URL"), "https://acme.example.com/hook");
+    await user.type(within(dialog).getByLabelText("Success redirect URL"), "https://acme.example.com/thanks");
     await user.type(within(dialog).getByLabelText("Metadata (optional)"), '{{"tier": "gold"}');
     await user.click(within(dialog).getByRole("button", { name: "Create app" }));
     expect(await within(dialog).findByText(/Use 3-32 lowercase letters/)).toBeInTheDocument();
@@ -101,7 +101,32 @@ describe("Create app dialog (T-41)", () => {
     expect(await within(dialog).findByText("This slug is already used in the test environment.")).toBeInTheDocument();
   });
 
-  it("shows the three secrets once, then opens the new app", async () => {
+  it("has no webhook URL field and explains a moved webhook_url error (F-12)", async () => {
+    mockApi({
+      "GET /admin/apps": page([]),
+      "POST /admin/apps": () =>
+        json(
+          400,
+          errorBody("invalid_request", "invalid request", {
+            fields: [
+              { field: "webhook_url", rule: "moved" },
+              { field: "slug", rule: "slug" },
+            ],
+          }),
+        ),
+    });
+    const { user, dialog } = await openDialog();
+    expect(within(dialog).queryByLabelText(/Webhook URL/)).not.toBeInTheDocument();
+    expect(within(dialog).getByText(/API key and API secret once/)).toBeInTheDocument();
+    await user.type(within(dialog).getByLabelText("Name"), "Acme");
+    await user.click(within(dialog).getByRole("button", { name: "Create app" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Webhook URLs now live on the app's Webhooks tab as webhook endpoints.",
+    );
+    expect(within(dialog).getByText(/Use 3-32 lowercase letters/)).toBeInTheDocument();
+  });
+
+  it("shows the two secrets once, then opens the new app (F-12)", async () => {
     const created = appCreated({ name: "Acme", slug: "acme", environment: "live" });
     const api = mockApi({
       "GET /admin/apps": page([]),
@@ -110,7 +135,6 @@ describe("Create app dialog (T-41)", () => {
     });
     const { user, dialog, router } = await openDialog();
     await user.type(within(dialog).getByLabelText("Name"), "Acme");
-    await user.type(within(dialog).getByLabelText("Webhook URL"), "https://acme.example.com/hook");
     // Integers past 2^53 must reach the server digit for digit.
     await user.type(within(dialog).getByLabelText("Metadata (optional)"), '{{"order_seq": 12345678901234567890}');
     await user.click(within(dialog).getByRole("button", { name: "Create app" }));
@@ -119,21 +143,22 @@ describe("Create app dialog (T-41)", () => {
     for (const [label, value] of [
       ["API key", created.api_key],
       ["API secret", created.api_secret],
-      ["Webhook signing secret", created.webhook_secret],
     ]) {
       expect(within(secret).getByText(label!)).toBeInTheDocument();
       expect(within(secret).getByText(value!)).toBeInTheDocument();
       expect(within(secret).getByRole("button", { name: `Copy ${label}` })).toBeInTheDocument();
     }
+    expect(within(secret).getAllByRole("button", { name: /^Copy / })).toHaveLength(2);
+    expect(within(secret).queryByText(/Webhook signing secret/)).not.toBeInTheDocument();
     expect(within(secret).getByRole("note")).toHaveTextContent("only time");
 
     const sent = await api.to("POST", "/admin/apps")[0]!.text();
+    expect(JSON.parse(sent)).not.toHaveProperty("webhook_url");
     expect(sent).toContain('"order_seq": 12345678901234567890');
     expect(JSON.parse(sent)).toMatchObject({
       name: "Acme",
       slug: "acme",
       environment: "live",
-      webhook_url: "https://acme.example.com/hook",
       redirect_success_url: "",
       redirect_failure_url: "",
     });

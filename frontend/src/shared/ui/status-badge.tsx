@@ -34,10 +34,18 @@ export function statusTone(status: string): StatusTone {
   return TONES[status] ?? "neutral";
 }
 
+interface StatusBadgeProps {
+  status: string;
+  /** Overrides the shared label and tone, for statuses that only one feature knows. */
+  label?: string;
+  tone?: StatusTone;
+  className?: string;
+}
+
 /** Status as a text label; colour only reinforces it. */
-export function StatusBadge({ status, className }: { status: string; className?: string }) {
-  const tone = statusTone(status);
-  const label = strings.status[status] ?? status;
+export function StatusBadge({ status, label: labelOverride, tone: toneOverride, className }: StatusBadgeProps) {
+  const tone = toneOverride ?? statusTone(status);
+  const label = labelOverride ?? strings.status[status] ?? status;
   return (
     <span
       data-tone={tone}

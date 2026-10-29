@@ -3,17 +3,17 @@ import { useForm } from "react-hook-form";
 import { describe, expect, it } from "vitest";
 import { ApiError, type ApiErrorCode, type FieldError } from "@/shared/api/errors";
 import { strings } from "@/shared/lib/strings";
-import { applyServerErrors } from "./apply-server-errors";
+import { applyServerErrors, unplacedErrorMessage } from "./apply-server-errors";
 
 interface Values {
   name: string;
   slug: string;
-  webhook_url: string;
+  redirect_success_url: string;
   metadata: string;
 }
 
-const CREATE_FIELDS = ["name", "slug", "webhook_url", "metadata"] as const;
-const EDIT_FIELDS = ["name", "webhook_url", "metadata"] as const;
+const CREATE_FIELDS = ["name", "slug", "redirect_success_url", "metadata"] as const;
+const EDIT_FIELDS = ["name", "redirect_success_url", "metadata"] as const;
 const CONFLICT = strings.apps.slugTaken("live");
 
 function apiError(code: ApiErrorCode, fields?: FieldError[]) {
@@ -22,7 +22,7 @@ function apiError(code: ApiErrorCode, fields?: FieldError[]) {
 
 function run(error: unknown, fieldNames: readonly string[]) {
   const { result } = renderHook(() =>
-    useForm<Values>({ defaultValues: { name: "", slug: "", webhook_url: "", metadata: "" } }),
+    useForm<Values>({ defaultValues: { name: "", slug: "", redirect_success_url: "", metadata: "" } }),
   );
   let placed = false;
   act(() => {
@@ -40,11 +40,11 @@ describe("applyServerErrors", () => {
       name: "places every invalid_request field and reports it handled",
       error: apiError("invalid_request", [
         { field: "name", rule: "required" },
-        { field: "webhook_url", rule: "url" },
+        { field: "redirect_success_url", rule: "url" },
       ]),
       fieldNames: CREATE_FIELDS,
       placed: true,
-      messages: { name: strings.auth.nameRequired, webhook_url: strings.apps.urlInvalid },
+      messages: { name: strings.auth.nameRequired, redirect_success_url: strings.apps.urlInvalid },
     },
     {
       name: "maps slug, metadata and metadata.<key> rules to their messages",
@@ -136,9 +136,22 @@ describe("applyServerErrors", () => {
     expect(result.messages).toEqual({
       name: undefined,
       slug: undefined,
-      webhook_url: undefined,
+      redirect_success_url: undefined,
       metadata: undefined,
       ...messages,
     });
+  });
+});
+
+describe("unplacedErrorMessage", () => {
+  it("explains a webhook_url sent to the app API (rule moved)", () => {
+    const error = apiError("invalid_request", [{ field: "webhook_url", rule: "moved" }]);
+    expect(unplacedErrorMessage(error, "fallback")).toBe(strings.apps.webhookUrlMoved);
+  });
+
+  it("uses the server message otherwise", () => {
+    const error = new ApiError({ status: 400, code: "validation_failed", message: "too many apps" });
+    expect(unplacedErrorMessage(error, "fallback")).toBe("Too many apps.");
+    expect(unplacedErrorMessage(new Error("boom"), "fallback")).toBe("fallback");
   });
 });

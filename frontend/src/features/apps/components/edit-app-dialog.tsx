@@ -3,7 +3,6 @@ import { CircleAlertIcon, Loader2Icon } from "lucide-react";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
-import { errorMessage } from "@/shared/api/error-message";
 import { strings } from "@/shared/lib/strings";
 import { Alert, AlertDescription } from "@/shared/ui/alert";
 import { Button } from "@/shared/ui/button";
@@ -13,12 +12,12 @@ import { Input } from "@/shared/ui/input";
 import { useUpdateApp, type App, type Metadata, type UpdateAppRequest } from "../api/apps";
 import { editAppSchema, type EditAppValues } from "../schemas/app-form";
 import { metadataToText, parseMetadataText } from "../schemas/metadata";
-import { applyServerErrors } from "./apply-server-errors";
+import { applyServerErrors, unplacedErrorMessage } from "./apply-server-errors";
 import { MetadataEditor } from "./metadata-editor";
 import { UrlFields } from "./url-fields";
 
-const FIELD_NAMES = ["name", "webhook_url", "redirect_success_url", "redirect_failure_url", "metadata"] as const;
-const TEXT_FIELDS = ["name", "webhook_url", "redirect_success_url", "redirect_failure_url"] as const;
+const FIELD_NAMES = ["name", "redirect_success_url", "redirect_failure_url", "metadata"] as const;
+const TEXT_FIELDS = ["name", "redirect_success_url", "redirect_failure_url"] as const;
 
 interface EditAppDialogProps {
   app: App | null;
@@ -59,7 +58,6 @@ function EditAppForm({ app, update, onClose }: { app: App; update: ReturnType<ty
     resolver: zodResolver(editAppSchema),
     defaultValues: {
       name: app.name,
-      webhook_url: app.webhook_url,
       redirect_success_url: app.redirect_success_url,
       redirect_failure_url: app.redirect_failure_url,
       metadata: metadataToText(app.metadata),
@@ -83,7 +81,7 @@ function EditAppForm({ app, update, onClose }: { app: App; update: ReturnType<ty
         },
         onError: (error) => {
           if (!applyServerErrors(error, form.setError, FIELD_NAMES)) {
-            setFormError(errorMessage(error, strings.apps.updateFailed));
+            setFormError(unplacedErrorMessage(error, strings.apps.updateFailed));
           }
         },
       },

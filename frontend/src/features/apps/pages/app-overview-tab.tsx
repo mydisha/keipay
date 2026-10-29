@@ -8,11 +8,9 @@ import { DefaultConnection } from "../components/default-connection";
 import { EnvironmentBadge } from "../components/environment-badge";
 import { useDetailApp } from "./app-detail-page";
 
-export const WEBHOOK_URL_ANCHOR = "webhook-url";
-
-function Fact({ label, id, children }: { label: string; id?: string; children: ReactNode }) {
+function Fact({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div id={id} className="grid min-w-0 gap-1 sm:grid-cols-[12rem_minmax(0,1fr)] sm:gap-4">
+    <div className="grid min-w-0 gap-1 sm:grid-cols-[12rem_minmax(0,1fr)] sm:gap-4">
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="min-w-0">{children}</dd>
     </div>
@@ -55,9 +53,6 @@ export function AppOverviewTab() {
             </Fact>
             <Fact label={strings.apps.updated}>
               <DateTimeText value={app.updated_at} />
-            </Fact>
-            <Fact label={strings.apps.webhookUrl} id={WEBHOOK_URL_ANCHOR}>
-              <UrlValue value={app.webhook_url} />
             </Fact>
             <Fact label={strings.apps.redirectSuccessUrl}>
               <UrlValue value={app.redirect_success_url} />

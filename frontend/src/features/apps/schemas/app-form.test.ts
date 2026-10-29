@@ -9,7 +9,6 @@ const valid = {
   name: "Acme",
   slug: "acme",
   environment: "test" as const,
-  webhook_url: "",
   redirect_success_url: "",
   redirect_failure_url: "",
   metadata: "",
@@ -67,14 +66,14 @@ describe("createAppSchema", () => {
   ])(
     "rejects a URL: %s",
     (_, url) => {
-      expect(firstMessage(createAppSchema.safeParse({ ...valid, webhook_url: url }))).toBe(strings.apps.urlInvalid);
+      expect(firstMessage(createAppSchema.safeParse({ ...valid, redirect_success_url: url }))).toBe(strings.apps.urlInvalid);
     },
   );
 
   it("accepts empty and http(s) URLs up to 2048 bytes", () => {
     const longest = `https://a.example/${"x".repeat(2048 - "https://a.example/".length)}`;
     for (const url of ["", "https://a.example/x", "http://localhost:3000/hook", longest]) {
-      expect(createAppSchema.safeParse({ ...valid, webhook_url: url }).success).toBe(true);
+      expect(createAppSchema.safeParse({ ...valid, redirect_success_url: url }).success).toBe(true);
     }
   });
 

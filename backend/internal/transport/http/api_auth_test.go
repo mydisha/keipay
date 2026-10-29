@@ -2,12 +2,14 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/service"
@@ -495,4 +497,51 @@ func TestMeShape(t *testing.T) {
 	if strings.Contains(w.Body.String(), "password_hash") || strings.Contains(w.Body.String(), "$2a$") {
 		t.Fatal("hash exposed")
 	}
+}
+
+// withAuthLimits bounds /v1 authentication failures on the fixture's own
+// failure counter.
+func withAuthLimits(perIP, perKey int) apiOption {
+	return func(_ *service.AuthConfig, d *Deps) {
+		d.AuthLimits = middleware.AuthLimits{MaxFailuresPerIP: perIP, MaxFailuresPerKey: perKey, Window: 15 * time.Minute}
+	}
+}
+
+// Over the real router: v2 signing works for both /v1 routes, a 64 KiB+
+// body is 413, and failed authentications are limited per client.
+func TestV1TransportHardeningOverHTTP(t *testing.T) {
+	f := newAPI(t, "", withAuthLimits(3, 100))
+	f.deps.AuthLimiter = f.failures
+	f.router = NewRouter(f.deps)
+	owner := f.signIn(t, f.owner)
+	app := f.createApp(t, owner, `{"name":"Acme","slug":"acme","environment":"test"}`)
+	c := v1Client{f: f, apiKey: app.apiKey, secret: app.apiSecret}
+
+	w := c.doV2(http.MethodPost, "/v1/payments", `{"order_id":"ord-v2","amount":150000}`)
+	pub := decode(t, w, http.StatusCreated)["id"].(string)
+	if w := c.doV2(http.MethodGet, "/v1/payments/"+pub, ""); w.Code != http.StatusOK {
+		t.Fatalf("v2 get: %d %s", w.Code, w.Body.String())
+	}
+	// The same GET twice in one second is fine in v2 (distinct nonces).
+	if w := c.doV2(http.MethodGet, "/v1/payments/"+pub, ""); w.Code != http.StatusOK {
+		t.Fatalf("v2 get again: %d %s", w.Code, w.Body.String())
+	}
+
+	big := `{"order_id":"ord-big","amount":1,"description":"` + strings.Repeat("x", int(middleware.MaxV1BodyBytes)) + `"}`
+	w = c.do(http.MethodPost, "/v1/payments", big)
+	expectError(t, w, http.StatusRequestEntityTooLarge, domain.CodeRequestTooLarge)
+
+	for i := 0; i < 3; i++ {
+		expectError(t, f.send(nil, http.MethodPost, "/v1/payments", `{}`, "X-Api-Key", "kp_test_"+strings.Repeat("9", 32),
+			"X-Timestamp", signedTimestamp("none", strconv.Itoa(i)), "X-Signature", strings.Repeat("0", 64)), 401, domain.CodeUnknownAPIKey)
+	}
+	w = c.do(http.MethodGet, "/v1/payments/"+pub, "")
+	expectError(t, w, http.StatusTooManyRequests, domain.CodeRateLimited)
+	if w.Header().Get("Retry-After") == "" {
+		t.Fatalf("no Retry-After: %v", w.Header())
+	}
+
+	// The limiter failing closes /v1 with a 503 rather than skipping the checks.
+	f.failures.Err = errors.New("redis down")
+	expectError(t, c.do(http.MethodGet, "/v1/payments/"+pub, ""), http.StatusServiceUnavailable, domain.CodeAuthUnavailable)
 }

@@ -74,12 +74,45 @@ info:
     new key and secret with the same label and leaves the old key valid
     until you revoke it: deploy the new pair, then revoke the old one.
 
-    `/v1` checks, in order: the three headers, the timestamp window, the
-    key (`401 unknown_api_key`), the signature (`401 invalid_signature`),
-    then the key's state (`401 api_key_revoked`, `401 api_key_expired`)
-    and the app's (`403 tenant_inactive` when the app is disabled), and
-    finally replay (`401 replayed_request`). Key and app state are only
-    reported to callers that signed with the key's secret.
+    Requests are signed with HMAC-SHA256 keyed with the API secret. Two
+    signing versions exist, chosen with `X-Signature-Version`:
+
+    - Version `2` (recommended) signs
+      `"{X-Timestamp}.{X-Nonce}.{METHOD}.{path}.{rawBody}"`, where
+      `X-Nonce` is a client-generated value of 16-64 printable ASCII
+      characters without spaces, `METHOD` is the upper-case HTTP method
+      and `path` is the request path without the query string (for
+      example `/v1/payments/pay_01JB…`). A captured signature fits no
+      other request, and the nonce, not the signature, is what replay
+      protection remembers, so identical requests in the same second do
+      not collide.
+    - Version `1` (the default when the header is absent) signs
+      `"{X-Timestamp}.{rawBody}"`. It is kept for existing integrations;
+      new ones should use version 2.
+
+    A used signature (version 1) or nonce (version 2) is remembered for
+    15 minutes, and a request that reuses one is `401 replayed_request`.
+    The replay check never fails open: when the store behind it cannot
+    answer, the request is `503 auth_unavailable` and nothing was
+    processed, so retry it later with the same `Idempotency-Key` or
+    `order_id`.
+
+    `/v1` checks, in order: the headers (`401 missing_signature_headers`;
+    `400 invalid_request` with field `X-Signature-Version` or `X-Nonce`
+    for a bad value), the timestamp window, the failure limits
+    (`429 rate_limited`), the key (`401 unknown_api_key`), the body size
+    (`413 request_too_large` above 64 KiB), the signature
+    (`401 invalid_signature`), then the key's state (`401
+    api_key_revoked`, `401 api_key_expired`) and the app's (`403
+    tenant_inactive` when the app is disabled), and finally replay
+    (`401 replayed_request`). Key and app state are only reported to
+    callers that signed with the key's secret.
+
+    Only failed authentications count against the limits: unknown keys
+    against the sender's IP, bad signatures and replays against both
+    the IP and the key (by default 100 per IP and 50 per key in 15
+    minutes). Successful requests never count, so a correct
+    integration is never limited however busy it is.
 
     Outbound webhooks are signed with the secret of each webhook endpoint
     (see Webhooks to apps), never with an API secret, so rotating keys
@@ -384,6 +417,11 @@ paths:
         - appApiKey: []
           appTimestamp: []
           appSignature: []
+          appSignatureVersion: []
+          appNonce: []
+        - appApiKey: []
+          appTimestamp: []
+          appSignature: []
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -428,6 +466,11 @@ paths:
       summary: Get a payment
       description: Returns a payment of the calling app, by `pay_…` id or legacy integer id. Sign an empty body.
       security:
+        - appApiKey: []
+          appTimestamp: []
+          appSignature: []
+          appSignatureVersion: []
+          appNonce: []
         - appApiKey: []
           appTimestamp: []
           appSignature: []
@@ -3074,9 +3117,21 @@ components:
       in: header
       name: X-Signature
       description: |
-        Hex HMAC-SHA256 of `"{X-Timestamp}.{rawBody}"` keyed with the API
-        secret of the key in `X-Api-Key`. Each signature is accepted once
-        (replay protection).
+        Hex HMAC-SHA256 keyed with the API secret of the key in
+        `X-Api-Key`, over `"{X-Timestamp}.{X-Nonce}.{METHOD}.{path}.{rawBody}"`
+        with `X-Signature-Version: 2`, or over `"{X-Timestamp}.{rawBody}"`
+        without it (version 1). See App API keys for the rules and the
+        replay protection of each version.
+    appSignatureVersion:
+      type: apiKey
+      in: header
+      name: X-Signature-Version
+      description: '`2` for the recommended signing scheme; absent or `1` for the original one. Any other value is `400 invalid_request`.'
+    appNonce:
+      type: apiKey
+      in: header
+      name: X-Nonce
+      description: 'Required with `X-Signature-Version: 2`: 16-64 printable ASCII characters without spaces, unique per request (a UUID or random string). Reusing one is `401 replayed_request`.'
     xenditCallbackToken:
       type: apiKey
       in: header

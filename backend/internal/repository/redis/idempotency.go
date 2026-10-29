@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -24,12 +25,13 @@ func NewIdempotency(rdb *redis.Client, ttl time.Duration) *Idempotency {
 }
 
 // Acquire returns true if key was newly set (first time seen), false if it
-// already existed. Errors fall through as true so requests aren't blocked by a
-// transient Redis issue.
-func (i *Idempotency) Acquire(ctx context.Context, key string) bool {
+// already existed. A Redis failure is returned as such: the caller decides,
+// and the /v1 middleware refuses the request rather than skip the replay
+// check.
+func (i *Idempotency) Acquire(ctx context.Context, key string) (bool, error) {
 	ok, err := i.rdb.SetNX(ctx, "idemp:"+key, 1, i.ttl).Result()
 	if err != nil {
-		return true
+		return false, fmt.Errorf("acquire nonce: %w", err)
 	}
-	return ok
+	return ok, nil
 }

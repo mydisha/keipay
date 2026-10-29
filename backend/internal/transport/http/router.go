@@ -21,6 +21,10 @@ type Deps struct {
 	AppResolver     middleware.AppResolver
 	NonceStore      middleware.NonceStore
 	SecretDecryptor middleware.SecretDecryptor
+	// AuthLimiter and AuthLimits bound /v1 authentication failures; a nil
+	// limiter disables the limits.
+	AuthLimiter domain.FailureLimiter
+	AuthLimits  middleware.AuthLimits
 
 	// Sessions resolves admin session cookies.
 	Sessions middleware.Authenticator
@@ -174,7 +178,10 @@ func NewRouter(d Deps) *gin.Engine {
 	// App-facing API: API key + HMAC + timestamp + nonce replay protection.
 	v1 := r.Group("/v1")
 	v1.Use(middleware.MaxBody(middleware.MaxV1BodyBytes), middleware.ValidQuery(),
-		middleware.AppAuth(d.AppResolver, d.NonceStore, d.SecretDecryptor, d.Log))
+		middleware.AppAuth(middleware.AppAuthDeps{
+			Resolver: d.AppResolver, Nonces: d.NonceStore, Cipher: d.SecretDecryptor,
+			Limiter: d.AuthLimiter, Limits: d.AuthLimits, Log: d.Log,
+		}))
 
 	{
 		v1.POST("/payments", d.Payment.Create)

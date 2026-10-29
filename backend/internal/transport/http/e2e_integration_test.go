@@ -28,6 +28,7 @@ import (
 	"github.com/mydisha/keipay/backend/internal/service"
 	"github.com/mydisha/keipay/backend/internal/testutil/pgtest"
 	"github.com/mydisha/keipay/backend/internal/transport/http/handler"
+	"github.com/mydisha/keipay/backend/internal/transport/http/middleware"
 	"github.com/mydisha/keipay/backend/internal/worker"
 )
 
@@ -43,7 +44,7 @@ type runNonces struct {
 	prefix string
 }
 
-func (n runNonces) Acquire(ctx context.Context, key string) bool {
+func (n runNonces) Acquire(ctx context.Context, key string) (bool, error) {
 	return n.inner.Acquire(ctx, n.prefix+key)
 }
 
@@ -142,7 +143,7 @@ func newE2E(t *testing.T) *e2e {
 	e.router = NewRouter(Deps{
 		Log:             zap.NewNop(),
 		AppResolver:     e.appSvc,
-		NonceStore:      runNonces{inner: redisrepo.NewIdempotency(rdb, 10*time.Minute), prefix: "it-" + strconv.FormatInt(time.Now().UnixNano(), 36) + ":"},
+		NonceStore:      runNonces{inner: redisrepo.NewIdempotency(rdb, middleware.NonceTTL), prefix: "it-" + strconv.FormatInt(time.Now().UnixNano(), 36) + ":"},
 		SecretDecryptor: cipher,
 		Payment:         handler.NewPaymentHandler(service.NewPaymentService(e.payments, conns, registry, cipher, zap.NewNop())),
 	})

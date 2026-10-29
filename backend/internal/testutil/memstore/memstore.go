@@ -517,6 +517,37 @@ func (f *Failures) Release(_ context.Context, keys ...string) error {
 	return nil
 }
 
+// Blocked reports whether any limit is reached, counting nothing.
+func (f *Failures) Blocked(_ context.Context, limits ...domain.FailureLimit) (bool, time.Duration, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return false, 0, f.Err
+	}
+	var wait time.Duration
+	blocked := false
+	for _, l := range limits {
+		if c, ok := f.live(l.Key); ok && c.n >= l.Max {
+			blocked = true
+			wait = max(wait, c.expiresAt.Sub(f.clock()))
+		}
+	}
+	return blocked, wait, nil
+}
+
+// Fail counts one failure under every key.
+func (f *Failures) Fail(_ context.Context, window time.Duration, keys ...string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.Err != nil {
+		return f.Err
+	}
+	for _, key := range keys {
+		f.inc(key, window)
+	}
+	return nil
+}
+
 // Inc adds one failure, starting a window on the first. Tests use it to
 // seed counters.
 func (f *Failures) Inc(key string, window time.Duration) int {

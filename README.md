@@ -490,12 +490,35 @@ Every `/v1/*` request carries:
 
 - `X-Api-Key`: the API key
 - `X-Timestamp`: unix seconds (±5 min window)
-- `X-Signature`: hex HMAC-SHA256 of `"{timestamp}.{rawBody}"` keyed with the API secret
+- `X-Signature-Version`: `2`
+- `X-Nonce`: a value you generate per request (16-64 printable ASCII
+  characters without spaces; a UUID is fine)
+- `X-Signature`: hex HMAC-SHA256 of
+  `"{timestamp}.{nonce}.{METHOD}.{path}.{rawBody}"` keyed with the API
+  secret. `METHOD` is upper case and `path` is the request path without the
+  query string, for example `POST` and `/v1/payments`, or `GET` and
+  `/v1/payments/pay_01JB…`. The body of a `GET` is empty, so its signed
+  input ends with the `.` after the path.
 
-Each signature is accepted once: KeiPay stores it in Redis as a nonce, and
-sending the same timestamp and body again gets `401 replayed_request`. To
-retry, sign again with a new timestamp (and keep the same `order_id` or
-`Idempotency-Key`, so the retry returns the original payment).
+Each nonce is accepted once: KeiPay remembers it for 15 minutes, and a
+request that reuses one gets `401 replayed_request`. To retry, send a new
+nonce and timestamp (and keep the same `order_id` or `Idempotency-Key`, so
+the retry returns the original payment). The replay check never fails open:
+if the store behind it is down you get `503 auth_unavailable`, nothing was
+processed, and the same retry applies.
+
+Without `X-Signature-Version`, KeiPay falls back to the original scheme
+(version 1): `X-Signature` is the HMAC of `"{timestamp}.{rawBody}"` and the
+signature itself is the nonce, so two identical requests in the same second
+collide. Existing integrations keep working; new ones should send version 2,
+which also ties a signature to its method and path.
+
+Bodies over 64 KiB are refused with `413 request_too_large`. Failed
+authentications are limited: unknown keys count against your IP, bad
+signatures and replays against your IP and the key (by default 100 per IP
+and 50 per key in 15 minutes), and over the limit every request gets
+`429 rate_limited` with `Retry-After` until the window ends. Successful
+requests never count.
 
 ### Create a payment
 
@@ -503,11 +526,13 @@ retry, sign again with a new timestamp (and keep the same `order_id` or
 SECRET='kps_test_...'   # API secret
 APIKEY='kp_test_...'    # API key
 TS=$(date +%s)
+NONCE=$(uuidgen)
 BODY='{"order_id":"ord-123","amount":150000,"currency":"IDR","description":"Order 123","payer_email":"buyer@example.com","metadata":{"channel":"mobile"}}'
-SIG=$(printf '%s.%s' "$TS" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
+SIG=$(printf '%s.%s.POST./v1/payments.%s' "$TS" "$NONCE" "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
 
 curl -s -X POST http://localhost:8080/v1/payments \
-  -H "X-Api-Key: $APIKEY" -H "X-Timestamp: $TS" -H "X-Signature: $SIG" \
+  -H "X-Api-Key: $APIKEY" -H "X-Timestamp: $TS" \
+  -H "X-Signature-Version: 2" -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
   -H "Idempotency-Key: 3f1c2d9e-7b1a-4c55-9a1e-2f0f6f1b9c11" \
   -H "Content-Type: application/json" -d "$BODY"
 ```
@@ -549,7 +574,8 @@ stored in either case, so retry with the same `order_id`.
 
 ### Get a payment
 
-`GET /v1/payments/:id`, signed the same way (empty body). `:id` is the
+`GET /v1/payments/:id`, signed the same way with an empty body, so the
+signed input is `"{timestamp}.{nonce}.GET./v1/payments/{id}."`. `:id` is the
 `pay_…` id or the legacy integer `payment_id`.
 
 ## Webhooks sent to your app

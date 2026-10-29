@@ -9,7 +9,7 @@ App A ─┐                          ┌─► Xendit
 App B ─┼─► KeiPay (1 credential) ─┼─► Midtrans   (planned)
 App C ─┘        ▲                 └─► DOKU       (planned)
                 │  gateway webhook
-                └──► verify → normalize → sign → app webhook_url
+                └──► verify → normalize → sign → app webhook endpoints
 ```
 
 > **Status: early.** Today KeiPay supports **Xendit Invoice**. Gateway
@@ -45,11 +45,16 @@ that use.
   shown again (last 4 characters only), a connection test, a callback URL
   per connection verified with that connection's own secret, and the
   payment channels each connection offers.
-- Webhook ingestion that is idempotent (Redis fast path + durable DB guard in
-  one transaction), applies status in order, and rejects callbacks whose
-  amount or currency does not match the payment.
-- At-least-once forwarding to each app's `webhook_url` with retries, a sweeper
-  for stuck deliveries and admin replay.
+- Webhook ingestion that is idempotent per connection (a durable guard in
+  the same transaction as the status change), applies status in order,
+  rejects callbacks whose amount or currency does not match the payment, and
+  keeps every callback (raw body, verification and outcome) for inspection.
+- A webhook router: several endpoints per app, each with its own event
+  subscriptions from a served event catalog, signing secret (rotation with
+  an overlap window), custom headers and retry policy; a versioned event
+  envelope signed with a timestamp; at-least-once delivery with a log of
+  every attempt, replay, and automatic disabling of endpoints that keep
+  failing.
 - Per-app reporting of gross, fee and net amounts.
 - Admin console (React) served by the same process: console users with
   `owner`, `admin` and `viewer` roles, cookie sessions stored in Redis, CSRF
@@ -87,7 +92,7 @@ make setup   # .env with generated secrets, deps, postgres + redis, migrate + se
 ```
 
 `make setup` prints the **demo app credentials** (a `test` app with one
-API key, its secret and the webhook signing secret) once. Then run:
+API key and its secret) once. Then run:
 
 ```bash
 make dev     # API on :8080, console on :5173 (hot reload)
@@ -151,7 +156,7 @@ Owners add more users in **Settings → Users** and pick a role:
 |---|---|
 | `owner` | everything, including users |
 | `admin` | everything except users |
-| `viewer` | read apps, connections, payments, ledger and webhook deliveries; no changes, no audit log |
+| `viewer` | read apps (including webhook endpoints), connections, payments, ledger and webhook logs; no changes, no audit log |
 
 New users and password resets get a temporary password, shown once, that
 must be changed at first sign-in.
@@ -242,14 +247,15 @@ object.
 
 ## App API
 
-Create an app in the console (Apps → Create app). You get three values,
+Create an app in the console (Apps → Create app). You get two values,
 shown once:
 
 - **API key** (`kp_test_…` or `kp_live_…`): identifies the app and its
   environment; send it as `X-Api-Key`.
 - **API secret** (`kps_test_…` / `kps_live_…`): signs your requests.
-- **Webhook signing secret** (`kpwh_…`): verifies the webhooks KeiPay sends
-  you.
+
+To receive events, add a webhook endpoint (Apps → app → Webhooks); see
+[Webhooks sent to your app](#webhooks-sent-to-your-app).
 
 An app can have several API keys (Apps → app → API keys). To rotate, create
 the new key with **Rotate**, deploy it, then **Revoke** the old one; both
@@ -257,8 +263,7 @@ work in the meantime. Revoked and expired keys get `401 api_key_revoked` or
 `401 api_key_expired`; a disabled app gets `403 tenant_inactive`.
 
 Apps that existed before apps replaced tenants keep working unchanged: their
-`kp_…` key and `api_secret` became the app's first key (environment `live`),
-and that `api_secret` is also their webhook signing secret.
+`kp_…` key and `api_secret` became the app's first key (environment `live`).
 
 Every `/v1/*` request carries:
 
@@ -321,43 +326,168 @@ stored in either case, so retry with the same `order_id`.
 `GET /v1/payments/:id`, signed the same way (empty body). `:id` is the
 `pay_…` id or the legacy integer `payment_id`.
 
-## Webhooks forwarded to your app
+## Webhooks sent to your app
 
-KeiPay POSTs to the app's `webhook_url` with:
+Add one or more **webhook endpoints** to an app (Apps → app → Webhooks, or
+`POST /admin/apps/:id/webhook-endpoints`). Each endpoint has a URL, the
+events it subscribes to, its own signing secret (`kpwh_…`, shown once),
+optional custom headers and a retry policy. Pick events from the catalog
+(`GET /admin/event-types`): an exact type such as `payment.paid`, a group
+such as `payment.*`, or `*` for everything, including types added later.
 
-- `X-Kei-Event`: e.g. `payment.paid`
-- `X-Kei-Signature`: hex HMAC-SHA256 of the raw body keyed with the app's
-  webhook signing secret (for apps from before apps replaced tenants: their
-  original `api_secret`)
+| Event | Sent when |
+|---|---|
+| `payment.paid` | The payer paid. |
+| `payment.settled` | The gateway settled the funds. |
+| `payment.expired` | The checkout expired unpaid. |
+| `payment.failed` | The payment failed. |
+| `payment.duplicate` | Reserved for a payment paid more than once; not sent yet. |
+
+Every request is a `POST` with `Content-Type: application/json` and:
+
+- `X-KeiPay-Event-Id`: the event id (`evt_…`), the same for every endpoint
+  and every retry. **Dedupe on it.**
+- `X-KeiPay-Event-Type`: e.g. `payment.paid`
+- `X-KeiPay-Delivery-Id`: this endpoint's delivery of the event (`dlv_…`)
+- `X-KeiPay-Signature`: `t=<unix seconds>,v1=<hex>`
+- `X-KeiPay-Test: true` on test sends from the console
+
+The body (`api_version` `v2`) is a versioned envelope. Fields are only ever
+added within a version.
 
 ```json
 {
-  "event": "payment.paid",
-  "payment_id": 1,
-  "payment_public_id": "pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C",
-  "order_id": "ord-123",
-  "external_id": "kp_pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C",
-  "status": "PAID",
-  "amount": 150000,
-  "currency": "IDR",
-  "metadata": { "channel": "mobile" },
-  "paid_at": "2026-01-01T10:00:00Z",
-  "timestamp": "2026-01-01T10:00:01Z"
+  "id": "evt_01JBKQ7Z8M4X2Y6V3N9T5R1W0C",
+  "type": "payment.paid",
+  "api_version": "v2",
+  "created_at": "2026-01-01T10:00:01Z",
+  "data": {
+    "id": "pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C",
+    "order_id": "ord-123",
+    "reference": "kp_pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C",
+    "status": "PAID",
+    "amount": 150000,
+    "currency": "IDR",
+    "metadata": { "channel": "mobile" },
+    "provider": "xendit",
+    "connection_id": "con_01JBKQ7Z8M4X2Y6V3N9T5R1W0C",
+    "paid_at": "2026-01-01T10:00:00Z",
+    "settled_at": null
+  }
 }
 ```
 
-Verify by recomputing the HMAC over the raw body and comparing in constant
-time. Return 2xx to ack; anything else is retried.
+### Verify the signature
 
-Delivery is **at-least-once**: dedupe on `payment_public_id` + `event`. Status
-only moves forward (`PENDING` → `PAID` → `SETTLED`); if callbacks arrive out
-of order the stale one is dropped, so you may get `payment.settled` without
+`v1` is the hex HMAC-SHA256 of `"{t}.{raw body}"` keyed with the endpoint's
+signing secret. Verify against the **raw** body before parsing it, compare in
+constant time, and reject a `t` more than 5 minutes from your clock. Right
+after a secret rotation the header carries one `v1=` per valid secret
+(`t=…,v1=<new>,v1=<old>`); accept the request when any of them matches, so
+both your old and new secret work during the overlap window.
+
+Go:
+
+```go
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// VerifyKeiPaySignature reports whether header, the X-KeiPay-Signature
+// value, signs body with secret and is at most tolerance away from now.
+func VerifyKeiPaySignature(header string, body []byte, secret string, tolerance time.Duration, now time.Time) bool {
+	var ts string
+	var sigs []string
+	for _, part := range strings.Split(header, ",") {
+		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok {
+			continue
+		}
+		switch k {
+		case "t":
+			ts = v
+		case "v1":
+			sigs = append(sigs, v)
+		}
+	}
+	t, err := strconv.ParseInt(ts, 10, 64)
+	if err != nil {
+		return false
+	}
+	if d := now.Sub(time.Unix(t, 0)); d > tolerance || d < -tolerance {
+		return false
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(ts + "."))
+	mac.Write(body)
+	want := hex.EncodeToString(mac.Sum(nil))
+	for _, sig := range sigs {
+		if hmac.Equal([]byte(sig), []byte(want)) {
+			return true
+		}
+	}
+	return false
+}
+```
+
+Node.js (`rawBody` is the unparsed body as a `Buffer`):
+
+```js
+import crypto from "node:crypto";
+
+export function verifyKeiPaySignature(header, rawBody, secret, toleranceSeconds = 300) {
+  const parts = header.split(",").map((part) => part.trim().split("="));
+  const t = parts.find(([key]) => key === "t")?.[1];
+  const sigs = parts.filter(([key]) => key === "v1").map(([, value]) => value);
+  if (!t || Math.abs(Date.now() / 1000 - Number(t)) > toleranceSeconds) return false;
+  const want = crypto.createHmac("sha256", secret).update(`${t}.`).update(rawBody).digest("hex");
+  return sigs.some(
+    (sig) => sig.length === want.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(want)),
+  );
+}
+```
+
+### Delivery, retries and replay
+
+Return any `2xx` within 15 seconds to acknowledge. Anything else (including
+a redirect or a timeout) is retried with the endpoint's retry policy (default
+8 attempts with exponential backoff from 30 seconds, about an hour in all).
+Delivery is **at-least-once**, so dedupe on the event id. Status only moves
+forward (`PENDING` → `PAID` → `SETTLED`); if gateway callbacks arrive out of
+order the stale one is dropped, so you may get `payment.settled` without
 `payment.paid`. Treat settled as paid.
 
-KeiPay matches gateway callbacks to payments by the stored reference
-(`kp_pay_…`, or `{slug}:{order_id}` for payments created before apps), never
-by parsing it. A callback only updates payments created through the
-connection whose URL it arrived at.
+After `WEBHOOK_DISABLE_AFTER_FAILURES` (default 5) deliveries in a row that
+ran out of attempts, KeiPay disables the endpoint and shows why in the
+console. Fix the receiver, enable the endpoint, then replay the failed
+deliveries (Webhooks → Outbound). A replay resends the same event id and
+body once.
+
+Every gateway callback KeiPay receives is kept with its raw body, whether
+verification passed and what happened to it (Webhooks → Inbound). A callback
+only updates payments created through the connection whose URL it arrived
+at, and is matched by the stored reference (`kp_pay_…`, or
+`{slug}:{order_id}` for payments created before apps), never by parsing it.
+
+### Upgrading from an app `webhook_url`
+
+Apps used to have a single `webhook_url`. On upgrade, each app with one gets
+a webhook endpoint for that URL that subscribes to `*`, keeps the app's old
+signing secret, and is marked migrated. Nothing changes for the receiver: it
+gets the same flat body as before (`api_version` `v1`, now with an
+`event_id` field) and the same `X-Kei-Signature` (hex HMAC-SHA256 of the raw
+body) and `X-Kei-Event` headers, next to the new `X-KeiPay-*` headers. To
+move on, verify `X-KeiPay-Signature`, then switch the endpoint to `v2` and
+turn off the legacy signature in the console. `X-Kei-Signature` is always
+signed with the current secret only, so stop relying on it before you rotate
+the secret.
+
+`WEBHOOK_MAX_RETRY` is no longer read; retries are set per endpoint.
 
 ## Admin API
 
@@ -380,17 +510,24 @@ Sessions expire after 30 minutes idle or 12 hours in total
   `PATCH /admin/connections/:id/credentials`, `PUT /admin/connections/:id/channels`,
   `POST /admin/connections/:id/test|disable|enable`
 - `GET /admin/payments` (cursor-paginated), `GET /admin/ledger`
-- `GET /admin/webhook-deliveries`, `POST /admin/webhook-deliveries/:id/replay`
+- `GET /admin/event-types`
+- `GET/POST /admin/apps/:id/webhook-endpoints`,
+  `GET/PATCH/DELETE /admin/webhook-endpoints/:id`,
+  `POST /admin/webhook-endpoints/:id/rotate-secret|disable|enable|test`
+- `GET /admin/webhook-deliveries` (cursor-paginated), `GET /admin/webhook-deliveries/:id`,
+  `POST /admin/webhook-deliveries/:id/replay`
+- `GET /admin/inbound-webhooks` (cursor-paginated), `GET /admin/inbound-webhooks/:id`
 - `GET /admin/audit-logs`
 
 Cursor-paginated lists take `limit` and `cursor` and return `next_cursor`.
-Resources use prefixed ids (`app_…`, `key_…`, `pay_…`, `con_…`, `usr_…`).
+Resources use prefixed ids (`app_…`, `key_…`, `pay_…`, `con_…`, `whe_…`,
+`evt_…`, `dlv_…`, `inb_…`, `usr_…`).
 
 The server checks each operation's permission against the caller's role
 (`403 forbidden` otherwise); the table is in the spec and `GET /admin/me`
 returns the caller's permissions.
 
-Every admin change (users, apps, API keys, connections, password changes, replays) and every
+Every admin change (users, apps, API keys, connections, webhook endpoints, password changes, replays) and every
 sign-in, failed sign-in and sign-out is recorded in the audit log with who,
 what, when and before/after values, never secrets or passwords.
 

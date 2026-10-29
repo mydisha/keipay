@@ -89,7 +89,7 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 | `Input`, `Textarea`, `Select`, `Checkbox`, `RadioGroup`, `Switch`, `Label` | Form controls. Always with a visible label. `SelectItem` takes an optional one-line `description` (shown in the list, not in the trigger), used for the role picker. A `RadioGroup` is named by its field label (`aria-labelledby`) and each item has its own `Label`; use it for a short fixed choice such as the app environment. |
 | `Form` (`FormField`, `FormItem`, `FormLabel`, `FormControl`, `FormDescription`, `FormMessage`) | Every form: react-hook-form + a zod schema that mirrors the contract. Server field errors go on their field; other failures in an `Alert` above the form. |
 | `DataTable` | Every list. See the table pattern. |
-| `StatusBadge` | Any status. Always text; the tone only reinforces it. |
+| `StatusBadge` | Any status. Always text; the tone only reinforces it. Optional `label` and `tone` override the shared label and tone for a status only one feature knows (an inbound webhook's result and signature). |
 | `MoneyText` | Every amount. |
 | `IdText` | Every id, key, order id or reference. Mono, truncated, full value in `title`, copy button. |
 | `DateTimeText` | Every timestamp. Relative text, absolute WIB time in a tooltip. |
@@ -98,8 +98,9 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 | `ForbiddenState` | A page or tab the signed-in user's role can't open: "You don't have access to this page" plus who to ask. Shown in place of the content, never as a redirect. |
 | `Skeleton` | Loading placeholders that match the final layout. |
 | `Dialog` | Short focused tasks: forms, details. |
-| `ConfirmDialog` | Any mutation the user might regret. Pass `confirmText` when the action breaks a live integration at once (see Type-to-confirm). |
-| `SecretRevealDialog` | Showing secrets once (a new app's three credentials, a new or rotated API key, a user's temporary password). One row per secret with its label and a copy button, a warning (overridable per use), and a required "I have saved this" checkbox before it closes. Escape and outside clicks do not dismiss it. |
+| `SidePanel` | A record's detail or a longer form that slides in from the right over its list (delivery, inbound webhook, webhook endpoint): full width on phones, 36rem from 640px; the body scrolls, the header and an optional `footer` (form buttons) stay put; `locked` blocks closing while a request is in flight. The list stays behind it and the open record is in the URL. |
+| `ConfirmDialog` | Any mutation the user might regret. Pass `confirmText` when the action breaks a live integration at once (see Type-to-confirm). Optional `children` adds inputs above the type-to-confirm field (the grace period when rotating an endpoint secret); `canConfirm={false}` keeps confirm disabled while those inputs are invalid. |
+| `SecretRevealDialog` | Showing secrets once (a new app's API key and secret, a new or rotated webhook endpoint secret, a new or rotated API key, a user's temporary password). One row per secret with its label and a copy button, a warning (overridable per use), and a required "I have saved this" checkbox before it closes. Escape and outside clicks do not dismiss it. |
 | `JsonViewer` | Raw payloads and before/after snapshots. Collapsible, pretty-printed, copyable; long payloads are cut in the view but copied in full. |
 | `Timeline` | Ordered events (payment lifecycle, delivery attempts) with time, title, a text status and an optional body. |
 | `PageHeader` | The `h1`, one sentence of context, and page actions. |
@@ -109,7 +110,7 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 | `EnvironmentBadge` (`features/apps`) | An app's or a connection's environment as text: `Test` in the amber test-mode tokens, `Live` in neutral card colours. Shown next to every app name (`AppLabel` in payments, webhooks and reconciliation rows) and every connection name. |
 | `SchemaFields` (`features/connections`) | Every provider form field, rendered from the `SchemaField` list the server sends. See Connections. |
 | `WizardStepper` (`features/connections`) | The numbered steps of a multi-step page. See Wizard pattern. |
-| toasts (`sonner`) | Outcome of an action the user just took: "Delivery 7 queued", "Couldn't replay". Never for load errors (use `ErrorState`). |
+| toasts (`sonner`) | Outcome of an action the user just took: "Delivery queued for one more attempt", "Couldn't replay". Never for load errors (use `ErrorState`). |
 
 ## Dense table pattern
 
@@ -118,14 +119,14 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 - Filters sit above the table as chips (`filters`: single choice per group,
   clicking the active chip clears it), plus extra controls such as the app
   select in `toolbar`. "Clear filters" appears whenever any filter is set.
-  When a group does not start empty (the Apps environment chip starts at the
-  Test/Live mode), add an explicit "All" chip so every state is one click
-  away.
+  When a group does not start empty (the Apps and Webhooks environment
+  chips start at the Test/Live mode), add an explicit "All" chip so every
+  state is one click away.
 - The app select (`AppFilterSelect`) filters by the app's public id and lists
   "Name (Test)" / "Name (Live)". It loads the newest 200 apps only.
 - Cursor pagination, two forms:
-  - Lists that grow and are read top-down (apps, API keys, payments) append
-    pages with a "Load more" button: `loadMore={loadMoreList(query).loadMore}`
+  - Lists that grow and are read top-down (apps, API keys, payments,
+    webhook deliveries, inbound webhooks) append pages with a "Load more" button: `loadMore={loadMoreList(query).loadMore}`
     over a `useInfiniteQuery` built with `cursorPageOptions`. A failed next
     page keeps the rows and shows a toast; only a failed first page shows
     `ErrorState`.
@@ -133,7 +134,7 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
     `pagination={{ nextCursor, onPageChange }}`. The table keeps the cursor
     stack for Previous/Next, disables them at either end, and returns to page
     1 when a chip changes or `resetKey` changes.
-  Neither shows a total. Older offset lists (ledger, deliveries) load one page.
+  Neither shows a total. The older offset list (ledger) loads one page.
 - Status is a `StatusBadge`; ids use `IdText`; amounts use `MoneyText`,
   right-aligned with `tabular-nums` in a right-aligned column; times use
   `DateTimeText`.
@@ -183,8 +184,10 @@ Dialogs (such as an audit entry) follow the same order on a smaller scale.
   boolean or null, at most 8192 bytes. Lengths count code points. Empty text
   means `{}`. The typed text is sent as written so large numbers keep every
   digit.
-- Creating an app reveals three secrets once: API key, API secret and webhook
-  signing secret. Closing the reveal opens the new app.
+- Creating an app reveals two secrets once: API key and API secret. Webhook
+  signing secrets belong to each webhook endpoint (an app's Webhooks tab) and
+  are revealed when the endpoint is created or its secret rotated. Closing the
+  reveal opens the new app.
 - API keys are shown as `{prefix}…{last4}` in mono (`kp_test_…a1b2`, `kp_…0001`
   for migrated keys), never in full after the reveal. Status labels:
   **Active**, **Expired**, **Revoked** (see the tones above). "Last used" and
@@ -210,6 +213,7 @@ live integration at once:
 | Revoke an API key | the key's label |
 | Disable a user, reset a password | the user's email |
 | Disable a connection | the connection's name |
+| Rotate a webhook endpoint secret, delete an endpoint | the endpoint URL's host |
 
 Undoable or non-breaking actions (enable an app or user, rotate a key) use a
 plain confirm. The dialog's text says what fails and with which error code
@@ -357,12 +361,17 @@ Enable is a plain confirm. Your own row has no Disable or Reset password.
 - Test mode shows an amber banner on every page. The switch sets the
   starting environment filter of the Apps and Connections lists (and resets
   it whenever the switch changes) and the environment default of the
-  create-app dialog and the add-connection wizard. Payments, webhooks and reconciliation
-  do not follow it yet, and the banner says so instead of claiming the data is
-  filtered.
+  create-app dialog and the add-connection wizard. The Webhooks Outbound and
+  Inbound lists start at the mode too (`environment` chip with an explicit
+  "All"; choosing All puts `environment=all` in the URL, no `environment`
+  means "follow the switch"). Payments and reconciliation do not follow it
+  yet, and the banner says so instead of claiming that data is filtered.
 - The palette navigates to every page (plus Users with `users:manage`),
-  switches theme and mode, and says that searching by id or order arrives
-  later.
+  switches theme and mode, and opens a pasted webhook record id: `dlv_` and
+  `inb_` open that delivery or inbound webhook on the Webhooks page, `evt_`
+  shows the event's deliveries, `whe_` opens the endpoint's app Webhooks tab
+  (each only with the permission to read it). It says that searching
+  payments and orders arrives later.
 
 ## Dark mode
 
@@ -385,9 +394,10 @@ All formatting goes through `frontend/src/shared/lib/format.ts`.
   formatting and a `WIB` suffix: `2 Jan 2026, 01.30.00 WIB`. Tables show the
   relative time ("5 minutes ago") with the absolute time in a tooltip and in
   `<time dateTime>`.
-- Ids: public ids (`app_…`, `pay_…`, `key_…`, `usr_…`, `con_…`) look like
-  `pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C` and are always mono with copy. Numeric ids
-  from older endpoints (deliveries, ledger entries) show as `#12`.
+- Ids: public ids (`app_…`, `pay_…`, `key_…`, `usr_…`, `con_…`, `whe_…`,
+  `evt_…`, `dlv_…`, `inb_…`) look like `pay_01JBKQ7Z8M4X2Y6V3N9T5R1W0C` and
+  are always mono with copy. Numeric ids from older endpoints (ledger
+  entries) show as `#12`.
 - Missing values show `—`.
 
 ## Copy

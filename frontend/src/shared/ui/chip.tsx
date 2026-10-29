@@ -9,7 +9,9 @@ export function Chip({ pressed, className, ...props }: ComponentProps<"button"> 
       aria-pressed={pressed}
       className={cn(
         "inline-flex h-7 items-center rounded-full border px-3 text-xs font-medium transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 max-md:h-11 max-md:px-4",
-        pressed ? "border-primary bg-primary text-primary-foreground" : "border-input bg-card text-foreground hover:bg-accent",
+        pressed
+          ? "border-primary bg-primary text-primary-foreground"
+          : "border-input bg-card text-foreground hover:border-foreground/30 hover:bg-accent",
         className,
       )}
       {...props}

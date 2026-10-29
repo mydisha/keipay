@@ -2,12 +2,15 @@ import { Tabs as TabsPrimitive } from "radix-ui";
 import type { ComponentProps } from "react";
 import { cn } from "@/shared/lib/utils";
 
-export const Tabs = TabsPrimitive.Root;
+/** Underline tabs; the root stacks the list and the content with the page gap. */
+export function Tabs({ className, ...props }: ComponentProps<typeof TabsPrimitive.Root>) {
+  return <TabsPrimitive.Root className={cn("grid gap-6", className)} {...props} />;
+}
 
 export function TabsList({ className, ...props }: ComponentProps<typeof TabsPrimitive.List>) {
   return (
     <TabsPrimitive.List
-      className={cn("inline-flex h-9 items-center rounded-lg bg-muted p-1 text-muted-foreground max-md:h-[3.25rem]", className)}
+      className={cn("flex max-w-full items-end gap-1 overflow-x-auto border-b text-muted-foreground", className)}
       {...props}
     />
   );
@@ -17,7 +20,7 @@ export function TabsTrigger({ className, ...props }: ComponentProps<typeof TabsP
   return (
     <TabsPrimitive.Trigger
       className={cn(
-        "inline-flex h-full items-center justify-center gap-1.5 rounded-md px-3 text-sm font-medium whitespace-nowrap transition-colors outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-card data-[state=active]:text-foreground data-[state=active]:shadow-sm",
+        "relative -mb-px inline-flex h-10 items-center justify-center gap-1.5 rounded-t-md px-3 text-sm font-medium whitespace-nowrap transition-colors outline-none after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary after:opacity-0 after:transition-opacity hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:text-foreground data-[state=active]:after:opacity-100 max-md:h-11",
         className,
       )}
       {...props}
@@ -26,5 +29,5 @@ export function TabsTrigger({ className, ...props }: ComponentProps<typeof TabsP
 }
 
 export function TabsContent({ className, ...props }: ComponentProps<typeof TabsPrimitive.Content>) {
-  return <TabsPrimitive.Content className={cn("mt-4 outline-none", className)} {...props} />;
+  return <TabsPrimitive.Content className={cn("mt-0 outline-none", className)} {...props} />;
 }

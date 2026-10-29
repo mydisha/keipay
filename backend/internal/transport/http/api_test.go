@@ -162,6 +162,9 @@ type apiFixture struct {
 	recon     *memstore.Reconciliations
 	reconSvc  *service.ReconciliationService
 	queue     *recordingQueue
+	// dash serves the counts of GET /admin/dashboard; dashNow is its clock.
+	dash    *memstore.Dashboard
+	dashNow func() time.Time
 }
 
 // apiOption adjusts the fixture before the router is built.
@@ -255,6 +258,11 @@ func newAPI(t *testing.T, frontendDir string, opts ...apiOption) *apiFixture {
 		Tx: tx, Enqueuer: f.queue, Audit: auditSvc, Log: log,
 	})
 	f.deps.Reconciliation = handler.NewReconciliationHandler(f.reconSvc, log)
+	f.dash = &memstore.Dashboard{}
+	f.dashNow = time.Now
+	f.deps.Dashboard = handler.NewDashboardHandler(service.NewDashboardService(service.DashboardDeps{
+		Dashboard: f.dash, Connections: f.conns, Payments: f.payments, Runs: f.recon, Now: func() time.Time { return f.dashNow() },
+	}))
 	f.router = NewRouter(f.deps)
 	f.owner = f.addUser(t, "owner@example.com", domain.RoleOwner)
 	ctx := domain.WithActor(context.Background(), domain.SystemActor("test"))

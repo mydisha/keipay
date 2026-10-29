@@ -362,6 +362,8 @@ tags:
     description: First-run setup, sign-in, sessions and the signed-in user's account.
   - name: admin-users
     description: Console users and roles (owner only).
+  - name: admin-dashboard
+    description: The console's overview of payments, webhooks, connections and reconciliation over the last days.
   - name: admin-apps
     description: Apps, their API keys and settings.
   - name: admin-connections
@@ -2210,6 +2212,75 @@ paths:
           $ref: '#/components/responses/NotFound'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /admin/dashboard:
+    get:
+      tags: [admin-dashboard]
+      operationId: getDashboard
+      summary: Get the console dashboard
+      x-keipay-permission: payments:read
+      description: |
+        Everything the console's Dashboard page shows, in one response.
+        `range` picks the period: the last 7 (default) or 30 WIB days,
+        today included, so `to` is the next midnight Asia/Jakarta and
+        `from` is `range` days before it. Every count is also given for
+        the period of the same length before that (`previous_from` to
+        `from`) where it says so. `environment` narrows everything to the
+        apps and connections of that environment; without it every
+        environment counts.
+
+        - `payments.by_currency`: the payments *created* in each period,
+          per currency, counted by status. `gross` adds up the amount of
+          the paid and settled ones in that currency's minor unit;
+          amounts of different currencies are never added together.
+          `success_rate` is successful over finished (successful, expired
+          or failed) payments, `null` when none finished.
+        - `payments.series`: one point per WIB day of the current period,
+          days without payments included, oldest first; `gross` lists
+          every currency seen in the period, in the same order on every
+          point.
+        - `deliveries`: the webhook deliveries created in the current
+          period, by status; `success_rate` is delivered over finished
+          (delivered or failed), `null` when none finished.
+        - `inbound`: the gateway callbacks received in the current period.
+          `problems` counts every result except `applied`, `stale` and
+          `duplicate`.
+        - `connections`: every connection of the environment, active ones
+          first, then by name.
+        - `reconciliation`: the unresolved items of every succeeded run
+          (not only the period's) and the newest run, `null` when there
+          is none.
+        - `recent_payments`: the 8 newest payments.
+
+        Errors: `400 invalid_request` with `range` or `environment` rule
+        `oneof`.
+      parameters:
+        - name: environment
+          in: query
+          required: false
+          description: Only the apps and connections of this environment.
+          schema:
+            $ref: '#/components/schemas/AppEnvironment'
+        - name: range
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/DashboardRange'
+      responses:
+        '200':
+          description: The dashboard.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -4958,6 +5029,243 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PaymentReportSummaryRow'
+
+    DashboardRange:
+      type: string
+      description: 'How many WIB days the dashboard covers, today included: the last 7 (default) or 30.'
+      enum: [7d, 30d]
+      default: 7d
+
+    DashboardPaymentTotals:
+      type: object
+      description: The payments created in one period and one currency, counted by status.
+      required: [created, pending, paid, settled, expired, failed, successful, gross, success_rate]
+      properties:
+        created:
+          type: integer
+          format: int64
+          description: Every payment created in the period.
+        pending:
+          type: integer
+          format: int64
+        paid:
+          type: integer
+          format: int64
+        settled:
+          type: integer
+          format: int64
+        expired:
+          type: integer
+          format: int64
+        failed:
+          type: integer
+          format: int64
+        successful:
+          type: integer
+          format: int64
+          description: '`paid + settled`.'
+        gross:
+          type: integer
+          format: int64
+          description: Amount of the successful payments, in the currency's minor unit.
+        success_rate:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 1
+          description: '`successful / (successful + expired + failed)`; `null` when no payment finished.'
+
+    DashboardCurrencyTotals:
+      type: object
+      required: [currency, current, previous]
+      properties:
+        currency:
+          type: string
+          description: ISO 4217 code.
+        current:
+          $ref: '#/components/schemas/DashboardPaymentTotals'
+        previous:
+          $ref: '#/components/schemas/DashboardPaymentTotals'
+
+    DashboardCurrencyAmount:
+      type: object
+      required: [currency, amount]
+      properties:
+        currency:
+          type: string
+          description: ISO 4217 code.
+        amount:
+          type: integer
+          format: int64
+          description: In the currency's minor unit.
+
+    DashboardSeriesPoint:
+      type: object
+      description: One WIB day of the current period.
+      required: [period_start, period_end, created, successful, gross]
+      properties:
+        period_start:
+          type: string
+          format: date-time
+          description: Inclusive start of the day, in UTC.
+        period_end:
+          type: string
+          format: date-time
+          description: Exclusive end of the day, in UTC.
+        created:
+          type: integer
+          format: int64
+          description: Payments created that day, every currency.
+        successful:
+          type: integer
+          format: int64
+          description: Of those, the paid or settled ones.
+        gross:
+          type: array
+          description: Amount of the successful payments per currency, every currency of the period, sorted by code.
+          items:
+            $ref: '#/components/schemas/DashboardCurrencyAmount'
+
+    DashboardPayments:
+      type: object
+      required: [by_currency, series]
+      properties:
+        by_currency:
+          type: array
+          description: One entry per currency seen in either period, sorted by code.
+          items:
+            $ref: '#/components/schemas/DashboardCurrencyTotals'
+        series:
+          type: array
+          description: One point per day of the current period, oldest first.
+          items:
+            $ref: '#/components/schemas/DashboardSeriesPoint'
+
+    DashboardDeliveries:
+      type: object
+      description: The webhook deliveries created in the current period, by status.
+      required: [total, pending, delivered, failed, success_rate]
+      properties:
+        total:
+          type: integer
+          format: int64
+        pending:
+          type: integer
+          format: int64
+        delivered:
+          type: integer
+          format: int64
+        failed:
+          type: integer
+          format: int64
+        success_rate:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 1
+          description: '`delivered / (delivered + failed)`; `null` when no delivery finished.'
+
+    DashboardInboundResults:
+      type: object
+      description: Callbacks per `InboundWebhookResult`; every result is present.
+      required: [applied, stale, duplicate, mismatch, unmapped, invalid_signature, invalid_payload, error]
+      properties:
+        applied:
+          type: integer
+          format: int64
+        stale:
+          type: integer
+          format: int64
+        duplicate:
+          type: integer
+          format: int64
+        mismatch:
+          type: integer
+          format: int64
+        unmapped:
+          type: integer
+          format: int64
+        invalid_signature:
+          type: integer
+          format: int64
+        invalid_payload:
+          type: integer
+          format: int64
+        error:
+          type: integer
+          format: int64
+
+    DashboardInbound:
+      type: object
+      description: The gateway callbacks received in the current period.
+      required: [total, applied, problems, by_result]
+      properties:
+        total:
+          type: integer
+          format: int64
+        applied:
+          type: integer
+          format: int64
+        problems:
+          type: integer
+          format: int64
+          description: Every result except `applied`, `stale` and `duplicate`.
+        by_result:
+          $ref: '#/components/schemas/DashboardInboundResults'
+
+    DashboardReconciliation:
+      type: object
+      required: [unresolved_items, latest_run]
+      properties:
+        unresolved_items:
+          type: integer
+          format: int64
+          description: Unresolved items of every succeeded run of the environment's connections.
+        latest_run:
+          description: The newest run, whatever its status; `null` when there is none.
+          oneOf:
+            - $ref: '#/components/schemas/ReconciliationRun'
+            - type: 'null'
+
+    DashboardResponse:
+      type: object
+      required: [environment, range, from, to, previous_from, payments, deliveries, inbound, connections, reconciliation, recent_payments]
+      properties:
+        environment:
+          description: The environment the dashboard is narrowed to; `null` when every environment counts.
+          oneOf:
+            - $ref: '#/components/schemas/AppEnvironment'
+            - type: 'null'
+        range:
+          $ref: '#/components/schemas/DashboardRange'
+        from:
+          type: string
+          format: date-time
+          description: Inclusive start of the current period, in UTC (a WIB midnight).
+        to:
+          type: string
+          format: date-time
+          description: Exclusive end of the current period, in UTC (the next WIB midnight).
+        previous_from:
+          type: string
+          format: date-time
+          description: Inclusive start of the previous period, in UTC; it ends at `from`.
+        payments:
+          $ref: '#/components/schemas/DashboardPayments'
+        deliveries:
+          $ref: '#/components/schemas/DashboardDeliveries'
+        inbound:
+          $ref: '#/components/schemas/DashboardInbound'
+        connections:
+          type: array
+          description: Every connection of the environment, active ones first, then by name.
+          items:
+            $ref: '#/components/schemas/ConnectionListItem'
+        reconciliation:
+          $ref: '#/components/schemas/DashboardReconciliation'
+        recent_payments:
+          type: array
+          description: The 8 newest payments, newest first.
+          items:
+            $ref: '#/components/schemas/Payment'
 
     ReconciliationRunStatus:
       type: string

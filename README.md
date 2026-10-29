@@ -852,6 +852,8 @@ Sessions expire after 30 minutes idle or 12 hours in total
 - `GET/POST /admin/connections`, `GET/PATCH /admin/connections/:id`,
   `PATCH /admin/connections/:id/credentials`, `PUT /admin/connections/:id/channels`,
   `POST /admin/connections/:id/test|disable|enable`
+- `GET /admin/dashboard` (payments, deliveries, inbound webhooks, connections and
+  reconciliation over the last 7 or 30 days, per environment)
 - `GET /admin/payments` (cursor-paginated)
 - `GET /admin/payment-reports` (cursor-paginated), `GET /admin/payment-reports/summary`,
   `GET /admin/payment-reports/export` (CSV)

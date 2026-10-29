@@ -159,6 +159,9 @@ func (r *PaymentRepo) List(ctx context.Context, f domain.PaymentFilter, p domain
 	if f.AppPublicID != nil {
 		w.add("a.public_id = ?", *f.AppPublicID)
 	}
+	if f.Environment != nil {
+		w.add("a.environment = ?", string(*f.Environment))
+	}
 	if f.Status != nil {
 		w.add("p.status = ?", string(*f.Status))
 	}

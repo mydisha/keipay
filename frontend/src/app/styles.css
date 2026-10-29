@@ -9,35 +9,51 @@
  * Tailwind utilities generated from @theme below, never raw colours.
  */
 :root {
-  --radius: 0.5rem;
+  --radius: 0.75rem;
 
-  --background: oklch(0.985 0.002 247);
-  --foreground: oklch(0.21 0.02 265);
+  --background: oklch(0.975 0.004 262);
+  --foreground: oklch(0.2 0.02 262);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.21 0.02 265);
+  --card-foreground: oklch(0.2 0.02 262);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.21 0.02 265);
-  --primary: oklch(0.27 0.03 265);
-  --primary-foreground: oklch(0.985 0.002 247);
-  --secondary: oklch(0.96 0.004 265);
-  --secondary-foreground: oklch(0.27 0.03 265);
-  --muted: oklch(0.96 0.004 265);
-  --muted-foreground: oklch(0.47 0.02 265);
-  --accent: oklch(0.95 0.006 265);
-  --accent-foreground: oklch(0.27 0.03 265);
+  --popover-foreground: oklch(0.2 0.02 262);
+  /* The one accent: main actions, active navigation, focus, links and charts. */
+  --primary: oklch(0.51 0.21 272);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.955 0.006 262);
+  --secondary-foreground: oklch(0.2 0.02 262);
+  --muted: oklch(0.955 0.006 262);
+  --muted-foreground: oklch(0.48 0.02 262);
+  --accent: oklch(0.95 0.008 262);
+  --accent-foreground: oklch(0.2 0.02 262);
   --destructive: oklch(0.52 0.2 27);
   --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.91 0.006 265);
-  --input: oklch(0.66 0.012 265);
-  --ring: oklch(0.55 0.16 262);
-  --link: oklch(0.5 0.17 262);
+  --border: oklch(0.915 0.008 262);
+  --input: oklch(0.64 0.016 262);
+  --ring: oklch(0.55 0.2 272);
+  --link: oklch(0.47 0.2 272);
   --overlay: oklch(0.15 0.01 265 / 0.5);
 
-  --sidebar: oklch(0.975 0.003 265);
-  --sidebar-foreground: oklch(0.3 0.02 265);
-  --sidebar-accent: oklch(0.93 0.008 265);
-  --sidebar-accent-foreground: oklch(0.21 0.02 265);
-  --sidebar-border: oklch(0.91 0.006 265);
+  --sidebar: oklch(0.962 0.006 262);
+  --sidebar-foreground: oklch(0.35 0.02 262);
+  --sidebar-accent: oklch(0.92 0.012 268);
+  --sidebar-accent-foreground: oklch(0.2 0.02 262);
+  --sidebar-border: oklch(0.915 0.008 262);
+  --sidebar-primary: oklch(0.51 0.21 272);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+
+  /* Chart series: 1 accent/successful, 2 teal, 3 amber, 4 rose, 5 slate/created. */
+  --chart-1: oklch(0.55 0.2 272);
+  --chart-2: oklch(0.6 0.13 170);
+  --chart-3: oklch(0.66 0.15 75);
+  --chart-4: oklch(0.6 0.19 20);
+  --chart-5: oklch(0.62 0.03 262);
+
+  /* The brand panel of the auth pages. */
+  --brand-panel: oklch(0.2 0.03 272);
+  --brand-panel-foreground: oklch(0.97 0.006 262);
+  --brand-panel-muted: oklch(0.76 0.02 262);
+  --brand-grid: oklch(1 0 0 / 0.06);
 
   /* Status tones: text and border on a tinted background, AA on that background. */
   --success: oklch(0.96 0.04 155);
@@ -49,9 +65,9 @@
   --danger: oklch(0.96 0.025 25);
   --danger-foreground: oklch(0.48 0.19 27);
   --danger-border: oklch(0.86 0.07 25);
-  --info: oklch(0.96 0.025 255);
-  --info-foreground: oklch(0.45 0.16 262);
-  --info-border: oklch(0.86 0.06 255);
+  --info: oklch(0.96 0.025 272);
+  --info-foreground: oklch(0.45 0.16 272);
+  --info-border: oklch(0.86 0.06 272);
   --neutral: oklch(0.955 0.004 265);
   --neutral-foreground: oklch(0.4 0.02 265);
   --neutral-border: oklch(0.88 0.008 265);
@@ -63,33 +79,46 @@
 }
 
 .dark {
-  --background: oklch(0.17 0.012 265);
+  --background: oklch(0.15 0.012 262);
   --foreground: oklch(0.95 0.004 265);
-  --card: oklch(0.21 0.014 265);
+  --card: oklch(0.19 0.014 262);
   --card-foreground: oklch(0.95 0.004 265);
-  --popover: oklch(0.21 0.014 265);
+  --popover: oklch(0.21 0.014 262);
   --popover-foreground: oklch(0.95 0.004 265);
-  --primary: oklch(0.93 0.006 265);
-  --primary-foreground: oklch(0.21 0.02 265);
-  --secondary: oklch(0.27 0.014 265);
+  --primary: oklch(0.56 0.2 272);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.25 0.014 262);
   --secondary-foreground: oklch(0.95 0.004 265);
-  --muted: oklch(0.26 0.014 265);
-  --muted-foreground: oklch(0.72 0.014 265);
-  --accent: oklch(0.28 0.016 265);
+  --muted: oklch(0.25 0.014 262);
+  --muted-foreground: oklch(0.71 0.014 262);
+  --accent: oklch(0.27 0.016 262);
   --accent-foreground: oklch(0.95 0.004 265);
   --destructive: oklch(0.52 0.19 25);
   --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.3 0.014 265);
-  --input: oklch(0.52 0.016 265);
-  --ring: oklch(0.68 0.14 262);
-  --link: oklch(0.76 0.12 262);
+  --border: oklch(0.28 0.014 262);
+  --input: oklch(0.52 0.016 262);
+  --ring: oklch(0.7 0.15 272);
+  --link: oklch(0.78 0.12 272);
   --overlay: oklch(0 0 0 / 0.6);
 
-  --sidebar: oklch(0.19 0.013 265);
+  --sidebar: oklch(0.13 0.013 262);
   --sidebar-foreground: oklch(0.85 0.008 265);
-  --sidebar-accent: oklch(0.27 0.016 265);
+  --sidebar-accent: oklch(0.22 0.018 268);
   --sidebar-accent-foreground: oklch(0.97 0.003 265);
-  --sidebar-border: oklch(0.29 0.014 265);
+  --sidebar-border: oklch(0.28 0.014 262);
+  --sidebar-primary: oklch(0.8 0.11 272);
+  --sidebar-primary-foreground: oklch(0.15 0.02 262);
+
+  --chart-1: oklch(0.72 0.15 272);
+  --chart-2: oklch(0.72 0.13 170);
+  --chart-3: oklch(0.8 0.14 80);
+  --chart-4: oklch(0.7 0.17 20);
+  --chart-5: oklch(0.66 0.03 262);
+
+  --brand-panel: oklch(0.2 0.03 272);
+  --brand-panel-foreground: oklch(0.97 0.006 262);
+  --brand-panel-muted: oklch(0.76 0.02 262);
+  --brand-grid: oklch(1 0 0 / 0.06);
 
   --success: oklch(0.27 0.05 155);
   --success-foreground: oklch(0.86 0.12 155);
@@ -100,9 +129,9 @@
   --danger: oklch(0.28 0.06 25);
   --danger-foreground: oklch(0.84 0.09 25);
   --danger-border: oklch(0.42 0.11 25);
-  --info: oklch(0.28 0.05 260);
-  --info-foreground: oklch(0.84 0.08 255);
-  --info-border: oklch(0.42 0.1 260);
+  --info: oklch(0.28 0.05 272);
+  --info-foreground: oklch(0.84 0.08 272);
+  --info-border: oklch(0.42 0.1 272);
   --neutral: oklch(0.27 0.012 265);
   --neutral-foreground: oklch(0.82 0.01 265);
   --neutral-border: oklch(0.38 0.014 265);
@@ -116,10 +145,12 @@
   --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  /* 12px cards, tables and dialogs; 8px controls; 6px kbd and menu items. */
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 4px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -148,6 +179,19 @@
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --color-brand-panel: var(--brand-panel);
+  --color-brand-panel-foreground: var(--brand-panel-foreground);
+  --color-brand-panel-muted: var(--brand-panel-muted);
+  --color-brand-grid: var(--brand-grid);
 
   --color-success: var(--success);
   --color-success-foreground: var(--success-foreground);
@@ -184,5 +228,20 @@
   }
   :focus-visible {
     @apply outline-2 outline-offset-2 outline-ring;
+  }
+}
+
+@layer components {
+  /* The brand panel of the auth pages: a soft accent glow over a faint grid. */
+  .auth-brand-panel {
+    background-color: var(--brand-panel);
+    background-image:
+      radial-gradient(80% 60% at 20% 10%, color-mix(in oklch, var(--primary) 45%, transparent), transparent 70%),
+      linear-gradient(var(--brand-grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--brand-grid) 1px, transparent 1px);
+    background-size:
+      100% 100%,
+      2.5rem 2.5rem,
+      2.5rem 2.5rem;
   }
 }

@@ -1,4 +1,5 @@
 import {
+  FlaskConicalIcon,
   KeyRoundIcon,
   LogOutIcon,
   MenuIcon,
@@ -7,7 +8,6 @@ import {
   SearchIcon,
   SettingsIcon,
   SunIcon,
-  UserIcon,
 } from "lucide-react";
 import { useId } from "react";
 import { Link } from "react-router";
@@ -15,6 +15,7 @@ import { useMe, useSignOut } from "@/features/auth/api/auth";
 import { useMode } from "@/shared/lib/mode";
 import { strings } from "@/shared/lib/strings";
 import { useTheme, type Theme } from "@/shared/lib/theme";
+import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import {
   DropdownMenu,
@@ -28,6 +29,7 @@ import {
 } from "@/shared/ui/dropdown-menu";
 import { Label } from "@/shared/ui/label";
 import { Switch } from "@/shared/ui/switch";
+import { initialsOf } from "./sidebar";
 
 interface TopBarProps {
   onOpenMenu: () => void;
@@ -36,13 +38,13 @@ interface TopBarProps {
 
 export function TopBar({ onOpenMenu, onOpenPalette }: TopBarProps) {
   return (
-    <header className="sticky top-0 z-40 flex h-14 items-center gap-2 border-b bg-background/95 px-4 backdrop-blur md:px-6">
+    <header className="sticky top-0 z-40 flex h-14 items-center gap-2 border-b bg-background/80 px-4 backdrop-blur md:px-6 lg:px-8">
       <Button variant="ghost" size="icon" className="md:hidden" onClick={onOpenMenu} aria-label={strings.nav.openMenu}>
         <MenuIcon aria-hidden="true" />
       </Button>
       <Button
         variant="outline"
-        className="h-9 justify-start gap-2 text-muted-foreground max-sm:w-11 max-sm:px-0 max-sm:justify-center sm:w-56"
+        className="h-9 justify-start gap-2 bg-card text-muted-foreground shadow-xs max-sm:w-11 max-sm:px-0 max-sm:justify-center sm:w-72"
         onClick={onOpenPalette}
         aria-label={strings.shell.openPalette}
         aria-keyshortcuts="Meta+K Control+K"
@@ -63,12 +65,20 @@ export function TopBar({ onOpenMenu, onOpenPalette }: TopBarProps) {
 function ModeSwitch() {
   const { mode, setMode } = useMode();
   const id = useId();
+  const testing = mode === "test";
   return (
-    <div className="flex items-center gap-2 rounded-md px-1.5 max-md:min-h-11">
-      <Switch id={id} checked={mode === "test"} onCheckedChange={(checked) => setMode(checked ? "test" : "live")} />
+    <div
+      data-mode={mode}
+      className={cn(
+        "flex h-9 items-center gap-2 rounded-full border px-2.5 transition-colors max-md:min-h-11",
+        testing ? "border-test-mode-border bg-test-mode text-test-mode-foreground" : "border-border bg-card text-muted-foreground shadow-xs",
+      )}
+    >
+      <FlaskConicalIcon className="size-3.5 shrink-0" aria-hidden="true" />
       <Label htmlFor={id} className="cursor-pointer text-xs whitespace-nowrap">
         {strings.shell.modeSwitchLabel}
       </Label>
+      <Switch id={id} checked={testing} onCheckedChange={(checked) => setMode(checked ? "test" : "live")} />
     </div>
   );
 }
@@ -103,8 +113,13 @@ function UserMenu() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label={strings.shell.userMenu}>
-          <UserIcon aria-hidden="true" />
+        <Button variant="ghost" size="icon" aria-label={strings.shell.userMenu} className="rounded-full">
+          <span
+            aria-hidden="true"
+            className="flex size-8 items-center justify-center rounded-full bg-sidebar-primary/15 text-xs font-semibold text-sidebar-primary"
+          >
+            {me ? initialsOf(me.user.name) : ""}
+          </span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-64 max-w-[calc(100vw-2rem)]">

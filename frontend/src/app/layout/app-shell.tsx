@@ -28,9 +28,9 @@ export function AppShell() {
       </a>
       <Sidebar />
       <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-        <SheetContent side="left" closeLabel={strings.nav.closeMenu} className="p-3 pt-4">
+        <SheetContent side="left" closeLabel={strings.nav.closeMenu} className="bg-sidebar p-2 pt-3">
           <SheetTitle asChild>
-            <div className="flex h-9 items-center px-1.5">
+            <div className="flex h-9 items-center px-2.5">
               <Brand />
             </div>
           </SheetTitle>
@@ -41,7 +41,11 @@ export function AppShell() {
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar onOpenMenu={() => setMenuOpen(true)} onOpenPalette={() => setPaletteOpen(true)} />
         {mode === "test" && <TestModeBanner />}
-        <main id="main" tabIndex={-1} className="mx-auto grid w-full max-w-7xl min-w-0 flex-1 content-start gap-6 px-4 py-6 outline-none md:px-6 [&>*]:min-w-0">
+        <main
+          id="main"
+          tabIndex={-1}
+          className="mx-auto grid w-full max-w-7xl min-w-0 flex-1 content-start gap-6 px-4 py-6 outline-none md:px-6 md:py-8 lg:px-8 [&>*]:min-w-0"
+        >
           <Outlet />
         </main>
       </div>

@@ -75,6 +75,7 @@ var statusByCode = map[domain.ErrorCode]int{
 	domain.CodeProviderRejected:        http.StatusUnprocessableEntity,
 	domain.CodeProviderUnavailable:     http.StatusServiceUnavailable,
 	domain.CodeRunInProgress:           http.StatusConflict,
+	domain.CodeRunNotSucceeded:         http.StatusConflict,
 }
 
 // passThrough are the 5xx codes sent as they are; every other 5xx collapses

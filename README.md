@@ -737,7 +737,8 @@ gateway agree about every payment (see the
   KeiPay's payments by reference. Each reference becomes an item:
   `matched`, `missing_in_keipay`, `missing_in_gateway`, `amount_mismatch`,
   `status_mismatch` or `fee_mismatch`. Resolve the others with a note
-  once you have looked at them; this is recorded in the audit log.
+  once you have looked at them; this is recorded in the audit log. Items
+  of a run whose last re-run failed cannot be resolved until it succeeds.
   **Export CSV** downloads a run's items. **Re-run** recomputes the same
   run without duplicating items, and an item keeps its resolution while its
   result stays the same.

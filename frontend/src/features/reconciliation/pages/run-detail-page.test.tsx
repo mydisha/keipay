@@ -336,6 +336,7 @@ describe("Item sheet", () => {
   it.each([
     ["conflict", "Someone already resolved this item. Reload to see their note."],
     ["run_in_progress", "This run is still in progress. Try again when it finishes."],
+    ["run_not_succeeded", "This run failed, so its items can't be resolved. Re-run it first."],
   ])("explains a 409 %s", async (code, message) => {
     routes({ [`POST ${RESOLVE}`]: () => json(409, errorBody(code, "conflict")) });
     const { user } = renderApp(`/reconciliation/runs/${REC_ID}?item=${RCI_ID}`);

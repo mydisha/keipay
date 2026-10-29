@@ -91,7 +91,6 @@ func checkout() provider.CheckoutInput {
 	}
 }
 
-// T-4 / AC-2, AC-17
 func TestCreateCheckoutRequest(t *testing.T) {
 	fx, srv := newFakeXendit(t, http.StatusOK, invoiceJSON)
 	a := New(WithBaseURL(srv.URL + "/"))
@@ -169,7 +168,6 @@ func TestEveryChannelHasAMethodCode(t *testing.T) {
 	}
 }
 
-// T-5 / AC-16, AC-11
 func TestErrorClasses(t *testing.T) {
 	cases := []struct {
 		status       int
@@ -266,7 +264,6 @@ func TestCancelCheckout(t *testing.T) {
 	}
 }
 
-// T-6 / AC-18
 func TestVerifyWebhook(t *testing.T) {
 	a := New()
 	cases := map[string]string{"different": "cb-token-124", "missing": "", "prefix": "cb-token", "longer": "cb-token-1234",
@@ -292,11 +289,10 @@ func TestVerifyWebhook(t *testing.T) {
 	}
 }
 
-// T-7 / AC-2
 func TestParseWebhook(t *testing.T) {
 	a := New()
 	raw := `{"id":"inv_9","external_id":"kp_pay_x","status":"SETTLED","amount":5000,"currency":"IDR","paid_amount":5000,
-		"fees_paid_amount":150,"paid_at":"2026-01-02T03:04:05Z","settlement_date":"2026-01-03T00:00:00Z",
+		"fees_paid_amount":0,"adjusted_received_amount":4850,"paid_at":"2026-01-02T03:04:05Z","settlement_date":"2026-01-03T00:00:00Z",
 		"updated":"2026-01-04T00:00:00Z","merchant_name":"ignored"}`
 	ev, err := a.ParseWebhook([]byte(raw))
 	if err != nil {
@@ -304,8 +300,9 @@ func TestParseWebhook(t *testing.T) {
 	}
 	paid := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	settled := time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC)
+	fee := int64(150)
 	want := provider.InboundEvent{EventKey: "inv_9", Reference: "kp_pay_x", ProviderPaymentID: "inv_9", ProviderStatus: "SETTLED",
-		Status: domain.PaymentStatusSettled, Amount: 5000, Currency: "IDR", PaidAmount: 5000, Fee: 150, PaidAt: &paid,
+		Status: domain.PaymentStatusSettled, Amount: 5000, Currency: "IDR", PaidAmount: 5000, Fee: &fee, PaidAt: &paid,
 		SettledAt: &settled, Source: "webhook"}
 	if !reflect.DeepEqual(*ev, want) {
 		t.Fatalf("event = %+v\nwant    %+v", *ev, want)
@@ -314,6 +311,9 @@ func TestParseWebhook(t *testing.T) {
 	ev, _ = a.ParseWebhook([]byte(`{"id":"i","external_id":"r","status":"SETTLED","updated":"2026-01-04T00:00:00Z"}`))
 	if ev.SettledAt == nil || !ev.SettledAt.Equal(time.Date(2026, 1, 4, 0, 0, 0, 0, time.UTC)) || ev.PaidAt != nil {
 		t.Fatalf("fallback = %+v", ev)
+	}
+	if ev.Fee != nil {
+		t.Fatalf("missing fee = %v, want nil", *ev.Fee)
 	}
 	ev, _ = a.ParseWebhook([]byte(`{"id":"i","external_id":"r","status":"PAID","paid_at":"not a time"}`))
 	if ev.PaidAt != nil || ev.SettledAt != nil {
@@ -327,7 +327,7 @@ func TestParseWebhook(t *testing.T) {
 	}
 }
 
-// T-B35: known statuses keep their mapping; anything else is unknown, so a
+// Known statuses keep their mapping; anything else is unknown, so a
 // callback carrying it is recorded but never applied.
 func TestMapStatus(t *testing.T) {
 	known := map[string]domain.PaymentStatus{
@@ -346,7 +346,7 @@ func TestMapStatus(t *testing.T) {
 	}
 }
 
-// T-B35: an unknown status parses with an empty Status and the gateway's own
+// An unknown status parses with an empty Status and the gateway's own
 // value kept for the inbound log.
 func TestParseWebhookUnknownStatus(t *testing.T) {
 	ev, err := New().ParseWebhook([]byte(`{"id":"inv_1","external_id":"kp_pay_x","status":"REFUNDED","amount":5000}`))
@@ -358,7 +358,6 @@ func TestParseWebhookUnknownStatus(t *testing.T) {
 	}
 }
 
-// T-8 / AC-5
 func TestValidateAccount(t *testing.T) {
 	a := New()
 	cases := []struct {
@@ -426,3 +425,63 @@ func TestBasicAuthIsTheAccountKey(t *testing.T) {
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// The fee is what Xendit kept, gross minus adjusted_received_amount;
+// fees_paid_amount (charged to the customer) never sets it.
+func TestParseWebhookFee(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want *int64
+	}{
+		{"paid amount minus received", `"amount":50000,"paid_amount":50000,"adjusted_received_amount":47500`, i64(2500)},
+		{"amount when paid amount is missing", `"amount":50000,"adjusted_received_amount":47500`, i64(2500)},
+		{"paid amount wins over amount", `"amount":50000,"paid_amount":50100,"adjusted_received_amount":47500`, i64(2600)},
+		{"all received is a known zero", `"amount":50000,"paid_amount":50000,"adjusted_received_amount":50000`, i64(0)},
+		{"no received amount is unknown", `"amount":50000,"paid_amount":50000`, nil},
+		{"null received amount is unknown", `"amount":50000,"paid_amount":50000,"adjusted_received_amount":null`, nil},
+		{"customer fee zero is not a merchant fee", `"amount":50000,"paid_amount":50000,"fees_paid_amount":0`, nil},
+		{"customer fee is not a merchant fee", `"amount":50000,"paid_amount":50000,"fees_paid_amount":1500`, nil},
+		{"more received than paid is passed on", `"amount":50000,"paid_amount":50000,"adjusted_received_amount":50005`, i64(-5)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ev, err := New().ParseWebhook([]byte(`{"id":"inv_1","external_id":"kp_pay_A","status":"PAID",` + tc.body + `}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (ev.Fee == nil) != (tc.want == nil) || (ev.Fee != nil && *ev.Fee != *tc.want) {
+				t.Fatalf("fee = %v, want %v", deref(ev.Fee), deref(tc.want))
+			}
+		})
+	}
+}
+
+// Regression: an ordinary PAID callback carries fees_paid_amount 0 while
+// Xendit keeps its fee. The callback's fee must equal the Transactions API's
+// fee for the same payment, or every such payment reconciles as
+// fee_mismatch.
+func TestCallbackFeeMatchesTransactionFee(t *testing.T) {
+	ev, err := New().ParseWebhook([]byte(`{"id":"inv_1","external_id":"kp_pay_A","status":"PAID","currency":"IDR",
+		"amount":50000,"paid_amount":50000,"fees_paid_amount":0,"adjusted_received_amount":47500}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := normalizeTransaction(transaction{ID: "txn_1", ReferenceID: "kp_pay_A", Status: "SUCCESS", Currency: "IDR",
+		Amount: "50000", Fee: &transactionFee{XenditFee: "2275", ValueAddedTax: "225"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ev.Fee == nil || tx.Fee == nil || *ev.Fee != *tx.Fee {
+		t.Fatalf("callback fee %v, transaction fee %v", deref(ev.Fee), deref(tx.Fee))
+	}
+}
+
+func i64(v int64) *int64 { return &v }
+
+func deref(p *int64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}

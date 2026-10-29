@@ -59,7 +59,7 @@ func (a *App) Summary() AppSummary {
 	return AppSummary{PublicID: a.PublicID, Slug: a.Slug, Name: a.Name, Environment: a.Environment}
 }
 
-// AppSummary identifies the app a payment, ledger entry or delivery belongs to.
+// AppSummary identifies the app a payment, payment report or delivery belongs to.
 type AppSummary struct {
 	PublicID    string
 	Slug        string

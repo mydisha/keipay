@@ -38,6 +38,9 @@ type Capabilities struct {
 	CanRestrictChannels bool
 	CanCancel           bool
 	ReportsFee          bool
+	// ListTransactions means the adapter implements TransactionLister, so
+	// its connections can be reconciled.
+	ListTransactions bool
 }
 
 // WebhookSetup tells an operator where to paste a connection's callback URL.
@@ -95,10 +98,13 @@ type InboundEvent struct {
 	Amount            int64
 	Currency          string
 	PaidAmount        int64
-	Fee               int64
-	PaidAt            *time.Time
-	SettledAt         *time.Time
-	Source            string
+	// Fee is what the gateway deducted from the merchant, in the terms the
+	// gateway's transaction list reports it. It is nil when the callback does
+	// not tell; a derived 0 is a known zero.
+	Fee       *int64
+	PaidAt    *time.Time
+	SettledAt *time.Time
+	Source    string
 }
 
 // Provider is a payment gateway adapter. Every method that calls the gateway
@@ -120,4 +126,28 @@ type Provider interface {
 	// VerifyWebhook authenticates a callback; failure is ErrInvalidSignature.
 	VerifyWebhook(a Account, h http.Header, rawBody []byte) error
 	ParseWebhook(rawBody []byte) (*InboundEvent, error)
+}
+
+// TransactionQuery asks for one page of a gateway's transactions.
+type TransactionQuery struct {
+	// From and To bound the transaction time, half-open, in UTC.
+	From, To time.Time
+	// Cursor is the NextCursor of the previous page, "" for the first.
+	Cursor string
+	Limit  int
+}
+
+// TransactionPage is one page of transactions.
+type TransactionPage struct {
+	Transactions []domain.GatewayTransaction
+	// NextCursor is "" on the last page.
+	NextCursor string
+}
+
+// TransactionLister is implemented by adapters whose
+// Capabilities().ListTransactions is true. Failures are wrapped like the
+// other gateway calls: ErrRejected for credentials and refused requests,
+// ErrRetryable for everything that may work on a later try.
+type TransactionLister interface {
+	ListTransactions(ctx context.Context, a Account, q TransactionQuery) (*TransactionPage, error)
 }

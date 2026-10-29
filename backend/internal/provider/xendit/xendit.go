@@ -170,6 +170,7 @@ func (a *Adapter) Capabilities() provider.Capabilities {
 		CanRestrictChannels: true,
 		CanCancel:           true,
 		ReportsFee:          true,
+		ListTransactions:    true,
 	}
 }
 
@@ -262,8 +263,12 @@ type invoiceCallback struct {
 	Amount     int64  `json:"amount"`
 	Currency   string `json:"currency"`
 	PaidAmount int64  `json:"paid_amount"`
-	FeesPaid   int64  `json:"fees_paid_amount"`
-	PaidAt     string `json:"paid_at"`
+	// AdjustedReceived is what the merchant receives after Xendit's fee.
+	// fees_paid_amount is deliberately not read: it is the fee charged to
+	// the customer and is 0 on an ordinary invoice whose fee Xendit deducts
+	// from the merchant.
+	AdjustedReceived *int64 `json:"adjusted_received_amount"`
+	PaidAt           string `json:"paid_at"`
 	// SettlementDate is sent on PAID callbacks as an estimate and on SETTLED
 	// callbacks as the event time; Updated is the fallback.
 	SettlementDate string `json:"settlement_date"`
@@ -297,11 +302,27 @@ func (a *Adapter) ParseWebhook(raw []byte) (*provider.InboundEvent, error) {
 		Amount:            cb.Amount,
 		Currency:          cb.Currency,
 		PaidAmount:        cb.PaidAmount,
-		Fee:               cb.FeesPaid,
+		Fee:               cb.merchantFee(),
 		PaidAt:            parseTime(cb.PaidAt),
 		SettledAt:         settledAt,
 		Source:            "webhook",
 	}, nil
+}
+
+// merchantFee is what Xendit deducted from the merchant, the figure the
+// Transactions API reports as its fee plus VAT. It is nil when the callback
+// does not say what the merchant received; a nonsensical negative fee is
+// passed on for the service to drop.
+func (cb invoiceCallback) merchantFee() *int64 {
+	if cb.AdjustedReceived == nil {
+		return nil
+	}
+	gross := cb.PaidAmount
+	if gross == 0 {
+		gross = cb.Amount
+	}
+	fee := gross - *cb.AdjustedReceived
+	return &fee
 }
 
 // MapStatus normalizes a Xendit invoice status and reports whether Xendit's

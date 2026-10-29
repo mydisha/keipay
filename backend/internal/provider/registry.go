@@ -12,13 +12,18 @@ type Registry struct {
 	byName map[Name]Provider
 }
 
-// NewRegistry registers ps; two adapters with one name is an error.
+// NewRegistry registers ps. Two adapters with one name, or an adapter that
+// declares ListTransactions without implementing TransactionLister, is an
+// error.
 func NewRegistry(ps ...Provider) (*Registry, error) {
 	r := &Registry{byName: make(map[Name]Provider, len(ps))}
 	for _, p := range ps {
 		n := p.Descriptor().Name
 		if _, dup := r.byName[n]; dup {
 			return nil, fmt.Errorf("provider %q registered twice", n)
+		}
+		if _, lists := p.(TransactionLister); p.Capabilities().ListTransactions && !lists {
+			return nil, fmt.Errorf("provider %q declares list_transactions but cannot list transactions", n)
 		}
 		r.byName[n] = p
 	}

@@ -2,6 +2,8 @@
 package middleware
 
 import (
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -40,11 +42,17 @@ func RequestIDFromContext(c *gin.Context) string {
 	return c.GetString(ctxRequestID)
 }
 
-// Recover logs panics and returns 500 instead of crashing the server.
+// Recover logs panics and returns 500 instead of crashing the server. A
+// handler that panics with http.ErrAbortHandler wants the connection cut
+// (a stream failed after its first byte), so that panic is passed on to the
+// server, which closes the connection without logging.
 func Recover(log *zap.Logger) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		defer func() {
 			if r := recover(); r != nil {
+				if r == http.ErrAbortHandler {
+					panic(r)
+				}
 				log.Error("panic recovered",
 					zap.String(logger.FieldLogType, logger.LogTypeApp),
 					zap.Any("error", r),

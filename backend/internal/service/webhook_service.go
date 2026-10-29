@@ -66,7 +66,7 @@ const (
 // WebhookDeps are the collaborators of a WebhookService.
 type WebhookDeps struct {
 	Payments   domain.PaymentRepository
-	Ledger     domain.LedgerRepository
+	Reports    domain.PaymentReportRepository
 	Inbound    domain.InboundWebhookRepository
 	Events     domain.EventRepository
 	Endpoints  domain.WebhookEndpointRepository
@@ -81,7 +81,7 @@ type WebhookDeps struct {
 // webhook endpoints.
 type WebhookService struct {
 	payments   domain.PaymentRepository
-	ledger     domain.LedgerRepository
+	reports    domain.PaymentReportRepository
 	inbound    domain.InboundWebhookRepository
 	events     domain.EventRepository
 	endpoints  domain.WebhookEndpointRepository
@@ -99,7 +99,7 @@ func NewWebhookService(d WebhookDeps) *WebhookService {
 		log = zap.NewNop()
 	}
 	return &WebhookService{
-		payments: d.Payments, ledger: d.Ledger, inbound: d.Inbound, events: d.Events, endpoints: d.Endpoints,
+		payments: d.Payments, reports: d.Reports, inbound: d.Inbound, events: d.Events, endpoints: d.Endpoints,
 		deliveries: d.Deliveries, tx: d.Tx, enqueuer: d.Enqueuer, log: log, now: time.Now,
 	}
 }
@@ -120,7 +120,7 @@ type processOutcome struct {
 // in the inbound log. It returns nil when the callback was applied or safely
 // skipped (duplicate, stale, unmapped).
 //
-// The dedupe claim, status update, ledger entry, event and deliveries commit
+// The dedupe claim, status update, payment report, event and deliveries commit
 // in one transaction, so a failure leaves nothing behind (only an error row)
 // and the gateway's retry is processed in full. Deliveries are enqueued after
 // commit; see ErrForwardNotQueued.
@@ -268,8 +268,9 @@ func eventIDOf(e *domain.Event) *int64 {
 	return &e.ID
 }
 
-// applyStatus moves p to ev.Status and books a successful payment in the
-// ledger. It returns the payment's paid and settled times after the change.
+// applyStatus moves p to ev.Status and, for a successful status, writes its
+// payment report. It returns the payment's paid and settled times after the
+// change.
 func (s *WebhookService) applyStatus(ctx context.Context, p *domain.Payment, ev provider.InboundEvent, raw []byte) (paidAt, settledAt *time.Time, err error) {
 	status := ev.Status
 	var newPaidAt *time.Time
@@ -294,26 +295,6 @@ func (s *WebhookService) applyStatus(ctx context.Context, p *domain.Payment, ev 
 		return nil, nil, err
 	}
 
-	if status.IsSuccessful() {
-		amount := ev.PaidAmount
-		if amount == 0 {
-			amount = p.Amount
-		}
-		entry := &domain.LedgerEntry{
-			AppID: p.AppID, PaymentID: p.ID, Amount: amount, XenditFee: ev.Fee,
-			NetAmount: amount - ev.Fee, Type: domain.LedgerEntryTypePayment, SettledAt: newSettledAt,
-		}
-		// Idempotent via the unique (payment_id, type).
-		if err := s.ledger.Create(ctx, entry); err != nil {
-			return nil, nil, err
-		}
-		// The entry may already exist from PAID; record when it settled.
-		if newSettledAt != nil {
-			if err := s.ledger.MarkSettled(ctx, p.ID, *newSettledAt); err != nil {
-				return nil, nil, err
-			}
-		}
-	}
 	// UpdateStatus keeps earlier times when the new ones are nil.
 	paidAt, settledAt = p.PaidAt, p.SettledAt
 	if newPaidAt != nil {
@@ -322,7 +303,40 @@ func (s *WebhookService) applyStatus(ctx context.Context, p *domain.Payment, ev 
 	if newSettledAt != nil {
 		settledAt = newSettledAt
 	}
+	if status.IsSuccessful() {
+		if err := s.reports.Upsert(ctx, s.report(p, ev, paidAt, settledAt)); err != nil {
+			return nil, nil, err
+		}
+	}
 	return paidAt, settledAt, nil
+}
+
+// report is the payment report of p after the successful callback ev.
+func (s *WebhookService) report(p *domain.Payment, ev provider.InboundEvent, paidAt, settledAt *time.Time) *domain.PaymentReport {
+	gross := ev.PaidAmount
+	if gross == 0 {
+		gross = p.Amount
+	}
+	r := &domain.PaymentReport{
+		PaymentID: p.ID, AppID: p.AppID, ConnectionID: p.ConnectionID, Currency: p.Currency, Gross: gross,
+		Status: ev.Status, SettledAt: settledAt,
+	}
+	// A negative fee would break the report's constraints and with them the
+	// whole callback; it is kept as unknown instead.
+	if ev.Fee != nil && *ev.Fee >= 0 {
+		fee, net := *ev.Fee, gross-*ev.Fee
+		r.Fee, r.Net = &fee, &net
+	}
+	// A SETTLED callback for a payment never seen as PAID has no paid time.
+	switch {
+	case paidAt != nil:
+		r.PaidAt = *paidAt
+	case settledAt != nil:
+		r.PaidAt = *settledAt
+	default:
+		r.PaidAt = s.timestamp()
+	}
+	return r
 }
 
 // fanOut creates the event of p moving to status and one PENDING delivery per

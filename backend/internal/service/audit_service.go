@@ -38,6 +38,9 @@ const (
 	ActionWebhookEndpointAutoDisable  = "webhook_endpoint.auto_disable"
 	ActionWebhookEndpointTest         = "webhook_endpoint.test"
 	ActionWebhookDeliveryReplay       = "webhook_delivery.replay"
+	ActionReconciliationRunCreate     = "reconciliation_run.create"
+	ActionReconciliationRunRerun      = "reconciliation_run.rerun"
+	ActionReconciliationItemResolve   = "reconciliation_item.resolve"
 	ActionUserSetup                   = "user.setup"
 	ActionUserCreate                  = "user.create"
 	ActionUserUpdate                  = "user.update"
@@ -52,12 +55,14 @@ const (
 
 // Audit target types.
 const (
-	TargetApp             = "app"
-	TargetAPIKey          = "api_key"
-	TargetConnection      = "connection"
-	TargetUser            = "user"
-	TargetWebhookEndpoint = "webhook_endpoint"
-	TargetWebhookDelivery = "webhook_delivery"
+	TargetApp                = "app"
+	TargetAPIKey             = "api_key"
+	TargetConnection         = "connection"
+	TargetUser               = "user"
+	TargetWebhookEndpoint    = "webhook_endpoint"
+	TargetWebhookDelivery    = "webhook_delivery"
+	TargetReconciliationRun  = "reconciliation_run"
+	TargetReconciliationItem = "reconciliation_item"
 )
 
 // Auditor records an admin mutation. It must be called with the ctx of the

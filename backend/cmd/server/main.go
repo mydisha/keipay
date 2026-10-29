@@ -27,8 +27,7 @@ import (
 	"github.com/mydisha/keipay/backend/internal/worker"
 )
 
-// Build information, set via ldflags during build.
-// These are used for startup logging and can be injected via Docker build args.
+// Build information, set with -ldflags at build time and logged at startup.
 var (
 	Version   = "dev"
 	Commit    = "unknown"
@@ -38,13 +37,11 @@ var (
 func main() {
 	startTime := time.Now()
 
-	// Load configuration.
 	cfg, err := config.Load()
 	if err != nil {
 		panic(err)
 	}
 
-	// Initialize logger.
 	log, err := logger.New(logger.Options{
 		Service:    "keipay",
 		Env:        cfg.AppEnv,
@@ -61,7 +58,6 @@ func main() {
 		log.Warn("JWT_SECRET is no longer used; admin sessions are server-side. Remove it from the environment.")
 	}
 
-	// Log build and startup information.
 	log.Info("starting keipay",
 		zap.String("version", Version),
 		zap.String("commit", Commit),
@@ -77,7 +73,6 @@ func main() {
 
 	ctx := context.Background()
 
-	// Initialize infrastructure: PostgreSQL.
 	log.Debug("connecting to postgres")
 	pool, err := postgres.NewPool(ctx, cfg.PostgresDSN)
 	if err != nil {
@@ -86,7 +81,6 @@ func main() {
 	defer pool.Close()
 	log.Info("postgres connected successfully")
 
-	// Initialize infrastructure: Redis.
 	log.Debug("connecting to redis", zap.String("addr", cfg.RedisAddr), zap.Int("db", cfg.RedisDB))
 	rdb, err := redisrepo.New(ctx, cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
 	if err != nil {
@@ -95,20 +89,19 @@ func main() {
 	defer func() { _ = rdb.Close() }()
 	log.Info("redis connected successfully", zap.String("addr", cfg.RedisAddr))
 
-	// Initialize encryption cipher.
 	cipher, err := crypto.New(cfg.EncryptionKey)
 	if err != nil {
 		log.Fatal("failed to initialize cipher", zap.Error(err))
 	}
 	log.Debug("encryption cipher initialized")
 
-	// Initialize repositories.
 	log.Debug("initializing repositories")
 	userRepo := postgres.NewUserRepo(pool)
 	appRepo := postgres.NewAppRepo(pool)
 	apiKeyRepo := postgres.NewAPIKeyRepo(pool)
 	paymentRepo := postgres.NewPaymentRepo(pool)
-	ledgerRepo := postgres.NewLedgerRepo(pool)
+	reportRepo := postgres.NewPaymentReportRepo(pool)
+	reconRepo := postgres.NewReconciliationRepo(pool)
 	endpointRepo := postgres.NewWebhookEndpointRepo(pool)
 	eventRepo := postgres.NewEventRepo(pool)
 	deliveryRepo := postgres.NewDeliveryRepo(pool)
@@ -118,7 +111,7 @@ func main() {
 	merchantRepo := postgres.NewMerchantRepo(pool)
 	txMgr := postgres.NewTxManager(pool)
 
-	// Initialize the /v1 nonce store. API keys and apps are not cached, so a
+	// The /v1 nonce store. API keys and apps are not cached, so a
 	// revoked key or disabled app is refused on the next request. Gateway
 	// callbacks are deduplicated in Postgres (inbound_webhooks), not here.
 	log.Debug("initializing nonce store")
@@ -126,7 +119,6 @@ func main() {
 	sessions := redisrepo.NewSessionStore(rdb)
 	loginFailures := redisrepo.NewFailureCounter(rdb)
 
-	// Initialize asynq enqueuer.
 	log.Debug("initializing asynq enqueuer")
 	redisOpt := asynq.RedisClientOpt{Addr: cfg.RedisAddr, Password: cfg.RedisPassword, DB: cfg.RedisDB}
 	enqueuer := worker.NewEnqueuer(redisOpt)
@@ -139,7 +131,6 @@ func main() {
 		log.Fatal("failed to register providers", zap.Error(err))
 	}
 
-	// Initialize services.
 	log.Debug("initializing services")
 	auditSvc := service.NewAuditService(auditRepo)
 	appSvc := service.NewAppService(appRepo, apiKeyRepo, connRepo, cipher, txMgr, auditSvc)
@@ -156,10 +147,20 @@ func main() {
 		BaseURL:     cfg.HTTPBaseURL,
 	})
 	paymentSvc := service.NewPaymentService(paymentRepo, connRepo, registry, cipher, log)
-	ledgerSvc := service.NewLedgerService(ledgerRepo)
+	reportSvc := service.NewPaymentReportService(reportRepo)
+	reconSvc := service.NewReconciliationService(service.ReconciliationDeps{
+		Runs:        reconRepo,
+		Connections: connRepo,
+		Registry:    registry,
+		Source:      service.NewProviderSource(registry, cipher),
+		Tx:          txMgr,
+		Enqueuer:    enqueuer,
+		Audit:       auditSvc,
+		Log:         log,
+	})
 	webhookSvc := service.NewWebhookService(service.WebhookDeps{
 		Payments:   paymentRepo,
-		Ledger:     ledgerRepo,
+		Reports:    reportRepo,
 		Inbound:    inboundRepo,
 		Events:     eventRepo,
 		Endpoints:  endpointRepo,
@@ -226,7 +227,6 @@ func main() {
 		log.Info("no frontend build found; admin console disabled (run the Vite dev server or build frontend/)")
 	}
 
-	// Initialize handlers and router.
 	log.Debug("initializing HTTP router")
 	cookies := middleware.CookieConfig{Secure: cfg.CookieSecure()}
 	deps := transport.Deps{
@@ -240,7 +240,9 @@ func main() {
 		TrustedProxies:  cfg.TrustedProxies,
 		Payment:         handler.NewPaymentHandler(paymentSvc),
 		Webhook:         handler.NewWebhookHandler(webhookSvc, connSvc, log),
-		Admin:           handler.NewAdminHandler(paymentSvc, ledgerSvc, auditSvc),
+		Admin:           handler.NewAdminHandler(paymentSvc, auditSvc),
+		Reports:         handler.NewReportHandler(reportSvc, log),
+		Reconciliation:  handler.NewReconciliationHandler(reconSvc, log),
 		Apps:            handler.NewAppHandler(appSvc),
 		Endpoints:       handler.NewWebhookEndpointHandler(endpointSvc),
 		Deliveries:      handler.NewDeliveryHandler(deliverySvc, inboundSvc),
@@ -251,7 +253,6 @@ func main() {
 	}
 	router := transport.NewRouter(deps)
 
-	// Create HTTP server.
 	srv := &http.Server{
 		Addr:              ":" + cfg.HTTPPort,
 		Handler:           router,
@@ -279,12 +280,11 @@ func main() {
 			Enqueuer:             enqueuer,
 			Log:                  log,
 			DisableAfterFailures: cfg.WebhookDisableAfterFailures,
-		}), log)
+		}), worker.NewReconciler(reconSvc), log)
 		go worker.NewSweeper(deliveryRepo, enqueuer, inspector, log).Run(sweepCtx)
 		log.Info("asynq worker started")
 	}
 
-	// Run HTTP server in background.
 	go func() {
 		log.Info("http server listening", zap.String("addr", srv.Addr), zap.String("base_url", cfg.HTTPBaseURL))
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
@@ -292,16 +292,12 @@ func main() {
 		}
 	}()
 
-	// Log successful startup with duration.
 	startupDuration := time.Since(startTime)
 	log.Info("server started successfully",
 		zap.Duration("startup_duration_ms", startupDuration),
 		zap.String("startup_duration", startupDuration.String()),
 	)
 
-	// =============================
-	// Graceful Shutdown
-	// =============================
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
@@ -311,14 +307,11 @@ func main() {
 		zap.Duration("shutdown_timeout", cfg.GetShutdownTimeout()),
 	)
 
-	// Create shutdown context with configurable timeout.
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.GetShutdownTimeout())
 	defer cancel()
 
-	// Track shutdown progress.
 	shutdownStart := time.Now()
 
-	// Shutdown HTTP server.
 	log.Info("shutting down HTTP server")
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
@@ -330,7 +323,6 @@ func main() {
 		log.Info("http server shutdown complete", zap.Duration("duration_ms", time.Since(shutdownStart)))
 	}
 
-	// Shutdown asynq worker if running.
 	stopSweeper()
 	if asynqSrv != nil {
 		log.Info("shutting down asynq worker")
@@ -339,13 +331,11 @@ func main() {
 		log.Info("asynq worker shutdown complete", zap.Duration("duration_ms", time.Since(workerShutdownStart)))
 	}
 
-	// Close enqueuer.
 	log.Debug("closing asynq enqueuer")
 	if err := enqueuer.Close(); err != nil {
 		log.Warn("error closing enqueuer", zap.Error(err))
 	}
 
-	// Log final shutdown summary.
 	totalShutdownDuration := time.Since(shutdownStart)
 	log.Info("shutdown complete",
 		zap.Duration("total_shutdown_duration_ms", totalShutdownDuration),
@@ -353,14 +343,15 @@ func main() {
 	)
 }
 
-func startWorker(redisOpt asynq.RedisClientOpt, fwd *worker.Forwarder, log *zap.Logger) *asynq.Server {
+func startWorker(redisOpt asynq.RedisClientOpt, fwd *worker.Forwarder, rec *worker.Reconciler, log *zap.Logger) *asynq.Server {
 	srv := asynq.NewServer(redisOpt, asynq.Config{
 		Concurrency: 10,
-		Queues:      map[string]int{worker.QueueWebhooks: 10},
+		Queues:      map[string]int{worker.QueueWebhooks: 10, worker.QueueReconciliation: 2},
 		Logger:      newAsynqLogger(log),
 	})
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(worker.TypeWebhookForward, fwd.HandleWebhookForward)
+	mux.HandleFunc(worker.TypeReconciliationRun, rec.HandleReconciliationRun)
 
 	go func() {
 		if err := srv.Run(mux); err != nil {

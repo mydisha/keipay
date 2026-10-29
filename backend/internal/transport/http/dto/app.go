@@ -59,7 +59,7 @@ func AppFromDomain(a *domain.App) App {
 	}
 }
 
-// AppSummary is the app a payment, ledger entry or delivery belongs to.
+// AppSummary is the app a payment, payment report or delivery belongs to.
 type AppSummary struct {
 	ID          string             `json:"id"`
 	Slug        string             `json:"slug"`

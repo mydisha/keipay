@@ -34,17 +34,20 @@ const (
 	PermConnectionsRead  Permission = "connections:read"
 	PermConnectionsWrite Permission = "connections:write"
 	PermPaymentsRead     Permission = "payments:read"
-	PermDeliveriesRead   Permission = "deliveries:read"
-	PermDeliveriesReplay Permission = "deliveries:replay"
-	PermAuditRead        Permission = "audit:read"
-	PermUsersManage      Permission = "users:manage"
+	// PermReconciliationWrite starts and re-runs reconciliation runs and
+	// resolves their items; reading them needs PermPaymentsRead.
+	PermReconciliationWrite Permission = "reconciliation:write"
+	PermDeliveriesRead      Permission = "deliveries:read"
+	PermDeliveriesReplay    Permission = "deliveries:replay"
+	PermAuditRead           Permission = "audit:read"
+	PermUsersManage         Permission = "users:manage"
 )
 
 // AllPermissions returns every defined permission, sorted.
 func AllPermissions() []Permission {
 	return sortedPermissions(
 		PermAppsRead, PermAppsWrite, PermConnectionsRead, PermConnectionsWrite,
-		PermPaymentsRead, PermDeliveriesRead, PermDeliveriesReplay, PermAuditRead, PermUsersManage,
+		PermPaymentsRead, PermReconciliationWrite, PermDeliveriesRead, PermDeliveriesReplay, PermAuditRead, PermUsersManage,
 	)
 }
 
@@ -55,7 +58,7 @@ var RolePermissions = map[Role][]Permission{
 	RoleOwner: AllPermissions(),
 	RoleAdmin: sortedPermissions(
 		PermAppsRead, PermAppsWrite, PermConnectionsRead, PermConnectionsWrite,
-		PermPaymentsRead, PermDeliveriesRead, PermDeliveriesReplay, PermAuditRead,
+		PermPaymentsRead, PermReconciliationWrite, PermDeliveriesRead, PermDeliveriesReplay, PermAuditRead,
 	),
 	RoleViewer: sortedPermissions(PermAppsRead, PermConnectionsRead, PermPaymentsRead, PermDeliveriesRead),
 }

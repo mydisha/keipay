@@ -45,7 +45,7 @@ type webhookFixture struct {
 	payments   *memstore.Payments
 	conns      *memstore.Connections
 	hooks      *memstore.Webhooks
-	ledger     *memstore.Ledger
+	reports    *memstore.Reports
 	audit      *memstore.Audit
 	tx         *memstore.Tx
 	enq        *recordingEnqueuer
@@ -62,17 +62,17 @@ var fixtureStart = time.Date(2026, 10, 29, 9, 0, 0, 0, time.UTC)
 
 func newWebhookFixture(t *testing.T) *webhookFixture {
 	t.Helper()
-	f := &webhookFixture{clock: memstore.NewClock(fixtureStart), ledger: &memstore.Ledger{}, audit: &memstore.Audit{},
+	f := &webhookFixture{clock: memstore.NewClock(fixtureStart), reports: memstore.NewReports(), audit: &memstore.Audit{},
 		enq: &recordingEnqueuer{}, cipher: &recordingCipher{}}
 	f.apps = memstore.NewApps(f.clock.Now)
 	f.payments = memstore.NewPayments(f.apps, f.clock.Now)
 	f.conns = memstore.NewConnections(f.apps, f.clock.Now)
 	f.hooks = memstore.NewWebhooks(f.apps, f.payments, f.conns, f.clock.Now)
-	f.tx = memstore.NewTx(f.apps, f.payments, f.conns, f.hooks, f.ledger, f.audit)
+	f.tx = memstore.NewTx(f.apps, f.payments, f.conns, f.hooks, f.reports, f.audit)
 	auditSvc := NewAuditService(f.audit)
 	auditSvc.now = f.clock.Now
 	f.svc = NewWebhookService(WebhookDeps{
-		Payments: f.payments, Ledger: f.ledger, Inbound: f.hooks.Inbound(), Events: f.hooks.Events(),
+		Payments: f.payments, Reports: f.reports, Inbound: f.hooks.Inbound(), Events: f.hooks.Events(),
 		Endpoints: f.hooks.Endpoints(), Deliveries: f.hooks.Deliveries(), Tx: f.tx, Enqueuer: f.enq,
 	})
 	f.svc.now = f.clock.Now
@@ -171,15 +171,26 @@ type xenditCallback struct {
 	ID, ExternalID, Status string
 	Amount                 int64
 	Currency               string
-	PaidAmount, FeesPaid   int64
-	PaidAt                 string
-	SettlementDate         string
+	PaidAmount             int64
+	// Fee is the merchant fee, sent as adjusted_received_amount; the body
+	// has no such field when Fee is nil.
+	Fee            *int64
+	PaidAt         string
+	SettlementDate string
 }
 
 func (cb xenditCallback) raw() []byte {
-	raw, _ := json.Marshal(map[string]any{"id": cb.ID, "external_id": cb.ExternalID, "status": cb.Status, "amount": cb.Amount,
-		"currency": cb.Currency, "paid_amount": cb.PaidAmount, "fees_paid_amount": cb.FeesPaid, "paid_at": cb.PaidAt,
-		"settlement_date": cb.SettlementDate})
+	body := map[string]any{"id": cb.ID, "external_id": cb.ExternalID, "status": cb.Status, "amount": cb.Amount,
+		"currency": cb.Currency, "paid_amount": cb.PaidAmount, "paid_at": cb.PaidAt, "settlement_date": cb.SettlementDate,
+		"fees_paid_amount": 0}
+	if cb.Fee != nil {
+		gross := cb.PaidAmount
+		if gross == 0 {
+			gross = cb.Amount
+		}
+		body["adjusted_received_amount"] = gross - *cb.Fee
+	}
+	raw, _ := json.Marshal(body)
 	return raw
 }
 
@@ -194,3 +205,5 @@ func (cb xenditCallback) event() provider.InboundEvent {
 }
 
 func jsonNumber(s string) json.Number { return json.Number(s) }
+
+func i64(v int64) *int64 { return &v }

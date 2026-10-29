@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"sync"
@@ -57,6 +58,18 @@ type Fake struct {
 	Tests   []provider.Account
 	Creates []CheckoutCall
 	Cancels []CancelCall
+
+	// Pages are served by ListTransactions: the first call without a cursor
+	// gets Pages[0], and each page's NextCursor (filled in when empty) leads
+	// to the next one.
+	Pages []provider.TransactionPage
+	// ListErrs[n], when set, is the error of the n-th ListTransactions call
+	// (counting from 0); the call still counts.
+	ListErrs []error
+	// ListFunc, when set, answers ListTransactions instead of Pages.
+	ListFunc func(q provider.TransactionQuery) (*provider.TransactionPage, error)
+	// Lists records every ListTransactions call.
+	Lists []provider.TransactionQuery
 }
 
 // New returns a Fake named "fake" with two secret string credentials
@@ -81,6 +94,7 @@ func New() *Fake {
 		Caps: provider.Capabilities{
 			Channels:   []domain.Channel{domain.ChannelQRIS, domain.ChannelVABCA, domain.ChannelEwalletOVO},
 			Currencies: []string{"IDR"}, CanRestrictChannels: true, CanCancel: true, ReportsFee: true,
+			ListTransactions: true,
 		},
 	}
 }
@@ -189,6 +203,43 @@ func (f *Fake) ParseWebhook(raw []byte) (*provider.InboundEvent, error) {
 		EventKey: cb.ID, Reference: cb.Reference, ProviderPaymentID: cb.ID, ProviderStatus: cb.Status,
 		Status: status, Amount: cb.Amount, Currency: cb.Currency, Source: "webhook",
 	}, nil
+}
+
+// ListTransactions records the call and answers from ListErrs, ListFunc or
+// Pages, in that order.
+func (f *Fake) ListTransactions(_ context.Context, _ provider.Account, q provider.TransactionQuery) (*provider.TransactionPage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := len(f.Lists)
+	f.Lists = append(f.Lists, q)
+	if n < len(f.ListErrs) && f.ListErrs[n] != nil {
+		return nil, f.ListErrs[n]
+	}
+	if f.ListFunc != nil {
+		return f.ListFunc(q)
+	}
+	i := 0
+	if q.Cursor != "" {
+		var err error
+		if i, err = strconv.Atoi(q.Cursor); err != nil || i < 1 || i >= len(f.Pages) {
+			return nil, fmt.Errorf("%w: unknown cursor %q", provider.ErrRejected, q.Cursor)
+		}
+	}
+	if i >= len(f.Pages) {
+		return &provider.TransactionPage{}, nil
+	}
+	page := f.Pages[i]
+	if page.NextCursor == "" && i+1 < len(f.Pages) {
+		page.NextCursor = strconv.Itoa(i + 1)
+	}
+	return &page, nil
+}
+
+// ListCalls returns how many times ListTransactions ran.
+func (f *Fake) ListCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.Lists)
 }
 
 // Calls returns how many times each gateway method ran.

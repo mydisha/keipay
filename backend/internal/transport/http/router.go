@@ -30,15 +30,17 @@ type Deps struct {
 	// IP is the TCP peer.
 	TrustedProxies []string
 
-	Payment     *handler.PaymentHandler
-	Webhook     *handler.WebhookHandler
-	Admin       *handler.AdminHandler
-	Apps        *handler.AppHandler
-	Endpoints   *handler.WebhookEndpointHandler
-	Deliveries  *handler.DeliveryHandler
-	Connections *handler.ConnectionHandler
-	Auth        *handler.AuthHandler
-	Users       *handler.UserHandler
+	Payment        *handler.PaymentHandler
+	Webhook        *handler.WebhookHandler
+	Admin          *handler.AdminHandler
+	Reports        *handler.ReportHandler
+	Reconciliation *handler.ReconciliationHandler
+	Apps           *handler.AppHandler
+	Endpoints      *handler.WebhookEndpointHandler
+	Deliveries     *handler.DeliveryHandler
+	Connections    *handler.ConnectionHandler
+	Auth           *handler.AuthHandler
+	Users          *handler.UserHandler
 
 	// FrontendDir is the admin console build (frontend/dist). Empty disables it.
 	FrontendDir string
@@ -132,7 +134,17 @@ func adminRoutes(d Deps) []adminRoute {
 		permitted(http.MethodPost, "/connections/:id/enable", domain.PermConnectionsWrite, d.Connections.Enable),
 
 		permitted(http.MethodGet, "/payments", domain.PermPaymentsRead, d.Admin.ListPayments),
-		permitted(http.MethodGet, "/ledger", domain.PermPaymentsRead, d.Admin.ListLedger),
+		permitted(http.MethodGet, "/payment-reports", domain.PermPaymentsRead, d.Reports.List),
+		permitted(http.MethodGet, "/payment-reports/summary", domain.PermPaymentsRead, d.Reports.Summary),
+		permitted(http.MethodGet, "/payment-reports/export", domain.PermPaymentsRead, d.Reports.Export),
+		permitted(http.MethodGet, "/reconciliation-runs", domain.PermPaymentsRead, d.Reconciliation.ListRuns),
+		permitted(http.MethodPost, "/reconciliation-runs", domain.PermReconciliationWrite, d.Reconciliation.CreateRun),
+		permitted(http.MethodGet, "/reconciliation-runs/:id", domain.PermPaymentsRead, d.Reconciliation.GetRun),
+		permitted(http.MethodPost, "/reconciliation-runs/:id/rerun", domain.PermReconciliationWrite, d.Reconciliation.RerunRun),
+		permitted(http.MethodGet, "/reconciliation-runs/:id/items", domain.PermPaymentsRead, d.Reconciliation.ListItems),
+		permitted(http.MethodGet, "/reconciliation-runs/:id/items/export", domain.PermPaymentsRead, d.Reconciliation.ExportItems),
+		permitted(http.MethodGet, "/reconciliation-items/:id", domain.PermPaymentsRead, d.Reconciliation.GetItem),
+		permitted(http.MethodPost, "/reconciliation-items/:id/resolve", domain.PermReconciliationWrite, d.Reconciliation.ResolveItem),
 		permitted(http.MethodGet, "/webhook-deliveries", domain.PermDeliveriesRead, d.Deliveries.ListDeliveries),
 		permitted(http.MethodGet, "/webhook-deliveries/:id", domain.PermDeliveriesRead, d.Deliveries.GetDelivery),
 		permitted(http.MethodPost, "/webhook-deliveries/:id/replay", domain.PermDeliveriesReplay, d.Deliveries.ReplayDelivery),

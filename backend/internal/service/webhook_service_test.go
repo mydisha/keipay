@@ -17,7 +17,7 @@ func paid(ref string, amount int64) xenditCallback {
 	return xenditCallback{ID: "inv_1", ExternalID: ref, Status: "PAID", Amount: amount, Currency: "IDR", PaidAmount: amount}
 }
 
-// T-B11 / AC-4: one event per applied callback, fanned out to every active,
+// One event per applied callback, fanned out to every active,
 // not deleted endpoint whose subscriptions match; all its deliveries carry
 // the event's id.
 func TestProcessFansOutToMatchingEndpoints(t *testing.T) {
@@ -83,7 +83,7 @@ func assertDeliveredTo(t *testing.T, ds []domain.WebhookDelivery, want ...*domai
 	}
 }
 
-// T-B12: without endpoints the event is still created and the callback acked.
+// Without endpoints the event is still created and the callback acked.
 func TestProcessWithoutEndpoints(t *testing.T) {
 	f := newWebhookFixture(t)
 	if err := f.process(t, f.conn, paid(f.payment.ExternalID, 5000)); err != nil {
@@ -92,12 +92,12 @@ func TestProcessWithoutEndpoints(t *testing.T) {
 	if len(f.hooks.AllEvents()) != 1 || len(f.hooks.AllDeliveries()) != 0 || len(f.enq.calls) != 0 {
 		t.Fatalf("events=%d deliveries=%d enqueued=%d", len(f.hooks.AllEvents()), len(f.hooks.AllDeliveries()), len(f.enq.calls))
 	}
-	if f.paymentStatus(t, f.payment) != domain.PaymentStatusPaid || len(f.ledger.Entries()) != 1 {
+	if f.paymentStatus(t, f.payment) != domain.PaymentStatusPaid || len(f.reports.All()) != 1 {
 		t.Fatal("callback not applied")
 	}
 }
 
-// T-B13 / AC-5: v2 is the envelope, v1 the old flat body plus event_id; both
+// v2 is the envelope, v1 the old flat body plus event_id; both
 // are rendered from the event alone, so they are the same every time.
 func TestDeliveryBodies(t *testing.T) {
 	f := newWebhookFixture(t)
@@ -182,7 +182,7 @@ func TestDeliveryBodiesKeepMetadata(t *testing.T) {
 	}
 }
 
-// T-B14 / AC-14, AC-16: every outcome of a verified callback is recorded with
+// Every outcome of a verified callback is recorded with
 // the right result and fields.
 func TestProcessInboundResults(t *testing.T) {
 	cases := []struct {
@@ -257,7 +257,7 @@ func TestProcessInboundResults(t *testing.T) {
 	}
 }
 
-// T-B14 / AC-15: the same event key and status twice at one connection is a
+// The same event key and status twice at one connection is a
 // duplicate: recorded, nothing changes, nothing is sent again.
 func TestProcessDuplicate(t *testing.T) {
 	f := newWebhookFixture(t)
@@ -273,12 +273,12 @@ func TestProcessDuplicate(t *testing.T) {
 		rows[1].PaymentID != nil || *rows[1].EventKey != "inv_1" {
 		t.Fatalf("rows = %+v", rows)
 	}
-	if len(f.ledger.Entries()) != 1 || len(f.hooks.AllDeliveries()) != 1 || len(f.enq.calls) != 1 || len(f.hooks.AllEvents()) != 1 {
+	if len(f.reports.All()) != 1 || len(f.hooks.AllDeliveries()) != 1 || len(f.enq.calls) != 1 || len(f.hooks.AllEvents()) != 1 {
 		t.Fatal("duplicate processed again")
 	}
 }
 
-// AC-15: a mismatch at another connection claims the key only there, so the
+// A mismatch at another connection claims the key only there, so the
 // payment's own callback is still applied; a retry of the foreign one is a
 // duplicate at its connection.
 func TestProcessMismatchDoesNotBlockOwnConnection(t *testing.T) {
@@ -293,7 +293,7 @@ func TestProcessMismatchDoesNotBlockOwnConnection(t *testing.T) {
 	if err := f.process(t, f.conn, cb); err != nil {
 		t.Fatalf("own callback: %v", err)
 	}
-	if f.paymentStatus(t, f.payment) != domain.PaymentStatusPaid || len(f.ledger.Entries()) != 1 {
+	if f.paymentStatus(t, f.payment) != domain.PaymentStatusPaid || len(f.reports.All()) != 1 {
 		t.Fatal("own callback not applied")
 	}
 	if err := f.process(t, other, cb); err != nil {
@@ -320,30 +320,30 @@ func TestProcessPaymentWithoutConnectionIsMismatch(t *testing.T) {
 	}
 }
 
-// T-B16 / AC-15 regression: a failure after the claim rolls the claim back,
+// Regression: a failure after the claim rolls the claim back,
 // leaves one error row, and the gateway's retry is processed in full.
 func TestProcessRollbackReleasesClaim(t *testing.T) {
 	f := newWebhookFixture(t)
 	f.addEndpoint(t, f.app, CreateWebhookEndpointInput{})
-	f.ledger.CreateErr = errors.New("ledger down")
+	f.reports.UpsertErr = errors.New("reports down")
 	cb := paid(f.payment.ExternalID, 5000)
 	if err := f.process(t, f.conn, cb); err == nil {
 		t.Fatal("expected the first attempt to fail")
 	}
 	rows := f.hooks.AllInbound()
 	if len(rows) != 1 || rows[0].Result != domain.InboundError || rows[0].ResultDetail != "processing failed" ||
-		strings.Contains(rows[0].ResultDetail, "ledger") {
+		strings.Contains(rows[0].ResultDetail, "reports") {
 		t.Fatalf("rows = %+v", rows)
 	}
 	if f.paymentStatus(t, f.payment) != domain.PaymentStatusPending || len(f.hooks.AllEvents()) != 0 || len(f.hooks.AllDeliveries()) != 0 {
 		t.Fatal("failed attempt left writes")
 	}
 
-	f.ledger.CreateErr = nil
+	f.reports.UpsertErr = nil
 	if err := f.process(t, f.conn, cb); err != nil {
 		t.Fatalf("retry: %v", err)
 	}
-	if f.paymentStatus(t, f.payment) != domain.PaymentStatusPaid || len(f.ledger.Entries()) != 1 ||
+	if f.paymentStatus(t, f.payment) != domain.PaymentStatusPaid || len(f.reports.All()) != 1 ||
 		len(f.hooks.AllDeliveries()) != 1 || len(f.enq.calls) != 1 || f.lastInbound(t).Result != domain.InboundApplied {
 		t.Fatal("retry not processed in full")
 	}
@@ -418,7 +418,7 @@ func TestProcessPaidAfterExpiredIsApplied(t *testing.T) {
 	}
 }
 
-// AC-16: an unknown gateway status after PAID is recorded unmapped and never
+// An unknown gateway status after PAID is recorded unmapped and never
 // moves the payment.
 func TestProcessUnknownStatusIsUnmapped(t *testing.T) {
 	f := newWebhookFixture(t)
@@ -439,16 +439,17 @@ func TestProcessUnknownStatusIsUnmapped(t *testing.T) {
 func TestProcessSettledRecordsSettlement(t *testing.T) {
 	f := newWebhookFixture(t)
 	for _, st := range []string{"PAID", "SETTLED"} {
-		cb := xenditCallback{ID: "inv_1", ExternalID: f.payment.ExternalID, Status: st, Amount: 5000, FeesPaid: 100,
+		cb := xenditCallback{ID: "inv_1", ExternalID: f.payment.ExternalID, Status: st, Amount: 5000, Fee: i64(100),
 			SettlementDate: "2026-01-02T03:04:05Z"}
 		if err := f.process(t, f.conn, cb); err != nil {
 			t.Fatalf("%s: %v", st, err)
 		}
 	}
-	entries := f.ledger.Entries()
+	reports := f.reports.All()
 	want := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	if len(entries) != 1 || entries[0].SettledAt == nil || !entries[0].SettledAt.Equal(want) || entries[0].XenditFee != 100 {
-		t.Fatalf("ledger = %+v", entries)
+	if len(reports) != 1 || reports[0].SettledAt == nil || !reports[0].SettledAt.Equal(want) || *reports[0].Fee != 100 ||
+		reports[0].Status != domain.PaymentStatusSettled {
+		t.Fatalf("reports = %+v", reports)
 	}
 	var data domain.PaymentEventData
 	if err := json.Unmarshal(f.hooks.AllEvents()[1].Data, &data); err != nil {
@@ -459,7 +460,7 @@ func TestProcessSettledRecordsSettlement(t *testing.T) {
 	}
 }
 
-// T-18 / AC-21: a disabled connection still applies its callbacks.
+// A disabled connection still applies its callbacks.
 func TestProcessDisabledConnectionStillApplies(t *testing.T) {
 	f := newWebhookFixture(t)
 	disabled := *f.conn
@@ -484,7 +485,7 @@ func TestProcessMissingKeyIsInvalidPayload(t *testing.T) {
 	}
 }
 
-// T-B17 / AC-14: a body that failed verification is stored cut to 4096
+// A body that failed verification is stored cut to 4096
 // bytes; an unparsable but verified one is kept whole.
 func TestRecordRejected(t *testing.T) {
 	f := newWebhookFixture(t)
@@ -519,4 +520,133 @@ func TestRecordFailureIsNotReturned(t *testing.T) {
 		t.Fatalf("duplicate with a failing log: %v", err)
 	}
 	f.svc.RecordRejected(context.Background(), f.conn, []byte(`x`), domain.InboundInvalidPayload, "bad body")
+}
+
+// A successful callback writes one report; SETTLED updates it in
+// place; a repeated callback changes nothing.
+func TestProcessWritesPaymentReport(t *testing.T) {
+	f := newWebhookFixture(t)
+	cb := paid(f.payment.ExternalID, 5000)
+	cb.Fee, cb.PaidAt = i64(150), "2026-10-29T08:00:00Z"
+	if err := f.process(t, f.conn, cb); err != nil {
+		t.Fatal(err)
+	}
+	reports := f.reports.All()
+	paidAt := time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC)
+	if len(reports) != 1 {
+		t.Fatalf("reports = %+v", reports)
+	}
+	r := reports[0]
+	if r.PaymentID != f.payment.ID || r.AppID != f.app.ID || r.ConnectionID == nil || *r.ConnectionID != f.conn.ID ||
+		r.Currency != "IDR" || r.Gross != 5000 || *r.Fee != 150 || *r.Net != 4850 || r.Status != domain.PaymentStatusPaid ||
+		!r.PaidAt.Equal(paidAt) || r.SettledAt != nil {
+		t.Fatalf("report = %+v", r)
+	}
+
+	settled := cb
+	settled.Status, settled.SettlementDate = "SETTLED", "2026-10-30T01:00:00Z"
+	if err := f.process(t, f.conn, settled); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.process(t, f.conn, cb); err != nil {
+		t.Fatal(err)
+	}
+	reports = f.reports.All()
+	want := time.Date(2026, 10, 30, 1, 0, 0, 0, time.UTC)
+	if len(reports) != 1 || reports[0].Status != domain.PaymentStatusSettled || reports[0].SettledAt == nil ||
+		!reports[0].SettledAt.Equal(want) || !reports[0].PaidAt.Equal(paidAt) || *reports[0].Fee != 150 {
+		t.Fatalf("reports after SETTLED = %+v", reports)
+	}
+}
+
+// No fee in the callback is an unknown fee, filled once by a
+// later callback that has one; 0 is a known fee.
+func TestProcessReportFee(t *testing.T) {
+	f := newWebhookFixture(t)
+	if err := f.process(t, f.conn, paid(f.payment.ExternalID, 5000)); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.reports.All()[0]; r.Fee != nil || r.Net != nil {
+		t.Fatalf("fee = %v net = %v, want unknown", r.Fee, r.Net)
+	}
+	settled := paid(f.payment.ExternalID, 5000)
+	settled.Status, settled.Fee = "SETTLED", i64(99)
+	if err := f.process(t, f.conn, settled); err != nil {
+		t.Fatal(err)
+	}
+	if r := f.reports.All()[0]; r.Fee == nil || *r.Fee != 99 || *r.Net != 4901 {
+		t.Fatalf("fee = %v net = %v, want 99 / 4901", r.Fee, r.Net)
+	}
+
+	zero := f.addPayment(t, f.app, f.conn, "acme:order-zero", 7000)
+	cb := paid(zero.ExternalID, 7000)
+	cb.ID, cb.Fee = "inv_zero", i64(0)
+	if err := f.process(t, f.conn, cb); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range f.reports.All() {
+		if r.PaymentID == zero.ID && (r.Fee == nil || *r.Fee != 0 || *r.Net != 7000) {
+			t.Fatalf("zero fee report = %+v", r)
+		}
+	}
+
+	// A negative fee would break the report's constraints and with them the
+	// whole callback, so the callback is applied with the fee unknown.
+	negative := f.addPayment(t, f.app, f.conn, "acme:order-negative", 6000)
+	cb = paid(negative.ExternalID, 6000)
+	cb.ID, cb.Fee = "inv_negative", i64(-5)
+	if err := f.process(t, f.conn, cb); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, r := range f.reports.All() {
+		if r.PaymentID != negative.ID {
+			continue
+		}
+		found = true
+		if r.Fee != nil || r.Net != nil || r.Gross != 6000 || r.Status != domain.PaymentStatusPaid {
+			t.Fatalf("negative fee report = %+v", r)
+		}
+	}
+	if !found {
+		t.Fatal("negative fee callback wrote no report")
+	}
+}
+
+// paid_amount 0 falls back to the payment's amount; a SETTLED callback
+// for a payment never seen as PAID still gets a paid time.
+func TestProcessReportFallbacks(t *testing.T) {
+	f := newWebhookFixture(t)
+	cb := xenditCallback{ID: "inv_1", ExternalID: f.payment.ExternalID, Status: "SETTLED", Amount: 5000, Currency: "IDR",
+		SettlementDate: "2026-10-30T01:00:00Z"}
+	if err := f.process(t, f.conn, cb); err != nil {
+		t.Fatal(err)
+	}
+	r := f.reports.All()[0]
+	settledAt := time.Date(2026, 10, 30, 1, 0, 0, 0, time.UTC)
+	if r.Gross != 5000 || r.Status != domain.PaymentStatusSettled || !r.PaidAt.Equal(settledAt) || !r.SettledAt.Equal(settledAt) {
+		t.Fatalf("report = %+v", r)
+	}
+}
+
+// A late success after EXPIRED is captured money and gets a
+// report; a failed or expired callback gets none.
+func TestProcessReportOnlyForSuccess(t *testing.T) {
+	f := newWebhookFixture(t)
+	expired := paid(f.payment.ExternalID, 5000)
+	expired.Status = "EXPIRED"
+	if err := f.process(t, f.conn, expired); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.reports.All()) != 0 {
+		t.Fatal("expired payment has a report")
+	}
+	late := paid(f.payment.ExternalID, 5000)
+	late.ID = "inv_late"
+	if err := f.process(t, f.conn, late); err != nil {
+		t.Fatal(err)
+	}
+	if reports := f.reports.All(); len(reports) != 1 || reports[0].Status != domain.PaymentStatusPaid {
+		t.Fatalf("reports = %+v", reports)
+	}
 }

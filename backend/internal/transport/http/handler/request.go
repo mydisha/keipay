@@ -142,16 +142,6 @@ func queryPublicID(c *gin.Context, param string, prefix id.Prefix) (*string, err
 	return &v, nil
 }
 
-// lenientPublicID is queryPublicID for the legacy offset lists, which ignore
-// a malformed value.
-func lenientPublicID(c *gin.Context, param string, prefix id.Prefix) *string {
-	v, err := queryPublicID(c, param, prefix)
-	if err != nil {
-		return nil
-	}
-	return v
-}
-
 // queryTime parses an optional RFC 3339 query parameter; a malformed value
 // fails with rule datetime.
 func queryTime(c *gin.Context, param string) (*time.Time, error) {

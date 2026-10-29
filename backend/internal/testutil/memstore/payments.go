@@ -110,10 +110,16 @@ func (s *Payments) find(match func(domain.Payment) bool) (*domain.Payment, error
 	if found == nil {
 		return nil, domain.ErrNotFound
 	}
-	if app, err := s.apps.GetByID(context.Background(), found.AppID); err == nil {
-		found.App = app.Summary()
+	p := s.withApp(*found)
+	return &p, nil
+}
+
+// withApp fills p.App from the apps store.
+func (s *Payments) withApp(p domain.Payment) domain.Payment {
+	if app, err := s.apps.GetByID(context.Background(), p.AppID); err == nil {
+		p.App = app.Summary()
 	}
-	return found, nil
+	return p
 }
 
 // GetByReferenceForUpdate loads the payment whose external_id equals ref.

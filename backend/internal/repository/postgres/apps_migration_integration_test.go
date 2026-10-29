@@ -76,9 +76,8 @@ func tenantRows(t *testing.T, pool *pgxpool.Pool) []tenantRow {
 	return out
 }
 
-// T-25 / AC-1: up keeps every tenant as a live app with the same id and its
-// credentials as a migrated key; down puts apps back into tenants; up again
-// works.
+// Up keeps every tenant as a live app with the same id and its credentials as
+// a migrated key; down puts apps back into tenants; up again works.
 func TestIntegrationMigration7UpDownUp(t *testing.T) {
 	db := pgtest.New(t, 6)
 	pool := openPool(t, db.DSN)
@@ -213,7 +212,7 @@ func lowerID(s string) string {
 	return string(b)
 }
 
-// T-25 / AC-1: the migration works on an empty database too.
+// The migration works on an empty database too.
 func TestIntegrationMigration7Empty(t *testing.T) {
 	db := pgtest.New(t, 6)
 	for _, v := range []uint{7, 6, 7, 8} {
@@ -228,7 +227,7 @@ func TestIntegrationMigration7Empty(t *testing.T) {
 	}
 }
 
-// T-26 / AC-4, AC-9, AC-15: the database refuses what the service never writes.
+// The database refuses what the service never writes.
 func TestIntegrationAppConstraints(t *testing.T) {
 	db := pgtest.New(t, 0)
 	pool := openPool(t, db.DSN)
@@ -307,7 +306,7 @@ func TestIntegrationAppConstraints(t *testing.T) {
 	}
 }
 
-// T-27: repositories on a database of their own, so lists are exact.
+// Repositories on a database of their own, so lists are exact.
 func TestIntegrationAppRepositories(t *testing.T) {
 	db := pgtest.New(t, 0)
 	pool := openPool(t, db.DSN)
@@ -433,15 +432,15 @@ func sortedDesc(ids []string) bool {
 	return true
 }
 
-// T-27 / AC-17: payment, ledger and delivery lists carry the app summary and
-// pay_ ids, and filter by app.
-func TestIntegrationPaymentLedgerDeliveryLists(t *testing.T) {
+// Payment, payment report and delivery lists carry the app summary and pay_
+// ids, and filter by app.
+func TestIntegrationPaymentReportDeliveryLists(t *testing.T) {
 	db := pgtest.New(t, 0)
 	pool := openPool(t, db.DSN)
 	ctx := context.Background()
 	apps := postgres.NewAppRepo(pool)
 	payments := postgres.NewPaymentRepo(pool)
-	ledger := postgres.NewLedgerRepo(pool)
+	reports := postgres.NewPaymentReportRepo(pool)
 	deliveries := postgres.NewDeliveryRepo(pool)
 
 	var all []*domain.App
@@ -466,7 +465,9 @@ func TestIntegrationPaymentLedgerDeliveryLists(t *testing.T) {
 		if app == acme {
 			acmePayments = append(acmePayments, p)
 		}
-		if err := ledger.Create(ctx, &domain.LedgerEntry{AppID: app.ID, PaymentID: p.ID, Amount: 1000, XenditFee: 10, NetAmount: 990, Type: domain.LedgerEntryTypePayment}); err != nil {
+		fee, net := int64(10), int64(990)
+		if err := reports.Upsert(ctx, &domain.PaymentReport{PaymentID: p.ID, AppID: app.ID, Currency: "IDR", Gross: 1000,
+			Fee: &fee, Net: &net, Status: domain.PaymentStatusPaid, PaidAt: same}); err != nil {
 			t.Fatal(err)
 		}
 		if err := deliveries.Create(ctx, &domain.WebhookDelivery{PublicID: id.New(id.Delivery), PaymentID: &p.ID, AppID: app.ID,
@@ -507,17 +508,18 @@ func TestIntegrationPaymentLedgerDeliveryLists(t *testing.T) {
 		t.Fatalf("unknown app = %d rows", len(res.Items))
 	}
 
-	entries, err := ledger.List(ctx, domain.LedgerFilter{AppPublicID: &acmeID})
-	if err != nil || len(entries) != 3 {
-		t.Fatalf("ledger = %+v %v", entries, err)
+	entries, err := reports.List(ctx, domain.PaymentReportFilter{AppPublicID: &acmeID}, domain.Page{Limit: 50})
+	if err != nil || len(entries.Items) != 3 {
+		t.Fatalf("reports = %+v %v", entries, err)
 	}
-	for _, e := range entries {
+	for _, e := range entries.Items {
 		if e.App != acme.Summary() || !id.Valid(e.PaymentPublicID, id.Payment) {
-			t.Fatalf("ledger row = %+v", e)
+			t.Fatalf("report row = %+v", e)
 		}
 	}
-	summary, err := ledger.Summary(ctx, domain.LedgerFilter{})
-	if err != nil || len(summary) != 2 || summary[0].App != acme.Summary() || summary[0].Count != 3 || summary[0].NetAmount != 2970 ||
+	end := same.Add(time.Hour)
+	summary, err := reports.Summary(ctx, domain.PaymentReportFilter{From: &same, To: &end}, domain.ReportIntervalTotal)
+	if err != nil || len(summary) != 2 || summary[0].App != acme.Summary() || summary[0].Count != 3 || summary[0].Net != 2970 ||
 		summary[1].App != globex.Summary() {
 		t.Fatalf("summary = %+v %v", summary, err)
 	}

@@ -10,7 +10,8 @@ import (
 	"github.com/mydisha/keipay/backend/internal/domain"
 )
 
-var allPrefixes = []Prefix{App, Payment, Connection, WebhookEndpoint, Event, Delivery, Inbound, User, APIKey, Reconciliation, Audit}
+var allPrefixes = []Prefix{App, Payment, Connection, WebhookEndpoint, Event, Delivery, Inbound, User, APIKey, Reconciliation,
+	ReconciliationItem, Audit}
 
 func TestNewFormatForEveryPrefix(t *testing.T) {
 	for _, p := range allPrefixes {
@@ -100,5 +101,19 @@ func TestParseWithPrefixRejectsWrongPrefix(t *testing.T) {
 	}
 	if Valid(appID, Payment) {
 		t.Fatal("Valid(app id, pay) = true")
+	}
+}
+
+// Reconciliation items have their own prefix, distinct from runs.
+func TestReconciliationItemPrefix(t *testing.T) {
+	item := New(ReconciliationItem)
+	if !strings.HasPrefix(item, "rci_") {
+		t.Fatalf("New(ReconciliationItem) = %q", item)
+	}
+	if got, err := ParseWithPrefix(strings.ToLower(item), ReconciliationItem); err != nil || got != item {
+		t.Fatalf("ParseWithPrefix(lower) = %q, %v", got, err)
+	}
+	if Valid(item, Reconciliation) || Valid(New(Reconciliation), ReconciliationItem) {
+		t.Fatal("run and item ids are interchangeable")
 	}
 }

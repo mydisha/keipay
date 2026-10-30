@@ -1,8 +1,10 @@
 # KeiPay console design
 
 The admin console is an operations tool for payments: calm, dense, and easy to
-trust. Think of a payment provider's dashboard, not a landing page. This file
-is the contract for every screen. When a feature needs something that is not
+trust. Think of a payment provider's dashboard, not a landing page: a neutral
+slate base, one indigo accent for the action that matters, layered surfaces
+with hairline borders, flat shadows and numbers that line up. This file is the
+contract for every screen. When a feature needs something that is not
 here, add it here first.
 
 Code lives in `frontend/`. Tokens are in `frontend/src/app/styles.css`, shared
@@ -32,13 +34,16 @@ never raw hex, rgb or Tailwind palette colours such as `text-red-600`.
 | `background` / `foreground` | Page background and body text. |
 | `card` / `card-foreground` | Tables, cards, inputs. |
 | `popover` / `popover-foreground` | Dialogs, menus, tooltips. |
-| `primary` / `primary-foreground` | The one main action per view; active filter chip. |
+| `primary` / `primary-foreground` | The accent: the one main action per view, the active filter chip, the active navigation item, links and the first chart series. Nothing else is tinted with it. |
 | `secondary`, `accent`, `muted` (+ `-foreground`) | Hover, quiet surfaces, helper text. `muted-foreground` is the lightest text allowed. |
 | `destructive` / `destructive-foreground` | Buttons that rotate, revoke or delete. |
 | `border`, `input`, `ring` | Dividers; form control borders (3:1 against `card`); focus ring. |
 | `link` | Inline links. |
 | `overlay` | The scrim behind dialogs and the mobile sheet. |
 | `sidebar`, `sidebar-foreground`, `sidebar-accent`, `sidebar-accent-foreground`, `sidebar-border` | The navigation rail and mobile sheet. |
+| `sidebar-primary` / `sidebar-primary-foreground` | The active navigation item (text and the bar on its left) and the initials avatar in the rail. |
+| `chart-1` … `chart-5` | Chart series, in this order: the accent for the series that matters most (successful payments), then teal, amber, rose, and a neutral slate for the baseline series (payments created). Sparklines use `chart-1`. Never used outside charts. |
+| `brand-panel`, `brand-panel-foreground`, `brand-panel-muted`, `brand-grid` | The brand panel of the auth pages only. The same deep indigo in both themes. |
 
 Status tones. Each has a tinted background, a text colour and a border:
 
@@ -51,12 +56,18 @@ Status tones. Each has a tinted background, a text colour and a border:
 | neutral | `neutral`, `neutral-foreground`, `neutral-border` | `EXPIRED` payment, disabled, inactive, connection `Not tested`, anything unknown |
 
 Test mode: `test-mode`, `test-mode-foreground`, `test-mode-border` (amber). Use
-them only for the test-mode banner, the switch and the `Test` environment
-badge, so "amber" always means test.
+them only for the test-mode banner, the mode pill in the top bar and the
+`Test` environment badge, so "amber" always means test. The `info` tone
+shares the accent hue.
 
-Every text/background pair above is at least 4.5:1 in both themes (body text is
-about 17:1, status badges 6:1 or more), and control borders and the focus ring
-are at least 3:1. Recheck contrast when you change a token.
+Every text/background pair is at least 4.5:1 in both themes and every
+control border, focus ring and chart colour at least 3:1 against the card.
+Measured on the current tokens (light / dark): body text on card 18.1 / 16.0,
+muted text on card 6.5 / 7.2, primary button text 6.0 / 4.8, links on card
+7.3 / 9.0, active navigation on the sidebar 5.5 / 10.6, status badges 6.3 or
+more, test mode 8.9 / 10.1, the brand panel 16.6 and 8.5 for its muted text;
+input borders 3.4 / 3.4, the focus ring 5.1 / 6.7, chart colours 3.2 to 9.8.
+Recheck contrast when you change a token.
 
 ### Typography
 
@@ -64,17 +75,26 @@ are at least 3:1. Recheck contrast when you change a token.
   slugs, event names and JSON.
 - Base size 14px (`text-sm`, line height 20px). Inputs use 16px below 768px so
   iOS does not zoom.
-- Scale: page title `text-xl font-semibold` (one `h1` per page); section title
-  `text-base font-semibold` (`h2`); body `text-sm`; helper and table headers
-  `text-xs`. Nothing smaller than 12px.
+- Scale: page title `text-xl md:text-2xl font-semibold` (one `h1` per page);
+  section title `text-base font-semibold` (`h2`); a KPI value `text-2xl
+  font-semibold tabular-nums`; body `text-sm`; helper, eyebrows and table
+  headers `text-xs`. Nothing smaller than 12px.
 - Numbers that line up (amounts, counts, attempts) use `tabular-nums`.
 
 ### Spacing, radius, shadow
 
 - 4px grid through Tailwind spacing. Page gutter 16px on mobile, 24px from
-  768px. Sections stack with `gap-6`; controls inside a section with `gap-3`.
-- Radius from `--radius` (8px): `rounded-md` for controls, `rounded-lg` for
-  cards and tables, `rounded-full` for badges and chips.
+  768px, 32px from 1024px; 24px above the content (32px from 768px). Sections
+  stack with `gap-6`; controls inside a section with `gap-3`; grids of cards
+  with `gap-4`.
+- Radius from `--radius` (12px): `rounded-md` (8px) for controls, `rounded-lg`
+  (12px) for cards, tables, dialogs and the empty and error states,
+  `rounded-sm` (6px) for keyboard hints and menu items, `rounded-full` for
+  badges, chips and avatars.
+- Card padding comes from the card itself: header and footer `px-4 py-3`
+  (`px-5 py-4` from 768px), content `p-4` (`p-5` from 768px), and `p-4`
+  everywhere on a compact card. Pass `className="p-0"` to `CardContent` when
+  a table or a list fills the card. Never set padding on `Card`.
 - Shadows stay flat: `shadow-xs` on cards and controls, `shadow-md` on menus,
   `shadow-lg` on dialogs and the mobile sheet.
 
@@ -103,10 +123,19 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 | `SecretRevealDialog` | Showing secrets once (a new app's API key and secret, a new or rotated webhook endpoint secret, a new or rotated API key, a user's temporary password). One row per secret with its label and a copy button, a warning (overridable per use), and a required "I have saved this" checkbox before it closes. Escape and outside clicks do not dismiss it. |
 | `JsonViewer` | Raw payloads and before/after snapshots. Collapsible, pretty-printed, copyable; long payloads are cut in the view but copied in full. |
 | `Timeline` | Ordered events (payment lifecycle, delivery attempts) with time, title, a text status and an optional body. |
-| `PageHeader` | The `h1`, one sentence of context, and page actions. |
+| `PageHeader` | The `h1`, one sentence of context, page actions, an optional eyebrow above the title, and `children` for the row under it (range chips, a note). |
+| `Card` (`CardHeader`, `CardTitle`, `CardDescription`, `CardAction`, `CardContent`, `CardFooter`) | Every box. `CardHeader` carries the title (`h2`, or `h3` with `as`), one sentence and an action on the right; `CardContent` the body; `CardFooter` a closing row such as a form's buttons. `size="compact"` for tiles and side panels. |
+| `Section` / `SectionHeader` | The only way to write an `h2` (or `h3`) with its sentence and actions: `<section aria-labelledby={id}>` with `gap-3` to its content. Pass the heading id other code relies on (`audit-log-heading`). |
+| `DetailHeader` | The header of every detail page: `BackLink`, an optional eyebrow, the title (`titleMono` for an id), badges, one sentence, inline facts, and the write actions on the right. `DetailHeaderSkeleton` while loading. |
+| `BackLink` | "Back to …" above a detail page or a wizard. |
+| `FactList` / `Fact` | Label/value pairs as a definition list: `rows` (label column, detail cards), `inline` (under a title), `tiles` (a grid of small facts). `mono` for ids and slugs; a missing value says "Not set". |
+| `StatCard` | A KPI: label, value, a delta with an arrow and text (never colour alone), a hint, and an optional `Sparkline`. `StatCardSkeleton` while loading. |
+| `Sparkline` | A small trend line inside a `StatCard`, drawn in `chart-1`, hidden from screen readers. |
+| `Chart` (`ChartContainer`, `ChartTooltip`, `ChartTooltipContent`, `ChartLegend`, `ChartLegendContent`) | recharts wrapped so series colours only come from `chart-1` … `chart-5`. Every chart has an `aria-label` and an `sr-only` table of its rows. |
+| `Separator` | A hairline between groups (the collapsed navigation, card footers). |
 | `Alert` | Inline messages inside forms and sections. |
-| `Tabs` | Sibling views of one resource (Webhooks: Outbound, Inbound) that share a URL. |
-| `LinkTabs` | Sibling views that each have their own URL (Settings: Account, Users, Audit log; an app's Overview, API keys, Webhooks, Routing): links styled as tabs inside a labelled `nav`, `aria-current="page"` on the active one. |
+| `Tabs` | Sibling views of one resource (Webhooks: Outbound, Inbound) that share a URL. Underline style; 24px to the content. |
+| `LinkTabs` | Sibling views that each have their own URL (Settings: Account, Users, Audit log; an app's Overview, API keys, Webhooks, Routing): links styled as the same underline tabs inside a labelled `nav`, `aria-current="page"` on the active one. |
 | `EnvironmentBadge` (`features/apps`) | An app's or a connection's environment as text: `Test` in the amber test-mode tokens, `Live` in neutral card colours. Shown next to every app name (`AppLabel` in payments, webhooks and reconciliation rows) and every connection name. |
 | `SchemaFields` (`features/connections`) | Every provider form field, rendered from the `SchemaField` list the server sends. See Connections. |
 | `WizardStepper` (`features/connections`) | The numbered steps of a multi-step page. See Wizard pattern. |
@@ -152,16 +181,17 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 Used by every resource detail page (app, connection, reconciliation run, and
 payment once it has one):
 
-1. A "Back to …" link to the list.
-2. Header: the resource name as the page `h1` (or its id in `IdText` when it
-   has no name), then its badges as text (environment, status), then key
-   facts as a definition list (slug in mono, the public id in `IdText`).
+1. A `BackLink` to the list.
+2. `DetailHeader`: the resource name as the page `h1` (or its id in mono when
+   it has no name), then its badges as text (environment, status), then key
+   facts as an inline `FactList` (slug in mono, the public id in `IdText`).
    Write actions sit on the right and are hidden without the permission.
 3. When the resource has several views, `LinkTabs` under the header, one
    route per tab (`/apps/:id`, `/apps/:id/keys`, …); the index route is
    Overview. Each tab has an `h2`.
-4. Overview: a card with the facts as label/value rows (a missing value says
-   "Not set"), then raw data in a `JsonViewer` ("No metadata" when empty).
+4. Overview: a `Section` per topic, each a `Card` with the facts as a
+   `FactList` of rows (a missing value says "Not set"), then raw data in a
+   `JsonViewer` ("No metadata" when empty).
 5. Where events exist: a timeline of what happened, newest last, using
    `Timeline`, and raw payloads in collapsed `JsonViewer`s.
 
@@ -312,9 +342,14 @@ wizard is a page, never a dialog, so it works at 375px and survives a reload.
 
 ## Auth pages
 
-Setup, sign-in and change password share `AuthLayout`: the brand, an `h1`,
-one sentence, and a single card with the form. A skeleton of that layout
-shows while the page's guard decides where the visitor belongs.
+Setup, sign-in and change password share `AuthLayout`, a split screen from
+1024px: on the left a brand panel (`brand-panel` tokens with a soft accent
+glow and a grid, the brand mark, the tagline "One API for every payment
+gateway.", one sentence, three points named Route, Verify and Reconcile, and
+a footer line), on the right the `h1`, one sentence and the form, without a
+card. Below 1024px the panel disappears and a compact brand sits above the
+`h1`. A skeleton of that layout shows while the page's guard decides where
+the visitor belongs.
 
 | Page | Fields | States |
 |---|---|---|
@@ -346,34 +381,83 @@ Enable is a plain confirm. Your own row has no Disable or Reset password.
 ## Mobile
 
 - Works from 375px wide with a 16px gutter and no horizontal page scroll.
-- The sidebar becomes a sheet opened from the menu button in the top bar.
+- The sidebar becomes a sheet opened from the menu button in the top bar;
+  the auth pages lose their brand panel below 1024px.
 - Touch targets are at least 44px below 768px (buttons, chips, menu items,
   nav links).
 - Tables become cards (see above). Dialogs fit the viewport and scroll inside.
 
 ## App shell
 
-- Collapsible sidebar (remembered per browser): Dashboard, Apps, Connections,
-  Webhooks, Payments, Reconciliation, Settings.
-- Top bar: command palette button (⌘K / Ctrl+K), Test/Live switch, theme menu
-  (light, dark, system), account menu (name, email and role label at the top;
-  account settings, change password, sign out). Sign out calls
+- Collapsible sidebar (remembered per browser) with the brand at the top and
+  the links in three groups whose labels are decoration for sighted users:
+  Overview (Dashboard), Operate (Apps, Connections, Webhooks, Payments) and
+  Control (Reconciliation, Settings). The active link is written in the
+  accent with a short bar on its left. At the bottom, who is signed in:
+  initials, name and role (initials only when collapsed). Collapsed, the
+  groups are separated by a hairline and every link has a tooltip.
+- Top bar: command palette button (⌘K / Ctrl+K), the Test/Live switch inside
+  a pill that turns amber with a flask icon in test mode, theme menu (light,
+  dark, system), account menu behind the initials (name, email and role label
+  at the top; account settings, change password, sign out). Sign out calls
   `POST /admin/logout`, clears every cached query and goes to `/login`; if it
   fails the user stays signed in and sees a toast.
-- Test mode shows an amber banner on every page. The switch sets the
+- Test mode shows a slim amber banner on every page. The switch sets the
   starting environment filter of the Apps and Connections lists (and resets
   it whenever the switch changes) and the environment default of the
   create-app dialog and the add-connection wizard. The Webhooks Outbound and
   Inbound lists start at the mode too (`environment` chip with an explicit
   "All"; choosing All puts `environment=all` in the URL, no `environment`
-  means "follow the switch"). Payments and reconciliation do not follow it
-  yet, and the banner says so instead of claiming that data is filtered.
+  means "follow the switch"). The dashboard follows it too. Payments and
+  reconciliation do not follow it yet, and the banner says so instead of
+  claiming that data is filtered.
 - The palette navigates to every page (plus Users with `users:manage`),
   switches theme and mode, and opens a pasted webhook record id: `dlv_` and
   `inb_` open that delivery or inbound webhook on the Webhooks page, `evt_`
   shows the event's deliveries, `whe_` opens the endpoint's app Webhooks tab
   (each only with the permission to read it). It says that searching
   payments and orders arrives later.
+
+## Dashboard
+
+`/` reads `GET /admin/dashboard` once per range and environment (30 seconds
+stale time): the environment is the Test/Live switch and a line under the
+title says so; the range is `Last 7 days` or `Last 30 days` as chips in the
+page header, kept in the URL (`?range=30d`). The page is a `RequirePermission`
+on `payments:read`.
+
+1. Four `StatCard`s: gross volume of successful payments, payments created,
+   success rate (successful over successful, expired and failed) and delivery
+   success (delivered over delivered and failed). The first three carry a
+   delta against the previous period of the same length ("+12,5% vs previous
+   7 days", percentage points for the rate; "New in this range" when the
+   previous period was empty; "No change") and a sparkline of the daily
+   series. Delivery success has no previous period, so it shows how many of
+   the finished deliveries were delivered instead. Amounts are never added
+   across currencies: gross volume is in the currency picked on the chart
+   (IDR first), while counts and the success rate cover every currency.
+2. A chart card: payments created and successful per day (WIB), as bars in
+   `chart-5` and `chart-1`, with the gross per currency in the tooltip and
+   an `sr-only` table of the days. Currency chips sit in the card header
+   when the range has more than one currency. Empty when the range has no
+   payments.
+3. Beside it, a Connections card (up to five: name linking to the
+   connection, provider, environment badge, the last test as a `StatusBadge`
+   with its relative time, "View all connections") and a Needs attention
+   card: failed deliveries (`/webhooks?status=FAILED`), rejected callbacks
+   (`/webhooks?tab=inbound`) and unresolved reconciliation items
+   (`/reconciliation?tab=runs`), or "All clear", with the latest
+   reconciliation run at the bottom.
+4. Recent payments: the newest eight as a `DataTable` with "View all
+   payments".
+
+Tests that render a chart call `stubElementSize` from `src/test/layout.ts`
+first, because jsdom measures every element as 0×0 and recharts draws
+nothing at that size.
+
+States: a skeleton shaped like the page; `ErrorState` with retry for the
+whole page (a `403` shows `ForbiddenState`); each card has its own empty
+text, so an empty range never looks like an error.
 
 ## Dark mode
 

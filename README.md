@@ -170,12 +170,12 @@ sequenceDiagram
 A callback for a reference KeiPay does not know yet answers `500`, so the
 gateway retries it. Every callback, accepted or not, is kept in the inbound
 log, with two guards against anyone who learns a callback URL: bodies over
-1 MiB are refused (`413 request_too_large`), and rejected callbacks are
-limited per sender IP, and those that fail verification also per
-connection (by default 60 each in 15 minutes; `429 rate_limited` after
-that, without a log row). A verified callback that KeiPay cannot parse is
-still recorded whatever strangers have sent to the same URL, and accepted
-callbacks are never limited.
+1 MiB are refused (`413 request_too_large`), and callbacks that fail
+verification are limited per sender IP and per connection (by default 60
+each in 15 minutes; `429 rate_limited` after that, without a log row).
+Verified callbacks are never limited, whether KeiPay could parse them or
+not, so the gateway's own traffic is always recorded whatever strangers
+send to the same URL.
 
 ### Payment status
 
@@ -413,7 +413,8 @@ cookies are
 `COOKIE_SECURE=false` for plain HTTP on a host other than `localhost`
 (refused in production). Every response carries the usual browser
 protections (`nosniff`, no framing, no referrer, a content security policy
-and `Cache-Control: no-store`); `Strict-Transport-Security` is sent
+and `Cache-Control: no-store`), and a path with a stray trailing slash is a
+JSON 404 rather than a redirect; `Strict-Transport-Security` is sent
 whenever cookies are `Secure`, or as `HSTS_ENABLED` says. In production
 the server also warns at startup when Redis has no password or the
 Postgres DSN has `sslmode=disable`.

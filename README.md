@@ -177,6 +177,16 @@ Verified callbacks are never limited, whether KeiPay could parse them or
 not, so the gateway's own traffic is always recorded whatever strangers
 send to the same URL.
 
+**Callbacks that never arrive.** A gateway may not send a callback, for
+example when the "invoice expired" notification is off in its dashboard,
+or the callback cannot reach KeiPay. The worker therefore reads back, once
+a minute, the checkout of every pending payment that expired more than two
+minutes ago (for up to three days, at most every ten minutes per payment).
+A status other than pending is applied exactly like a callback, with the
+same events, and the inbound log shows it with source `poll`. A callback
+that arrives later is a duplicate. Providers that can read a checkout back
+have the capability `read_checkout` (Xendit does).
+
 ### Payment status
 
 Callbacks can arrive out of order, so a payment's status only moves
@@ -443,7 +453,9 @@ can reach first: callback URLs are built from it.
 4. Copy the connection's **callback URL**,
    `https://<your-host>/webhooks/xendit/con_…`, into Xendit → Settings →
    Webhooks → Invoices paid. Each connection has its own URL and is
-   verified with its own token.
+   verified with its own token. Also turn on the notification for
+   expired invoices, so expiries arrive right away rather than through
+   the read-back.
 5. Choose the **channels** to offer. Leave all on to offer everything your
    Xendit account has activated.
 6. Open each app (**Apps → app → Overview**) and pick its **default
@@ -889,6 +901,16 @@ Tests that need an empty `users` table (migrations, the first-run setup race,
 the `keipay-migrate` CLI) create a throwaway database on that server and drop
 it afterwards, so the DSN's role needs the `CREATEDB` privilege
 (`ALTER ROLE keipay CREATEDB`). The `make ci` stack already uses a superuser.
+
+### Against the Xendit sandbox
+
+To see real callbacks locally, give the API a public HTTPS URL with a
+tunnel, set `HTTP_BASE_URL` to it and paste the connection's callback URL
+into the Xendit dashboard (test mode). Use a tunnel with a fixed domain,
+such as an ngrok static domain: random quick-tunnel domains can change
+while you wait for a callback, and the Xendit dashboard refused a
+`trycloudflare.com` URL. In the test-mode checkout, each payment method
+has a button that simulates the payment.
 
 ## Contributing and security
 

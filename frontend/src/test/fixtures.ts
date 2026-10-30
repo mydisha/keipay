@@ -388,6 +388,7 @@ export function provider(overrides: Partial<Schemas["Provider"]> = {}): Schemas[
       can_cancel: true,
       reports_fee: true,
       list_transactions: true,
+      read_checkout: true,
     },
     webhook_setup: {
       instructions: ["Open Settings → Webhooks.", "Paste the URL into Invoices paid.", "Save."],

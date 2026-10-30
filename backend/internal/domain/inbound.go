@@ -28,8 +28,12 @@ func (r InboundResult) Valid() bool {
 	}
 }
 
-// InboundSourceWebhook is the source of a gateway callback.
-const InboundSourceWebhook = "webhook"
+// Sources of an inbound row: a gateway callback, or KeiPay reading a
+// checkout back from the gateway because its callback never arrived.
+const (
+	InboundSourceWebhook = "webhook"
+	InboundSourcePoll    = "poll"
+)
 
 // Caps on the stored body of a callback that was not applied.
 const (

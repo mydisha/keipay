@@ -41,6 +41,9 @@ type Capabilities struct {
 	// ListTransactions means the adapter implements TransactionLister, so
 	// its connections can be reconciled.
 	ListTransactions bool
+	// ReadCheckout means the adapter implements CheckoutReader, so a
+	// checkout whose callback never arrived can be read back.
+	ReadCheckout bool
 }
 
 // WebhookSetup tells an operator where to paste a connection's callback URL.
@@ -142,6 +145,15 @@ type TransactionPage struct {
 	Transactions []domain.GatewayTransaction
 	// NextCursor is "" on the last page.
 	NextCursor string
+}
+
+// CheckoutReader is implemented by adapters whose Capabilities().ReadCheckout
+// is true. GetCheckout reads a checkout's current state as the event a
+// callback for it would carry, with Source "poll", and returns the gateway's
+// raw answer. Failures are wrapped like the other gateway calls; a checkout
+// the gateway does not know is ErrNotFound.
+type CheckoutReader interface {
+	GetCheckout(ctx context.Context, a Account, providerPaymentID string) (*InboundEvent, []byte, error)
 }
 
 // TransactionLister is implemented by adapters whose

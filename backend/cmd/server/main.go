@@ -182,6 +182,14 @@ func main() {
 		},
 		Log: log,
 	})
+	checkoutCheckSvc := service.NewCheckoutCheckService(service.CheckoutCheckDeps{
+		Checks:      postgres.NewCheckoutCheckRepo(pool),
+		Connections: connRepo,
+		Registry:    registry,
+		Sealer:      cipher,
+		Callbacks:   webhookSvc,
+		Log:         log,
+	})
 	endpointSvc := service.NewWebhookEndpointService(service.WebhookEndpointDeps{
 		Apps:       appRepo,
 		Endpoints:  endpointRepo,
@@ -287,7 +295,8 @@ func main() {
 	}
 
 	// Optional in-process asynq worker, plus the sweeper that re-enqueues
-	// deliveries whose next attempt is overdue.
+	// deliveries whose next attempt is overdue and the check that reads back
+	// expired checkouts whose callback never arrived.
 	var workers *worker.Pool
 	sweepCtx, stopSweeper := context.WithCancel(ctx)
 	defer stopSweeper()
@@ -318,6 +327,7 @@ func main() {
 			log.Fatal("asynq worker failed to start", zap.Error(err))
 		}
 		go worker.NewSweeper(deliveryRepo, enqueuer, inspector, log).Run(sweepCtx)
+		go worker.NewCheckoutChecker(checkoutCheckSvc, log).Run(sweepCtx)
 		log.Info("asynq worker started")
 	}
 

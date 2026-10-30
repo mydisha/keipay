@@ -87,10 +87,10 @@ describe("ChartTooltipContent", () => {
   }
 
   it("shows the configured series label and the value formatted for id-ID", () => {
-    renderTooltip({ payload: [entry({ dataKey: "created", name: "created", value: 1500 })] });
-    expect(screen.getByText("Mon")).toBeInTheDocument();
-    expect(screen.getByText("Created")).toBeInTheDocument();
-    expect(screen.getByText("1.500")).toHaveClass("tabular-nums");
+    const { container } = renderTooltip({ payload: [entry({ dataKey: "created", name: "created", value: 1500 })] });
+    expect(within(container).getByText("Mon")).toBeInTheDocument();
+    expect(within(container).getByText("Created")).toBeInTheDocument();
+    expect(within(container).getByText("1.500")).toHaveClass("tabular-nums");
   });
 
   it("renders nothing while inactive or without items", () => {
@@ -101,17 +101,17 @@ describe("ChartTooltipContent", () => {
   });
 
   it("uses the formatter and hides the label on request", () => {
-    renderTooltip({
+    const { container } = renderTooltip({
       hideLabel: true,
       formatter: (value, name) => `${name}: Rp${String(value)}`,
     });
-    expect(screen.queryByText("Mon")).not.toBeInTheDocument();
-    expect(screen.getByText("Created: Rp4")).toBeInTheDocument();
+    expect(within(container).queryByText("Mon")).not.toBeInTheDocument();
+    expect(within(container).getByText("Created: Rp4")).toBeInTheDocument();
   });
 
   it("falls back to the item's name for a series that is not configured", () => {
-    renderTooltip({ payload: [entry({ dataKey: "other", name: "other", value: 2 })] });
-    expect(screen.getByText("other")).toBeInTheDocument();
+    const { container } = renderTooltip({ payload: [entry({ dataKey: "other", name: "other", value: 2 })] });
+    expect(within(container).getByText("other")).toBeInTheDocument();
   });
 });
 

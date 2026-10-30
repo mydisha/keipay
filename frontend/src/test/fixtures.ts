@@ -558,3 +558,54 @@ export function reconciliationItem(
     ...overrides,
   };
 }
+
+/** One zero-filled series point per WIB day from `from`, with `currencies` listed on every point. */
+export function dashboardSeries(days: number, currencies: string[] = ["IDR"], from = "2026-10-22T17:00:00Z"): Schemas["DashboardSeriesPoint"][] {
+  const start = new Date(from).getTime();
+  return Array.from({ length: days }, (_, i) => ({
+    period_start: new Date(start + i * 86_400_000).toISOString(),
+    period_end: new Date(start + (i + 1) * 86_400_000).toISOString(),
+    created: 0,
+    successful: 0,
+    gross: currencies.map((currency) => ({ currency, amount: 0 })),
+  }));
+}
+
+export function dashboardTotals(overrides: Partial<Schemas["DashboardPaymentTotals"]> = {}): Schemas["DashboardPaymentTotals"] {
+  return { created: 0, pending: 0, paid: 0, settled: 0, expired: 0, failed: 0, successful: 0, gross: 0, success_rate: null, ...overrides };
+}
+
+/** A week with a little IDR activity, one connection, one run and one recent payment. */
+export function dashboard(overrides: Partial<Schemas["DashboardResponse"]> = {}): Schemas["DashboardResponse"] {
+  const series = dashboardSeries(7);
+  series[5] = { ...series[5]!, created: 3, successful: 2, gross: [{ currency: "IDR", amount: 300000 }] };
+  series[6] = { ...series[6]!, created: 1, successful: 1, gross: [{ currency: "IDR", amount: 150000 }] };
+  return {
+    environment: "live",
+    range: "7d",
+    from: "2026-10-22T17:00:00Z",
+    to: "2026-10-29T17:00:00Z",
+    previous_from: "2026-10-15T17:00:00Z",
+    payments: {
+      by_currency: [
+        {
+          currency: "IDR",
+          current: dashboardTotals({ created: 4, paid: 3, expired: 1, successful: 3, gross: 450000, success_rate: 0.75 }),
+          previous: dashboardTotals({ created: 2, paid: 1, failed: 1, successful: 1, gross: 100000, success_rate: 0.5 }),
+        },
+      ],
+      series,
+    },
+    deliveries: { total: 5, pending: 1, delivered: 3, failed: 1, success_rate: 0.75 },
+    inbound: {
+      total: 6,
+      applied: 4,
+      problems: 2,
+      by_result: { applied: 4, stale: 0, duplicate: 0, mismatch: 1, unmapped: 0, invalid_signature: 1, invalid_payload: 0, error: 0 },
+    },
+    connections: [connectionListItem({ environment: "live", name: "xendit-live", last_test_status: "ok", last_tested_at: "2026-10-28T10:00:00Z" })],
+    reconciliation: { unresolved_items: 2, latest_run: reconciliationRun() },
+    recent_payments: [payment()],
+    ...overrides,
+  };
+}

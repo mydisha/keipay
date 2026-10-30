@@ -7,8 +7,10 @@ import { mockApi } from "./http";
 
 // Feature pages are lazy routes. On a cold Vite transform cache (the gate runs
 // `npm ci` first) the first import of a page can take more than the default
-// 1s findBy* timeout and 5s test timeout, so allow for it.
-configure({ asyncUtilTimeout: 5_000 });
+// 1s findBy* timeout and 5s test timeout, so allow for it. `/` loads the
+// dashboard chunk with recharts, which took over 5s per worker on a busy
+// machine, hence 10s.
+configure({ asyncUtilTimeout: 10_000 });
 vi.setConfig({ testTimeout: 20_000 });
 
 // Every test starts with a signed-in owner; tests call mockApi again to change that.

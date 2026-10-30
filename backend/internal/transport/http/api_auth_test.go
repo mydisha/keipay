@@ -1,9 +1,13 @@
 package http
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -13,6 +17,7 @@ import (
 	"time"
 
 	"github.com/mydisha/keipay/backend/internal/domain"
+	"github.com/mydisha/keipay/backend/internal/pkg/hmac"
 	"github.com/mydisha/keipay/backend/internal/service"
 	"github.com/mydisha/keipay/backend/internal/transport/http/middleware"
 )
@@ -562,4 +567,211 @@ func TestV1TransportHardeningOverHTTP(t *testing.T) {
 	// The limiter failing closes /v1 with a 503 rather than skipping the checks.
 	f.authFailures.Err = errors.New("redis down")
 	expectError(t, c.do(http.MethodGet, "/v1/payments/"+pub, ""), http.StatusServiceUnavailable, domain.CodeAuthUnavailable)
+}
+
+// An install that is already set up is unaffected by a missing SETUP_TOKEN
+// in production: setup stays completed, and the status says no token is
+// needed.
+func TestSetupCompletedInstallIgnoresMissingTokenOverHTTP(t *testing.T) {
+	f := newAPI(t, "", withRequireSetupToken())
+	w := f.send(newBrowser(), http.MethodGet, "/admin/setup", "")
+	if w.Code != http.StatusOK || w.Body.String() != `{"setup_required":false,"setup_token_required":false}` {
+		t.Fatalf("status: %d %s", w.Code, w.Body.String())
+	}
+	body := `{"email":"x@example.com","name":"X","password":"` + testPassword + `"}`
+	expectError(t, f.send(newBrowser(), http.MethodPost, "/admin/setup", body), http.StatusConflict, domain.CodeSetupCompleted)
+	if w := f.send(f.signIn(t, f.owner), http.MethodGet, "/admin/me", ""); w.Code != http.StatusOK {
+		t.Fatalf("the owner cannot sign in: %d", w.Code)
+	}
+}
+
+// Over the real router the key counter is per sender: bad signatures from
+// one address, in either signing version, block that address for the key
+// before the signature is checked, while the same key from another address
+// and another key from the blocked address are judged on their own.
+func TestV1KeyLimitIsPerSenderOverHTTP(t *testing.T) {
+	f := newAPI(t, "", withAuthLimits(100, 2))
+	owner := f.signIn(t, f.owner)
+	app := f.createApp(t, owner, `{"name":"Acme","slug":"acme","environment":"test"}`)
+	c := v1Client{f: f, apiKey: app.apiKey, secret: app.apiSecret}
+	pub := decode(t, c.doV2(http.MethodPost, "/v1/payments", `{"order_id":"ord-1","amount":1000}`), http.StatusCreated)["id"].(string)
+	target := "/v1/payments/" + pub
+	wrong := strings.Repeat("0", 64)
+
+	expectError(t, c.do(http.MethodGet, target, "", "X-Signature", wrong), http.StatusUnauthorized, domain.CodeInvalidSignature)
+	expectError(t, c.doV2(http.MethodGet, target, "", "X-Signature", wrong), http.StatusUnauthorized, domain.CodeInvalidSignature)
+	w := c.doV2(http.MethodGet, target, "")
+	env := expectError(t, w, http.StatusTooManyRequests, domain.CodeRateLimited)
+	secs, _ := env.Error.Details["retry_after_seconds"].(float64)
+	if secs < 1 || secs > 900 || w.Header().Get("Retry-After") != strconv.Itoa(int(secs)) {
+		t.Fatalf("Retry-After = %q, details = %v", w.Header().Get("Retry-After"), env.Error.Details)
+	}
+	if n := f.logs.FilterField(stringField("event", "auth.bad_signature")).Len(); n != 2 {
+		t.Fatalf("bad_signature events = %d: the blocked request was verified", n)
+	}
+
+	elsewhere := &browser{cookies: map[string]string{}, remote: "198.51.100.7:4000"}
+	ts, nonce := signedTimestamp(app.apiSecret, ""), v2Nonce()
+	sig := hmac.Sign(app.apiSecret, middleware.SigningInput(middleware.SignatureV2, ts, nonce, http.MethodGet, target, nil))
+	w = f.send(elsewhere, http.MethodGet, target, "", "X-Api-Key", app.apiKey, "X-Timestamp", ts,
+		"X-Signature-Version", "2", "X-Nonce", nonce, "X-Signature", sig)
+	if w.Code != http.StatusOK {
+		t.Fatalf("the app's own request from another address: %d %s", w.Code, w.Body.String())
+	}
+	expectError(t, f.send(nil, http.MethodGet, target, "", "X-Api-Key", "kp_test_"+strings.Repeat("9", 32),
+		"X-Timestamp", signedTimestamp("none", "other"), "X-Signature", wrong), http.StatusUnauthorized, domain.CodeUnknownAPIKey)
+}
+
+// Replay protection never fails open over the router: with the nonce store
+// down a correctly signed request is 503, its cause stays out of the body,
+// and nothing was created, so the retry is a first attempt.
+func TestV1NonceStoreDownOverHTTP(t *testing.T) {
+	f := newAPI(t, "")
+	owner := f.signIn(t, f.owner)
+	app := f.createApp(t, owner, `{"name":"Acme","slug":"acme","environment":"test"}`)
+	c := v1Client{f: f, apiKey: app.apiKey, secret: app.apiSecret}
+	nonces := f.deps.NonceStore.(*memNonces)
+	body := `{"order_id":"ord-1","amount":1000}`
+
+	nonces.err = errors.New("redis down")
+	w := c.doV2(http.MethodPost, "/v1/payments", body)
+	expectError(t, w, http.StatusServiceUnavailable, domain.CodeAuthUnavailable)
+	if strings.Contains(w.Body.String(), "redis down") {
+		t.Fatalf("cause leaked: %s", w.Body.String())
+	}
+	if n := f.logs.FilterField(stringField("event", "auth.store_unavailable")).Len(); n != 1 {
+		t.Fatalf("store_unavailable events = %d", n)
+	}
+
+	nonces.err = nil
+	w = c.doV2(http.MethodPost, "/v1/payments", body)
+	if w.Code != http.StatusCreated || w.Header().Get("Idempotent-Replayed") != "" {
+		t.Fatalf("retry after the outage: %d %s (replayed %q)", w.Code, w.Body.String(), w.Header().Get("Idempotent-Replayed"))
+	}
+}
+
+// Version 2 signs the path as it was sent: an escaped character stays
+// escaped in the signed input, and a trailing slash is not a /v1 route.
+func TestV1SignatureV2PathFormsOverHTTP(t *testing.T) {
+	f := newAPI(t, "")
+	owner := f.signIn(t, f.owner)
+	app := f.createApp(t, owner, `{"name":"Acme","slug":"acme","environment":"test"}`)
+	c := v1Client{f: f, apiKey: app.apiKey, secret: app.apiSecret}
+	pub := decode(t, c.doV2(http.MethodPost, "/v1/payments", `{"order_id":"ord-1","amount":1000}`), http.StatusCreated)["id"].(string)
+	plain, escaped := "/v1/payments/"+pub, "/v1/payments/pay%5F"+pub[4:]
+
+	if w := c.doV2(http.MethodGet, escaped, ""); w.Code != http.StatusOK {
+		t.Fatalf("signed over the escaped path: %d %s", w.Code, w.Body.String())
+	}
+	ts, nonce := signedTimestamp(app.apiSecret, ""), v2Nonce()
+	sig := hmac.Sign(app.apiSecret, middleware.SigningInput(middleware.SignatureV2, ts, nonce, http.MethodGet, plain, nil))
+	w := f.send(nil, http.MethodGet, escaped, "", "X-Api-Key", app.apiKey, "X-Timestamp", ts,
+		"X-Signature-Version", "2", "X-Nonce", nonce, "X-Signature", sig)
+	expectError(t, w, http.StatusUnauthorized, domain.CodeInvalidSignature)
+
+	// A trailing slash is an unknown route: not redirected, not
+	// authenticated, so nothing is verified, consumed or created.
+	nonces := len(f.deps.NonceStore.(*memNonces).seen)
+	expectError(t, c.doV2(http.MethodGet, plain+"/", ""), http.StatusNotFound, domain.CodeNotFound)
+	expectError(t, c.doV2(http.MethodPost, "/v1/payments/", `{"order_id":"ord-2","amount":1}`), http.StatusNotFound, domain.CodeNotFound)
+	if len(f.deps.NonceStore.(*memNonces).seen) != nonces {
+		t.Fatal("an unknown route consumed a nonce")
+	}
+	if w := c.doV2(http.MethodPost, "/v1/payments", `{"order_id":"ord-2","amount":1}`); w.Code != http.StatusCreated || w.Header().Get("Idempotent-Replayed") != "" {
+		t.Fatalf("ord-2 after the unknown route: %d %s", w.Code, w.Body.String())
+	}
+}
+
+// /admin bodies are capped at 1 MiB whether the length is declared or not,
+// signed in or not, and nothing is created. A body exactly at the limit is
+// read.
+func TestAdminBodyLimitOverHTTP(t *testing.T) {
+	f := newAPI(t, "")
+	owner := f.signIn(t, f.owner)
+	wrap := func(pad int) string {
+		return `{"name":"Acme","slug":"acme","environment":"test","metadata":{"pad":"` + strings.Repeat("x", pad) + `"}}`
+	}
+	over := wrap(int(middleware.MaxAdminBodyBytes))
+
+	w := f.send(owner, http.MethodPost, "/admin/apps", over)
+	expectError(t, w, http.StatusRequestEntityTooLarge, domain.CodeRequestTooLarge)
+	if w.Header().Get("Connection") != "close" {
+		t.Fatalf("Connection = %q, want close", w.Header().Get("Connection"))
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/admin/apps", strings.NewReader(over))
+	req.ContentLength = -1
+	for k, v := range owner.cookies {
+		req.AddCookie(&http.Cookie{Name: k, Value: v})
+	}
+	req.Header.Set(middleware.CSRFHeader, owner.cookies[middleware.CSRFCookie])
+	req.RemoteAddr = owner.remote
+	w = httptest.NewRecorder()
+	f.router.ServeHTTP(w, req)
+	expectError(t, w, http.StatusRequestEntityTooLarge, domain.CodeRequestTooLarge)
+
+	// Before any session or CSRF check.
+	w = f.send(nil, http.MethodPost, "/admin/login", over)
+	expectError(t, w, http.StatusRequestEntityTooLarge, domain.CodeRequestTooLarge)
+	if len(w.Header().Values("Set-Cookie")) != 0 {
+		t.Fatalf("a refused body set cookies: %v", w.Header().Values("Set-Cookie"))
+	}
+
+	if !strings.Contains(f.send(owner, http.MethodGet, "/admin/apps", "").Body.String(), `"data":[]`) {
+		t.Fatal("an app was created from a refused body")
+	}
+	exact := wrap(int(middleware.MaxAdminBodyBytes) - len(wrap(0)))
+	if len(exact) != int(middleware.MaxAdminBodyBytes) {
+		t.Fatalf("exact body is %d bytes", len(exact))
+	}
+	if w := f.send(owner, http.MethodPost, "/admin/apps", exact); w.Code == http.StatusRequestEntityTooLarge {
+		t.Fatalf("a body at the limit was refused: %s", w.Body.String())
+	}
+}
+
+// Over a real connection the server reads only the declared Content-Length,
+// so a body longer than declared is verified as the server saw it: the
+// signature over the full body does not match, nothing is processed, and
+// the refusal carries the security headers like any other response.
+func TestV1ContentLengthShorterThanBodyOverTCP(t *testing.T) {
+	f := newAPI(t, "")
+	owner := f.signIn(t, f.owner)
+	app := f.createApp(t, owner, `{"name":"Acme","slug":"acme","environment":"test"}`)
+	srv := httptest.NewServer(f.router)
+	defer srv.Close()
+
+	body := `{"order_id":"ord-1","amount":1000}`
+	ts, nonce := signedTimestamp(app.apiSecret, body), v2Nonce()
+	sig := hmac.Sign(app.apiSecret, middleware.SigningInput(middleware.SignatureV2, ts, nonce, http.MethodPost, "/v1/payments", []byte(body)))
+	host := strings.TrimPrefix(srv.URL, "http://")
+	conn, err := net.Dial("tcp", host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	raw := fmt.Sprintf("POST /v1/payments HTTP/1.1\r\nHost: %s\r\nContent-Type: application/json\r\nConnection: close\r\n"+
+		"X-Api-Key: %s\r\nX-Timestamp: %s\r\nX-Signature-Version: 2\r\nX-Nonce: %s\r\nX-Signature: %s\r\nContent-Length: %d\r\n\r\n%s",
+		host, app.apiKey, ts, nonce, sig, len(body)-10, body)
+	if _, err := io.WriteString(conn, raw); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	got, _ := io.ReadAll(resp.Body)
+	var env errorEnvelope
+	_ = json.Unmarshal(got, &env)
+	if resp.StatusCode != http.StatusUnauthorized || env.Error.Code != domain.CodeInvalidSignature {
+		t.Fatalf("truncated body: %d %s", resp.StatusCode, got)
+	}
+	if resp.Header.Get("X-Content-Type-Options") != "nosniff" || resp.Header.Get("Content-Security-Policy") != middleware.APIContentSecurityPolicy {
+		t.Fatalf("headers = %v", resp.Header)
+	}
+
+	c := v1Client{f: f, apiKey: app.apiKey, secret: app.apiSecret}
+	if w := c.doV2(http.MethodPost, "/v1/payments", body); w.Code != http.StatusCreated || w.Header().Get("Idempotent-Replayed") != "" {
+		t.Fatalf("the order after the truncated attempt: %d %s", w.Code, w.Body.String())
+	}
 }

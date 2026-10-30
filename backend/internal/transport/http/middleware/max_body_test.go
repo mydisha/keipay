@@ -67,3 +67,14 @@ func TestTooLarge(t *testing.T) {
 		t.Fatal("MaxBytesError not recognised")
 	}
 }
+
+// A Content-Length under the limit does not vouch for the body: the limit
+// still holds on what is actually read.
+func TestMaxBodyDeclaredLengthUnderLimitStillCapsTheRead(t *testing.T) {
+	r := newEngine(MaxBody(16), readAll)
+	req := httptest.NewRequest(http.MethodPost, "/x", strings.NewReader(strings.Repeat("a", 17)))
+	req.ContentLength = 8
+	if w := serve(r, req); w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("got %d %s", w.Code, w.Body.String())
+	}
+}

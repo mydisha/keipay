@@ -64,11 +64,11 @@ const (
 	detailMissingKey       = "missing event key or reference"
 )
 
-// CallbackLimits bound the rejected callbacks (failed verification or
-// parsing) a sender IP and a connection may produce in a window. Over a
-// limit, further rejected callbacks are refused without being recorded, so
-// anyone who learns a callback URL cannot fill the inbound log. Accepted
-// callbacks are never limited.
+// CallbackLimits bound the callbacks that fail verification a sender IP and
+// a connection may produce in a window. Over a limit, further ones are
+// refused without being recorded, so anyone who learns a callback URL
+// cannot fill the inbound log. Verified callbacks, accepted or not, are
+// never limited.
 type CallbackLimits struct {
 	MaxRejectedPerIP         int
 	MaxRejectedPerConnection int
@@ -176,35 +176,32 @@ func (s *WebhookService) Process(ctx context.Context, conn *domain.Connection, e
 // RecordRejected logs a callback that failed before processing: verification
 // (InboundInvalidSignature; the body is cut to MaxRejectedBodyBytes, since
 // anyone can send it) or parsing (InboundInvalidPayload, cut to
-// MaxUnappliedBodyBytes). Rejected callbacks count against the sender's
-// limit, read from the ClientMeta in ctx, and failed verifications also
-// against the connection's, so a stranger who knows the URL cannot use up
-// the limit that a verified but unparsable callback from the gateway would
-// then hit. Once a limit is reached nothing is recorded and rate_limited is
-// returned. Failing to write is logged, not returned, and so is a limiter
+// MaxUnappliedBodyBytes). Failed verifications count against the sender's
+// and the connection's limits, read from the ClientMeta in ctx; once a
+// limit is reached nothing is recorded and rate_limited is returned. A
+// verified callback is never limited, parsed or not: it comes from the
+// gateway's own account, and the row is the only evidence of a format
+// problem. Failing to write is logged, not returned, and so is a limiter
 // that does not answer: a gateway's retries matter more than the limit.
 func (s *WebhookService) RecordRejected(ctx context.Context, conn *domain.Connection, raw []byte, result domain.InboundResult, detail string) error {
+	limited := s.limiter != nil && result == domain.InboundInvalidSignature
 	meta := ClientMetaFromContext(ctx)
-	keys := []string{"ip:" + meta.IP}
-	limits := []domain.FailureLimit{{Key: keys[0], Max: s.limits.MaxRejectedPerIP}}
-	if result == domain.InboundInvalidSignature {
-		keys = append(keys, "con:"+conn.PublicID)
-		limits = append(limits, domain.FailureLimit{Key: keys[1], Max: s.limits.MaxRejectedPerConnection})
-	}
-	if s.limiter != nil {
-		blocked, wait, err := s.limiter.Blocked(ctx, s.limits.Window, limits...)
+	keys := []string{"ip:" + meta.IP, "con:" + conn.PublicID}
+	if limited {
+		blocked, wait, err := s.limiter.Blocked(ctx, s.limits.Window,
+			domain.FailureLimit{Key: keys[0], Max: s.limits.MaxRejectedPerIP},
+			domain.FailureLimit{Key: keys[1], Max: s.limits.MaxRejectedPerConnection})
 		switch {
 		case err != nil:
 			s.limiterUnavailable(ctx, conn, "callback limiter unavailable", err)
 		case blocked:
 			logger.Security(s.log, logger.EventCallbackRateLimited, logger.SeverityMedium, meta.IP, meta.RequestID,
-				"too many rejected callbacks", zap.String("connection_id", conn.PublicID), zap.String("provider", conn.Provider),
-				zap.String("result", string(result)))
+				"too many rejected callbacks", zap.String("connection_id", conn.PublicID), zap.String("provider", conn.Provider))
 			return domain.RateLimited(int(math.Ceil(wait.Seconds())))
 		}
 	}
 	s.record(ctx, s.newInbound(conn, raw, result, detail))
-	if s.limiter != nil {
+	if limited {
 		if err := s.limiter.Fail(context.WithoutCancel(ctx), s.limits.Window, keys...); err != nil {
 			s.limiterUnavailable(ctx, conn, "rejected callback not counted", err)
 		}

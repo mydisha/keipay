@@ -165,6 +165,12 @@ func adminRoutes(d Deps) []adminRoute {
 // NewRouter builds the Gin engine with all routes mounted.
 func NewRouter(d Deps) *gin.Engine {
 	r := gin.New()
+	// A path with a stray trailing slash gets the JSON 404 like any other
+	// unknown route. Gin's redirect would answer before any middleware, so
+	// without the security headers and the request id, and a 301 is
+	// cacheable.
+	r.RedirectTrailingSlash = false
+	r.RedirectFixedPath = false
 	if err := r.SetTrustedProxies(d.TrustedProxies); err != nil {
 		// Config validates the list, so this only guards against misuse:
 		// trusting nobody is the safe fallback.

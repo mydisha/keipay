@@ -54,6 +54,12 @@ func TestRouter_SecurityHeadersOnEveryResponse(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dist, "index.html"), []byte("<html>console</html>"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.MkdirAll(filepath.Join(dist, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dist, "assets", "app-abc123.js"), []byte("console.log(1)"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	nonces := &memNonces{seen: map[string]bool{}}
 	withConsole := NewRouter(Deps{Log: zap.NewNop(), FrontendDir: dist, NonceStore: nonces, SecurityHeaders: middleware.SecurityHeadersConfig{HSTS: true}})
 	plain := NewRouter(Deps{Log: zap.NewNop(), NonceStore: nonces})
@@ -67,6 +73,8 @@ func TestRouter_SecurityHeadersOnEveryResponse(t *testing.T) {
 		{withConsole, "/admin/apps", middleware.APIContentSecurityPolicy},
 		{withConsole, "/v1/missing", middleware.APIContentSecurityPolicy},
 		{withConsole, "/apps", middleware.ConsoleContentSecurityPolicy},
+		{withConsole, "/assets/app-abc123.js", middleware.ConsoleContentSecurityPolicy},
+		{withConsole, "/assets/missing.js", middleware.ConsoleContentSecurityPolicy},
 		{plain, "/apps", middleware.APIContentSecurityPolicy},
 	}
 	for _, tc := range cases {
@@ -78,6 +86,13 @@ func TestRouter_SecurityHeadersOnEveryResponse(t *testing.T) {
 		}
 		if hsts := h.Get("Strict-Transport-Security"); (hsts != "") != (tc.r == withConsole) {
 			t.Errorf("%s: HSTS %q", tc.target, hsts)
+		}
+	}
+	// Only a fingerprinted asset is cacheable; the console shell and every
+	// API answer are not.
+	for target, want := range map[string]string{"/assets/app-abc123.js": "public, max-age=31536000, immutable", "/apps": "no-cache", "/healthz": "no-store"} {
+		if got := get(withConsole, target).Header().Get("Cache-Control"); got != want {
+			t.Errorf("%s: Cache-Control = %q, want %q", target, got, want)
 		}
 	}
 }
@@ -94,5 +109,21 @@ func TestGinMode(t *testing.T) {
 func TestRouter_NoFrontendDirKeepsPlain404(t *testing.T) {
 	if w := get(newTestRouter(t, ""), "/apps"); w.Code != http.StatusNotFound {
 		t.Fatalf("got %d, want 404", w.Code)
+	}
+}
+
+// A trailing slash is an unknown route, answered with the JSON 404 and the
+// security headers; gin's redirect would skip the middleware.
+func TestRouter_TrailingSlashIsNotRedirected(t *testing.T) {
+	r := newTestRouter(t, "")
+	for _, target := range []string{"/healthz/", "/admin/apps/", "/v1/payments/1/", "/webhooks/xendit/"} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodPost, target, nil))
+		if w.Code != http.StatusNotFound || w.Header().Get("Location") != "" {
+			t.Errorf("%s: %d %q", target, w.Code, w.Header().Get("Location"))
+		}
+		if w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("Cache-Control") != "no-store" || w.Header().Get("X-Request-Id") == "" {
+			t.Errorf("%s: headers %v", target, w.Header())
+		}
 	}
 }

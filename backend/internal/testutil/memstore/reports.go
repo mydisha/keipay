@@ -63,6 +63,20 @@ func (s *Reports) Upsert(_ context.Context, r *domain.PaymentReport) error {
 	return nil
 }
 
+// FillFee sets fee and net of the payment's report while its fee is unknown.
+func (s *Reports) FillFee(_ context.Context, paymentID, fee int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.byPayment[paymentID]
+	if !ok || r.Fee != nil {
+		return false, nil
+	}
+	net := r.Gross - fee
+	r.Fee, r.Net = &fee, &net
+	s.byPayment[paymentID] = r
+	return true, nil
+}
+
 // List returns one page of every report, newest first.
 func (s *Reports) List(_ context.Context, _ domain.PaymentReportFilter, p domain.Page) (domain.PageResult[domain.PaymentReport], error) {
 	all := s.All()

@@ -706,3 +706,68 @@ func TestListItemsUnknownRun(t *testing.T) {
 		t.Fatalf("export: %v, called %v", err, called)
 	}
 }
+
+// Regression: a callback without the merchant's received amount (the Xendit
+// sandbox sends none) left the report's fee unknown for good. A run that
+// matches the payment with exactly one gateway transaction now stores that
+// transaction's fee; every other case leaves the report alone.
+func TestExecuteFillsUnknownFees(t *testing.T) {
+	f := newReconFixture(t)
+	from, _ := f.window()
+	at := from.Add(time.Hour)
+	fill := f.paidPayment(t, "kp_pay_fill", 150000, nil, at)
+	known := f.paidPayment(t, "kp_pay_known", 5000, i64(100), at)
+	split := f.paidPayment(t, "kp_pay_split", 5000, nil, at)
+	noFee := f.paidPayment(t, "kp_pay_nofee", 5000, nil, at)
+	tooHigh := f.paidPayment(t, "kp_pay_high", 5000, nil, at)
+	differs := f.paidPayment(t, "kp_pay_differs", 5000, nil, at)
+	f.gateway(
+		gatewayRow("kp_pay_fill", "tx_fill", domain.PaymentStatusSettled, 150000, i64(2220), at),
+		gatewayRow("kp_pay_known", "tx_known", domain.PaymentStatusPaid, 5000, i64(100), at),
+		gatewayRow("kp_pay_split", "tx_split_a", domain.PaymentStatusPaid, 2500, i64(50), at),
+		gatewayRow("kp_pay_split", "tx_split_b", domain.PaymentStatusPaid, 2500, i64(50), at.Add(time.Minute)),
+		gatewayRow("kp_pay_nofee", "tx_nofee", domain.PaymentStatusPaid, 5000, nil, at),
+		gatewayRow("kp_pay_high", "tx_high", domain.PaymentStatusPaid, 5000, i64(5001), at),
+		gatewayRow("kp_pay_differs", "tx_differs", domain.PaymentStatusPaid, 9000, i64(10), at),
+	)
+	run := f.createRun(t)
+	if err := f.execute(t, run); err != nil {
+		t.Fatal(err)
+	}
+
+	reports := map[int64]domain.PaymentReport{}
+	for _, r := range f.reports.All() {
+		reports[r.PaymentID] = r
+	}
+	if r := reports[fill.ID]; r.Fee == nil || *r.Fee != 2220 || r.Net == nil || *r.Net != 147780 {
+		t.Fatalf("filled report = fee %v net %v", r.Fee, r.Net)
+	}
+	if r := reports[known.ID]; r.Fee == nil || *r.Fee != 100 {
+		t.Fatalf("a known fee changed: %v", r.Fee)
+	}
+	for name, p := range map[string]*domain.Payment{"two transactions": split, "no gateway fee": noFee,
+		"fee above gross": tooHigh, "amount differs": differs} {
+		if r := reports[p.ID]; r.Fee != nil || r.Net != nil {
+			t.Fatalf("%s: fee %v net %v, want unknown", name, r.Fee, r.Net)
+		}
+	}
+	for _, it := range f.runs.Items(run.ID) {
+		if it.Reference == "kp_pay_fill" && (it.Result != domain.ResultMatched || it.Keipay.Fee != nil) {
+			t.Fatalf("item = %+v, keipay %+v", it, it.Keipay)
+		}
+	}
+
+	// A re-run compares the stored fee from now on.
+	f.clock.Advance(time.Minute)
+	if _, err := f.svc.Rerun(adminCtx(), run.PublicID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.execute(t, run); err != nil {
+		t.Fatal(err)
+	}
+	for _, it := range f.runs.Items(run.ID) {
+		if it.Reference == "kp_pay_fill" && (it.Keipay.Fee == nil || *it.Keipay.Fee != 2220 || it.Result != domain.ResultMatched) {
+			t.Fatalf("re-run item = %+v, keipay %+v", it, it.Keipay)
+		}
+	}
+}

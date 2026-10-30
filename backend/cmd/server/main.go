@@ -161,6 +161,7 @@ func main() {
 		Connections: connRepo,
 		Registry:    registry,
 		Source:      service.NewProviderSource(registry, cipher),
+		Reports:     reportRepo,
 		Tx:          txMgr,
 		Enqueuer:    enqueuer,
 		Audit:       auditSvc,

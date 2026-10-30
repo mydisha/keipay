@@ -95,6 +95,9 @@ type PaymentReportRepository interface {
 	// from PAID to SETTLED, keeps its first settled_at, and takes a fee only
 	// while its own is unknown.
 	Upsert(ctx context.Context, r *PaymentReport) error
+	// FillFee sets the fee, and with it the net, of the payment's report
+	// while its fee is unknown, and reports whether it did.
+	FillFee(ctx context.Context, paymentID, fee int64) (bool, error)
 	// List returns reports newest first (paid_at, then payment public id).
 	List(ctx context.Context, f PaymentReportFilter, p Page) (PageResult[PaymentReport], error)
 	// Summary totals the reports with From <= paid_at < To, which are both

@@ -61,7 +61,8 @@ func newReconFixture(t *testing.T) *reconFixture {
 		return nil
 	}
 	f.svc = NewReconciliationService(ReconciliationDeps{
-		Runs: f.runs, Connections: f.conns, Registry: f.registry, Source: f.source, Tx: tx, Enqueuer: f.queue, Audit: auditSvc,
+		Runs: f.runs, Connections: f.conns, Registry: f.registry, Source: f.source, Reports: f.reports, Tx: tx, Enqueuer: f.queue,
+		Audit: auditSvc,
 	})
 	f.svc.now = f.clock.Now
 	f.conn = f.addConnection(t, "fake-test", domain.EnvTest)

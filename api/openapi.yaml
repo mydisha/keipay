@@ -231,7 +231,9 @@ info:
     gets one payment report, written in the same transaction as the
     status change: app, connection, currency, `gross`, `fee`, `net`,
     `status`, `paid_at`, `settled_at`. `fee` and `net` are `null` when
-    the gateway did not report a fee. Amounts are integers in the
+    the gateway did not report a fee. A reconciliation run that matches
+    the payment with exactly one gateway transaction fills in that
+    transaction's fee. Amounts are integers in the
     currency's minor unit (IDR: whole rupiah). `GET /admin/payment-reports`
     lists them, `GET /admin/payment-reports/summary` totals them per app,
     connection, currency and period, and `GET /admin/payment-reports/export`
@@ -256,6 +258,12 @@ info:
     run: items are keyed by reference, so nothing is duplicated; an item
     whose result did not change keeps its resolution, an item whose result
     changed is unresolved again, and items no longer found are removed.
+
+    **Fees learned from the gateway.** When an item is `matched`, KeiPay
+    does not know the payment's fee, and the reference has exactly one
+    gateway transaction with a fee, the run stores that fee (and the net)
+    on the payment report. The item keeps the values it was compared
+    with; the next re-run compares the stored fee.
 
     **Resolution.** An item that is not `matched` can be resolved with a
     note (`POST /admin/reconciliation-items/{id}/resolve`); this is

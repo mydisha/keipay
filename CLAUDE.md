@@ -159,6 +159,9 @@ postgres implementation → migration in `backend/migrations/` → wire in main.
    items (`rci_…`) are upserted per `(run_id, reference)`, so a re-run of the
    same run never duplicates them. `ledger_entries` is a read-only leftover;
    `payment_reports` replaced it. CSV exports stream from a Postgres cursor.
+   A run fills a report's unknown fee from the gateway when the item is
+   `matched` with exactly one gateway transaction (`FillFee`, only while
+   `fee IS NULL`).
 
 ## Conventions
 

@@ -86,6 +86,18 @@ func (r *PaymentReportRepo) Upsert(ctx context.Context, rep *domain.PaymentRepor
 	return nil
 }
 
+// FillFee only writes a report whose fee is still NULL, so a fee a callback
+// stored meanwhile is never overwritten.
+func (r *PaymentReportRepo) FillFee(ctx context.Context, paymentID, fee int64) (bool, error) {
+	const q = `UPDATE payment_reports SET fee = $2, net = gross - $2, updated_at = now()
+		WHERE payment_id = $1 AND fee IS NULL`
+	ct, err := conn(ctx, r.db).Exec(ctx, q, paymentID, fee)
+	if err != nil {
+		return false, fmt.Errorf("fill payment report fee: %w", err)
+	}
+	return ct.RowsAffected() == 1, nil
+}
+
 // reportFilters builds the WHERE clause of f.
 func reportFilters(f domain.PaymentReportFilter) *filters {
 	w := &filters{}

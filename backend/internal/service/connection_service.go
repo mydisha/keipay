@@ -38,6 +38,23 @@ const (
 	TestMessageUnexpected  = "The test failed unexpectedly."
 )
 
+// WarningTransactionsUnavailable is the warning of a passed test whose
+// credentials the gateway refuses for listing transactions, which
+// reconciliation needs.
+const WarningTransactionsUnavailable = "transactions_unavailable"
+
+// warningMessages are the fixed messages of the test warnings.
+var warningMessages = map[string]string{
+	WarningTransactionsUnavailable: "The provider refused to list transactions with these credentials, so reconciliation runs will fail. Give the key read access to transactions.",
+}
+
+// ConnectionTestWarning is something a passed test found that will make a
+// later feature fail.
+type ConnectionTestWarning struct {
+	Code    string
+	Message string
+}
+
 // DefaultConnectionTestTimeout bounds one credential test.
 const DefaultConnectionTestTimeout = 10 * time.Second
 
@@ -160,6 +177,7 @@ type ConnectionDetail struct {
 type ConnectionTestResult struct {
 	Result   domain.ConnectionTestStatus
 	Message  string
+	Warnings []ConnectionTestWarning
 	TestedAt time.Time
 	Detail   *ConnectionDetail
 }
@@ -688,6 +706,14 @@ func (s *ConnectionService) Test(ctx context.Context, publicID string) (*Connect
 		s.log.Error("connection test failed unexpectedly",
 			zap.String("connection_id", c.PublicID), zap.String("provider", c.Provider), zap.Error(testErr))
 	}
+	warnings := []ConnectionTestWarning{}
+	if result == domain.ConnectionTestOK {
+		warnings = s.testWarnings(ctx, c, prov, acc)
+	}
+	warningCodes := make([]string, 0, len(warnings))
+	for _, w := range warnings {
+		warningCodes = append(warningCodes, w.Code)
+	}
 
 	testedAt := s.timestamp()
 	var stored *domain.Connection
@@ -704,7 +730,7 @@ func (s *ConnectionService) Test(ctx context.Context, publicID string) (*Connect
 			return err
 		}
 		return s.audit.Record(ctx, ActionConnectionTest, connectionTarget(stored), nil,
-			map[string]any{"result": result, "tested_at": testedAt})
+			map[string]any{"result": result, "tested_at": testedAt, "warnings": warningCodes})
 	})
 	if err != nil {
 		return nil, fmt.Errorf("store connection test: %w", err)
@@ -713,7 +739,30 @@ func (s *ConnectionService) Test(ctx context.Context, publicID string) (*Connect
 	if err != nil {
 		return nil, err
 	}
-	return &ConnectionTestResult{Result: result, Message: message, TestedAt: testedAt, Detail: d}, nil
+	return &ConnectionTestResult{Result: result, Message: message, Warnings: warnings, TestedAt: testedAt, Detail: d}, nil
+}
+
+// testWarnings checks the features beyond checkout that the provider
+// declares. A provider that lists transactions is asked for one page of the
+// last hour; only a refusal is a warning, since anything else may work on
+// the next try.
+func (s *ConnectionService) testWarnings(ctx context.Context, c *domain.Connection, prov provider.Provider, acc provider.Account) []ConnectionTestWarning {
+	warnings := []ConnectionTestWarning{}
+	lister, ok := prov.(provider.TransactionLister)
+	if !ok || !prov.Capabilities().ListTransactions {
+		return warnings
+	}
+	to := s.now().UTC()
+	tctx, cancel := context.WithTimeout(ctx, s.testTimeout)
+	defer cancel()
+	_, err := lister.ListTransactions(tctx, acc, provider.TransactionQuery{From: to.Add(-time.Hour), To: to, Limit: 1})
+	if errors.Is(err, provider.ErrRejected) {
+		s.log.Info("connection cannot list transactions",
+			zap.String("connection_id", c.PublicID), zap.String("provider", c.Provider), zap.Error(err))
+		warnings = append(warnings, ConnectionTestWarning{Code: WarningTransactionsUnavailable,
+			Message: warningMessages[WarningTransactionsUnavailable]})
+	}
+	return warnings
 }
 
 // testOutcome turns a TestCredentials error into the stored result and its

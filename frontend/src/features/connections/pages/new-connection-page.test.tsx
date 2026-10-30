@@ -10,10 +10,11 @@ const DETAIL = `GET /admin/connections/${CON_ID}`;
 const TEST = `POST /admin/connections/${CON_ID}/test`;
 const TESTED_AT = "2026-01-01T00:05:00Z";
 
-function testResponse(result: "ok" | "failed", message: string) {
+function testResponse(result: "ok" | "failed", message: string, warnings: { code: string; message: string }[] = []) {
   return {
     result,
     message,
+    warnings,
     tested_at: TESTED_AT,
     connection: connection({
       last_test_status: result,
@@ -205,6 +206,21 @@ describe("Add connection wizard", () => {
       credentials: { callback_token: "new-token-123" },
     });
     expect(await screen.findByTestId("test-outcome")).toHaveTextContent("Passed");
+  });
+
+  it("shows the warnings of a passed test", async () => {
+    mockApi({
+      "GET /admin/providers": { data: [provider()] },
+      [DETAIL]: { connection: connection() },
+      [TEST]: testResponse("ok", "Credentials accepted.", [
+        { code: "transactions_unavailable", message: "The provider refused to list transactions with these credentials, so reconciliation runs will fail. Give the key read access to transactions." },
+      ]),
+    });
+    renderApp(`/connections/new?connection=${CON_ID}&step=3`);
+    const outcome = await screen.findByTestId("test-outcome");
+    expect(outcome).toHaveTextContent("Passed");
+    expect(within(outcome).getByTestId("test-warning")).toHaveTextContent("reconciliation runs will fail");
+    expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
   });
 
   it("resumes on the step in the URL after a reload", async () => {

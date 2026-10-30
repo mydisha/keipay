@@ -450,6 +450,9 @@ can reach first: callback URLs are built from it.
    **webhook verification token** (Settings → Webhooks). KeiPay encrypts
    them and from then on shows only their last 4 characters.
 3. KeiPay **tests** the credentials right away. Fix and retest if needed.
+   A key that passes but cannot list transactions passes with a warning:
+   payments work, reconciliation runs will fail until the key can read
+   transactions.
 4. Copy the connection's **callback URL**,
    `https://<your-host>/webhooks/xendit/con_…`, into Xendit → Settings →
    Webhooks → Invoices paid. Each connection has its own URL and is

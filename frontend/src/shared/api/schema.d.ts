@@ -1004,7 +1004,13 @@ export interface paths {
          *     error: `200` with `result` `ok` or `failed` and a short `message`
          *     that never contains credentials or raw gateway responses. Stores
          *     `last_tested_at`, `last_test_status` and `last_test_error` and
-         *     records `connection.test`. Works on disabled connections too.
+         *     records `connection.test` (with the warning codes). Works on
+         *     disabled connections too.
+         *
+         *     When the credentials pass and the provider can list transactions
+         *     (`list_transactions`), KeiPay also asks for one page of the last
+         *     hour. A refusal adds the warning `transactions_unavailable`; the
+         *     result stays `ok`, since payments work.
          */
         post: operations["testConnection"];
         delete?: never;
@@ -2285,10 +2291,23 @@ export interface components {
             /** @description Pass as `cursor` to get the next page; `null` on the last page. */
             next_cursor: string | null;
         };
+        ConnectionTestWarning: {
+            /**
+             * @description `transactions_unavailable`: the gateway refused to list
+             *     transactions with these credentials, so reconciliation runs
+             *     will fail. More codes may be added.
+             * @example transactions_unavailable
+             */
+            code: string;
+            /** @description Fixed, sanitized text; never a gateway answer. */
+            message: string;
+        };
         ConnectionTestResponse: {
             result: components["schemas"]["ConnectionTestStatus"];
             /** @description Short, sanitized outcome, e.g. "Credentials accepted." or "The provider rejected the credentials (HTTP 401)." */
             message: string;
+            /** @description Problems a passed test found that make a later feature fail. Empty when the test failed. Not stored on the connection. */
+            warnings: components["schemas"]["ConnectionTestWarning"][];
             /** Format: date-time */
             tested_at: string;
             connection: components["schemas"]["Connection"];

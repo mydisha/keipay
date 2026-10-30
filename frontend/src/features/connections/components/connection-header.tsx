@@ -54,6 +54,7 @@ export function ConnectionHeader({ connection, providerName }: { connection: Con
       onSuccess: (result) => {
         if (result.result === "ok") toast.success(strings.connections.testPassed(result.message));
         else toast.error(strings.connections.testFailed(result.message));
+        for (const w of result.warnings) toast.warning(w.message);
       },
       onError: (error) => toast.error(errorMessage(error, strings.connections.testRequestFailed)),
     });

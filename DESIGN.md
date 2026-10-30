@@ -84,9 +84,10 @@ Status tones are ledger stamps. Each has a soft tint, an ink and a border:
 | neutral | `neutral`, `neutral-foreground`, `neutral-border` | `EXPIRED` payment, disabled, inactive, connection `Not tested`, anything unknown |
 
 Test mode: `test-mode`, `test-mode-foreground`, `test-mode-border` (amber). Use
-them only for the test-mode banner, the switch in the top bar (which turns
-amber while test mode is on) and the `Test` environment badge, so "amber"
-always means test.
+them only for the test-mode banner and the `Test` environment badge. The
+switch in the top bar turns its label and track `warning-foreground` (the
+darker amber, 3:1 against the bar) while test mode is on, so "amber" always
+means test.
 
 Every text/background pair is at least 4.5:1 in both themes and every
 control border, focus ring and chart colour at least 3:1 against the card.
@@ -184,7 +185,7 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 | `EnvironmentBadge` (`features/apps`) | An app's or a connection's environment as text: `Test` in the amber test-mode tokens, `Live` in neutral card colours. Shown next to every app name (`AppLabel` in payments, webhooks and reconciliation rows) and every connection name. |
 | `SchemaFields` (`features/connections`) | Every provider form field, rendered from the `SchemaField` list the server sends. See Connections. |
 | `WizardStepper` (`features/connections`) | The numbered steps of a multi-step page. See Wizard pattern. |
-| toasts (`sonner`) | Outcome of an action the user just took: "Delivery queued for one more attempt", "Couldn't replay". Never for load errors (use `ErrorState`). |
+| toasts (`sonner`) | Outcome of an action the user just took: "Delivery queued for one more attempt", "Couldn't replay". Never for load errors (use `ErrorState`). Popover paper with `shadow-lift`, IBM Plex, a 16px lucide icon tinted by type (success, danger, warning; info in muted ink), the close button inside the top right corner. Bottom right; full width with a 16px gutter on a phone. |
 
 ## Dense table pattern
 
@@ -390,12 +391,13 @@ wizard is a page, never a dialog, so it works at 375px and survives a reload.
 
 ## Auth pages
 
-Setup, sign-in and change password share `AuthLayout`: one sheet of paper
-centred on the desk (`sidebar` tone), the wordmark above it, and inside the
-sheet the `h1`, one sentence and the form. Nothing else competes with the
-form: no brand panel, tagline, illustration or background pattern. A
-skeleton of that layout shows while the page's guard decides where the
-visitor belongs.
+Setup, sign-in and change password share `AuthLayout`: one sheet of paper on
+the desk (`sidebar` tone, 12px inset from `sm` up; the whole screen on a
+phone). Along its top edge sit the wordmark and the theme menu; in the middle,
+384px wide, the centred `h1`, one sentence and the form. Nothing else
+competes with the form: no brand panel, tagline, illustration or background
+pattern. A skeleton of that layout shows while the page's guard decides where
+the visitor belongs.
 
 | Page | Fields | States |
 |---|---|---|
@@ -445,21 +447,23 @@ Enable is a plain confirm. Your own row has no Disable or Reset password.
   Webhooks, Payments, Reconciliation) in one list, and Settings apart at the
   bottom. No group labels. The active link sits on a darker desk tint in ink
   with its icon in pine. Collapsed, every link has a tooltip.
-- Top bar: command palette button (⌘K / Ctrl+K), the Test/Live switch (the
-  area around it turns amber while test mode is on), theme menu (light,
+- Top bar: command palette button (⌘K / Ctrl+K), the Test/Live switch (its
+  label and track turn amber while test mode is on; no box around it), theme menu (light,
   dark, system), account menu behind the initials (name, email and role label
   at the top; account settings, change password, sign out). Sign out calls
   `POST /admin/logout`, clears every cached query and goes to `/login`; if it
   fails the user stays signed in and sees a toast.
-- Test mode shows a slim amber banner on every page. The switch sets the
+- Test mode shows one amber line under the top bar on every page: "Test mode",
+  a hairline, then which screens follow the switch and that Payments still
+  show every environment (only the Payments sentence on a phone). The switch sets the
   starting environment filter of the Apps and Connections lists (and resets
   it whenever the switch changes) and the environment default of the
   create-app dialog and the add-connection wizard. The Webhooks Outbound and
   Inbound lists start at the mode too (`environment` chip with an explicit
   "All"; choosing All puts `environment=all` in the URL, no `environment`
-  means "follow the switch"). The dashboard follows it too. Payments and
-  reconciliation do not follow it yet, and the banner says so instead of
-  claiming that data is filtered.
+  means "follow the switch"). The dashboard and reconciliation follow it too.
+  Payments do not follow it yet, and the banner says so instead of claiming
+  that data is filtered.
 - The palette navigates to every page (plus Users with `users:manage`),
   switches theme and mode, and opens a pasted webhook record id: `dlv_` and
   `inb_` open that delivery or inbound webhook on the Webhooks page, `evt_`

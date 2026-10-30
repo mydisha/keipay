@@ -1,4 +1,4 @@
-import { PanelRightOpenIcon, PlayIcon, ScaleIcon } from "lucide-react";
+import { PanelRightOpenIcon, PlayIcon } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { usePermission } from "@/features/auth/components/can";
@@ -19,7 +19,7 @@ import { RunConnection } from "./run-connection";
 import { RunDialog } from "./run-dialog";
 
 function UnresolvedCount({ run }: { run: ReconciliationRun }) {
-  if (!run.summary) return <span className="text-muted-foreground">{strings.common.none}</span>;
+  if (!run.summary) return <span className="text-muted-foreground">{strings.common.notYet}</span>;
   return <span className="tabular-nums">{run.summary.unresolved.toLocaleString("id-ID")}</span>;
 }
 
@@ -28,7 +28,7 @@ const columns: DataColumn<ReconciliationRun>[] = [
     id: "id",
     header: strings.reconciliation.run,
     card: "title",
-    className: "max-w-60",
+    className: "max-w-52",
     cell: (run) => <IdText value={run.id} label={strings.reconciliation.runId} />,
   },
   { id: "connection", header: strings.reconciliation.connection, className: "max-w-56", cell: (run) => <RunConnection run={run} /> },
@@ -115,7 +115,6 @@ export function RunsTab({ search }: { search: ReconciliationSearch }) {
         emptyState={
           filtered ? (
             <EmptyState
-              icon={ScaleIcon}
               headingLevel={3}
               title={strings.reconciliation.runsFilteredTitle}
               description={strings.reconciliation.runsFilteredBody}
@@ -127,7 +126,6 @@ export function RunsTab({ search }: { search: ReconciliationSearch }) {
             />
           ) : (
             <EmptyState
-              icon={ScaleIcon}
               headingLevel={3}
               title={strings.reconciliation.runsEmptyTitle}
               description={

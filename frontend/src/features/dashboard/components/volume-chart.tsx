@@ -1,18 +1,20 @@
-import { BarChartIcon } from "lucide-react";
 import type { CSSProperties } from "react";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import type { TooltipPayloadEntry } from "recharts";
 import { formatDayWIB, formatMoney, formatNumber, parseDate } from "@/shared/lib/format";
 import { strings } from "@/shared/lib/strings";
-import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "@/shared/ui/card";
 import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, type ChartConfig } from "@/shared/ui/chart";
 import { Chip } from "@/shared/ui/chip";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { rangeDays, type Dashboard, type DashboardSeriesPoint } from "../api/dashboard";
 
+// Slate for every payment created, pine for the ones that succeeded: the signal marks the outcome that matters.
+const CREATED = "var(--chart-3)";
+const SUCCESSFUL = "var(--chart-1)";
+
 const chartConfig: ChartConfig = {
-  created: { label: strings.dashboard.created, color: "var(--chart-5)" },
-  successful: { label: strings.dashboard.successful, color: "var(--chart-1)" },
+  created: { label: strings.dashboard.created, color: CREATED },
+  successful: { label: strings.dashboard.successful, color: SUCCESSFUL },
 };
 
 interface DayRow {
@@ -40,8 +42,8 @@ function VolumeTooltip({ active, payload, label }: { active?: boolean; payload?:
     <div className="grid min-w-40 gap-1.5 rounded-md border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-md">
       <div className="font-medium">{typeof label === "string" ? label : row.day}</div>
       <div className="grid gap-1">
-        <Row label={strings.dashboard.created} value={formatNumber(row.created)} color="var(--chart-5)" />
-        <Row label={strings.dashboard.successful} value={formatNumber(row.successful)} color="var(--chart-1)" />
+        <Row label={strings.dashboard.created} value={formatNumber(row.created)} color={CREATED} />
+        <Row label={strings.dashboard.successful} value={formatNumber(row.successful)} color={SUCCESSFUL} />
         {row.gross.map((entry) => (
           <Row key={entry.currency} label={`${strings.dashboard.gross} ${entry.currency}`} value={formatMoney(entry.amount, entry.currency)} />
         ))}
@@ -68,7 +70,10 @@ interface VolumeChartProps {
   onCurrencyChange: (currency: string) => void;
 }
 
-/** Created versus successful payments per day, with the gross per currency in the tooltip and a text table for screen readers. */
+/**
+ * Created versus successful payments per day, with the gross per currency in the tooltip and a text
+ * table for screen readers. It sits under the figures in the same surface, so it has no card of its own.
+ */
 export function VolumeChart({ dashboard, currencies, currency, onCurrencyChange }: VolumeChartProps) {
   const days = rangeDays(dashboard.range);
   const series = dashboard.payments.series;
@@ -76,40 +81,41 @@ export function VolumeChart({ dashboard, currencies, currency, onCurrencyChange 
   const empty = rows.every((row) => row.created === 0);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{strings.dashboard.volumeTitle}</CardTitle>
-        <CardDescription>{strings.dashboard.volumeBody}</CardDescription>
+    <section aria-labelledby="volume-heading" className="grid grid-cols-1 gap-4 p-4 md:p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 id="volume-heading" className="text-sm font-medium">
+          {strings.dashboard.volumeTitle}
+        </h2>
         {currencies.length > 1 && (
-          <CardAction role="group" aria-label={strings.dashboard.currencyFilter}>
+          <div role="group" aria-label={strings.dashboard.currencyFilter} className="flex flex-wrap gap-1.5">
             {currencies.map((code) => (
               <Chip key={code} pressed={code === currency} onClick={() => onCurrencyChange(code)}>
                 {code}
               </Chip>
             ))}
-          </CardAction>
+          </div>
         )}
-      </CardHeader>
-      <CardContent>
+      </div>
+      <div className="min-w-0">
         {empty ? (
           <EmptyState
-            icon={BarChartIcon}
+            variant="inline"
             headingLevel={3}
             title={strings.dashboard.volumeEmptyTitle}
             description={strings.dashboard.volumeEmptyBody}
-            className="border-0 bg-transparent py-10"
+            className="py-6"
           />
         ) : (
           <>
             <ChartContainer config={chartConfig} label={strings.dashboard.chartLabel(days)} className="h-64 w-full">
-              <BarChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} barCategoryGap="20%">
-                <CartesianGrid vertical={false} strokeDasharray="3 3" />
+              <BarChart data={rows} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} barCategoryGap="24%">
+                <CartesianGrid vertical={false} />
                 <XAxis dataKey="day" tickLine={false} axisLine={false} tickMargin={8} minTickGap={16} />
                 <YAxis allowDecimals={false} tickLine={false} axisLine={false} width={32} />
                 <ChartTooltip cursor={{ fillOpacity: 0.4 }} content={<VolumeTooltip />} />
                 <ChartLegend content={<ChartLegendContent />} />
-                <Bar dataKey="created" fill="var(--color-created)" radius={[3, 3, 0, 0]} maxBarSize={28} isAnimationActive={false} />
-                <Bar dataKey="successful" fill="var(--color-successful)" radius={[3, 3, 0, 0]} maxBarSize={28} isAnimationActive={false} />
+                <Bar dataKey="created" fill="var(--color-created)" radius={[2, 2, 0, 0]} maxBarSize={24} isAnimationActive={false} />
+                <Bar dataKey="successful" fill="var(--color-successful)" radius={[2, 2, 0, 0]} maxBarSize={24} isAnimationActive={false} />
               </BarChart>
             </ChartContainer>
             <table className="sr-only">
@@ -141,7 +147,7 @@ export function VolumeChart({ dashboard, currencies, currency, onCurrencyChange 
             </table>
           </>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }

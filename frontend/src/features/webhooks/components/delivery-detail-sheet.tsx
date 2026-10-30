@@ -1,4 +1,4 @@
-import { RotateCwIcon, SearchXIcon } from "lucide-react";
+import { RotateCwIcon } from "lucide-react";
 import { useId, useState } from "react";
 import { toast } from "sonner";
 import { usePermission } from "@/features/auth/components/can";
@@ -58,11 +58,11 @@ function AttemptBody({ attempt }: { attempt: WebhookDeliveryAttempt }) {
         </span>
       </div>
       {attempt.error && <p className="text-sm text-danger-foreground">{attempt.error}</p>}
-      <details className="rounded-md border bg-card">
-        <summary className="cursor-pointer px-2 py-1.5 text-sm font-medium max-md:min-h-11 max-md:py-3">
+      <details className="border-t">
+        <summary className="cursor-pointer py-1.5 text-sm font-medium max-md:min-h-11 max-md:py-3">
           {strings.webhooks.requestHeaders}
         </summary>
-        <div className="overflow-x-auto border-t">
+        <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
               <tr className="text-left text-muted-foreground">
@@ -85,18 +85,18 @@ function AttemptBody({ attempt }: { attempt: WebhookDeliveryAttempt }) {
           </table>
         </div>
       </details>
-      <details className="rounded-md border bg-card">
-        <summary className="cursor-pointer px-2 py-1.5 text-sm font-medium max-md:min-h-11 max-md:py-3">
+      <details className="border-t">
+        <summary className="cursor-pointer py-1.5 text-sm font-medium max-md:min-h-11 max-md:py-3">
           {strings.webhooks.responseBody}
         </summary>
-        <div className="border-t">
+        <div>
           {attempt.response_body ? (
-            <pre className="max-h-60 overflow-auto p-2 font-mono text-xs whitespace-pre-wrap break-all">{attempt.response_body}</pre>
+            <pre className="max-h-60 overflow-auto rounded-md bg-muted p-2 font-mono text-xs whitespace-pre-wrap break-all">{attempt.response_body}</pre>
           ) : (
-            <p className="p-2 text-xs text-muted-foreground">{strings.webhooks.emptyResponseBody}</p>
+            <p className="pb-2 text-xs text-muted-foreground">{strings.webhooks.emptyResponseBody}</p>
           )}
           {attempt.response_body_truncated && (
-            <p className="border-t px-2 py-1.5 text-xs text-muted-foreground">{strings.webhooks.responseTruncated}</p>
+            <p className="py-1.5 text-xs text-muted-foreground">{strings.webhooks.responseTruncated}</p>
           )}
         </div>
       </details>
@@ -231,6 +231,7 @@ function DeliveryDetail({ delivery }: { delivery: WebhookDeliveryDetail }) {
       <DetailSection title={strings.webhooks.attemptLog}>
         {delivery.attempt_log.length === 0 ? (
           <EmptyState
+            variant="inline"
             headingLevel={3}
             className="py-6"
             title={strings.webhooks.noAttempts}
@@ -252,7 +253,7 @@ export function DeliveryDetailSheet({ id, onClose }: { id: string | null; onClos
   else if (delivery.isError)
     body = isNotFound(delivery.error) ? (
       <EmptyState
-        icon={SearchXIcon}
+        variant="inline"
         headingLevel={3}
         title={strings.webhooks.deliveryNotFoundTitle}
         description={strings.webhooks.deliveryNotFoundBody}

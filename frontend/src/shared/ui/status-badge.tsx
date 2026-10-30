@@ -42,7 +42,7 @@ interface StatusBadgeProps {
   className?: string;
 }
 
-/** Status as a text label; colour only reinforces it. */
+/** Status as a text label stamped on its tint, like a ledger stamp; colour only reinforces the text. */
 export function StatusBadge({ status, label: labelOverride, tone: toneOverride, className }: StatusBadgeProps) {
   const tone = toneOverride ?? statusTone(status);
   const label = labelOverride ?? strings.status[status] ?? status;
@@ -50,12 +50,11 @@ export function StatusBadge({ status, label: labelOverride, tone: toneOverride, 
     <span
       data-tone={tone}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap",
+        "inline-flex items-center rounded-sm border px-1.5 py-px text-xs font-medium whitespace-nowrap",
         toneClasses[tone],
         className,
       )}
     >
-      <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
       {label}
     </span>
   );

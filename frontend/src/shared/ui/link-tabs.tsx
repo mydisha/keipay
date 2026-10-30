@@ -21,7 +21,7 @@ export function LinkTabs({ label, tabs }: { label: string; tabs: LinkTab[] }) {
               end
               className={({ isActive }) =>
                 cn(
-                  "relative inline-flex h-10 items-center justify-center rounded-t-md px-3 text-sm font-medium whitespace-nowrap transition-colors outline-none after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:rounded-full after:bg-primary after:opacity-0 after:transition-opacity hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 max-md:h-11",
+                  "relative inline-flex h-10 items-center justify-center rounded-t-md px-3 text-sm font-medium whitespace-nowrap transition-colors outline-none after:absolute after:inset-x-0 after:bottom-0 after:h-0.5 after:rounded-full after:bg-brand after:opacity-0 after:transition-opacity hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 max-md:h-11",
                   isActive && "text-foreground after:opacity-100",
                 )
               }

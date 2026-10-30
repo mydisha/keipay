@@ -23,7 +23,8 @@ describe("App detail", () => {
     });
     renderApp(`/apps/${APP_ID}`);
     expect(await screen.findByRole("heading", { level: 1, name: "Demo App" })).toBeInTheDocument();
-    expect(screen.getAllByText("Test")[0]).toHaveAttribute("data-environment", "test");
+    // The top bar also says "Test" on the mode switch, so look inside the page.
+    expect(within(screen.getByRole("main")).getAllByText("Test")[0]).toHaveAttribute("data-environment", "test");
     expect(screen.getAllByText("Active").length).toBeGreaterThan(0);
     expect(screen.getAllByText(APP_ID).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: `Copy App ID ${APP_ID}` })).toBeInTheDocument();

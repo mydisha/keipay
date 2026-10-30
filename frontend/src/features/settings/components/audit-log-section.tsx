@@ -1,4 +1,3 @@
-import { ScrollTextIcon } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { strings } from "@/shared/lib/strings";
@@ -73,7 +72,6 @@ export function AuditLogSection() {
         resetKey={resetKey}
         emptyState={
           <EmptyState
-            icon={ScrollTextIcon}
             headingLevel={3}
             title={strings.settings.auditEmptyTitle}
             description={strings.settings.auditEmptyBody}

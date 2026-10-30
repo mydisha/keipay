@@ -1,4 +1,3 @@
-import { RouteIcon } from "lucide-react";
 import { strings } from "@/shared/lib/strings";
 import { EmptyState } from "@/shared/ui/empty-state";
 
@@ -6,6 +5,6 @@ import { EmptyState } from "@/shared/ui/empty-state";
 
 export function AppRoutingTab() {
   return (
-    <EmptyState icon={RouteIcon} title={strings.apps.routingEmptyTitle} description={strings.apps.routingEmptyBody} />
+    <EmptyState title={strings.apps.routingEmptyTitle} description={strings.apps.routingEmptyBody} />
   );
 }

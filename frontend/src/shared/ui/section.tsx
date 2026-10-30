@@ -17,9 +17,9 @@ interface SectionHeaderProps {
 export function SectionHeader({ id, title, description, actions, headingLevel = 2, className }: SectionHeaderProps) {
   const Heading = headingLevel === 2 ? "h2" : "h3";
   return (
-    <div className={cn("flex flex-wrap items-start justify-between gap-3", className)}>
-      <div className="min-w-0 space-y-1">
-        <Heading id={id} className={headingLevel === 2 ? "text-base font-semibold" : "text-sm font-semibold"}>
+    <div className={cn("flex flex-wrap items-end justify-between gap-3", className)}>
+      <div className="min-w-0 space-y-0.5">
+        <Heading id={id} className={headingLevel === 2 ? "text-[0.9375rem] font-medium leading-[1.375rem]" : "text-sm font-medium"}>
           {title}
         </Heading>
         {description && <p className="text-sm text-muted-foreground">{description}</p>}

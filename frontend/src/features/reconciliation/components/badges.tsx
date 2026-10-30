@@ -1,31 +1,17 @@
-import { CircleCheckIcon, CircleXIcon, ClockIcon, Loader2Icon, type LucideIcon } from "lucide-react";
 import { strings } from "@/shared/lib/strings";
-import { cn } from "@/shared/lib/utils";
-import { StatusBadge, toneClasses, type StatusTone } from "@/shared/ui/status-badge";
+import { StatusBadge, type StatusTone } from "@/shared/ui/status-badge";
 import type { ReconciliationItem, ReconciliationResult, RunStatus } from "../api/runs";
 
-const RUN_STATUS: Record<RunStatus, { tone: StatusTone; icon: LucideIcon; spin?: boolean }> = {
-  queued: { tone: "neutral", icon: ClockIcon },
-  running: { tone: "info", icon: Loader2Icon, spin: true },
-  succeeded: { tone: "success", icon: CircleCheckIcon },
-  failed: { tone: "danger", icon: CircleXIcon },
+const RUN_TONES: Record<RunStatus, StatusTone> = {
+  queued: "neutral",
+  running: "info",
+  succeeded: "success",
+  failed: "danger",
 };
 
-/** A run's status as text with an icon. */
+/** A run's status as a text stamp. */
 export function RunStatusBadge({ status }: { status: RunStatus }) {
-  const { tone, icon: Icon, spin } = RUN_STATUS[status];
-  return (
-    <span
-      data-tone={tone}
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap",
-        toneClasses[tone],
-      )}
-    >
-      <Icon aria-hidden="true" className={cn("size-3.5", spin && "animate-spin motion-reduce:animate-none")} />
-      {strings.reconciliation.runStatus[status] ?? status}
-    </span>
-  );
+  return <StatusBadge status={status} label={strings.reconciliation.runStatus[status] ?? status} tone={RUN_TONES[status]} />;
 }
 
 const RESULT_TONES: Record<ReconciliationResult, StatusTone> = {

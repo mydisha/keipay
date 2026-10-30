@@ -1,4 +1,4 @@
-import { PlugIcon, PlusIcon } from "lucide-react";
+import { PlusIcon } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { usePermission } from "@/features/auth/components/can";
@@ -148,7 +148,6 @@ export function ConnectionsPage() {
   if (environment !== null && status === null && provider === null) {
     emptyState = (
       <EmptyState
-        icon={PlugIcon}
         title={strings.connections.emptyEnvironmentTitle(environment)}
         description={strings.connections.emptyEnvironmentBody}
         action={
@@ -164,7 +163,6 @@ export function ConnectionsPage() {
   } else if (environment !== null || status !== null || provider !== null) {
     emptyState = (
       <EmptyState
-        icon={PlugIcon}
         title={strings.connections.emptyFilteredTitle}
         description={strings.connections.emptyFilteredBody}
         action={
@@ -177,7 +175,6 @@ export function ConnectionsPage() {
   } else {
     emptyState = (
       <EmptyState
-        icon={PlugIcon}
         title={strings.connections.emptyTitle}
         description={canWrite ? strings.connections.emptyBody : strings.connections.emptyBodyReadOnly}
         action={addButton}

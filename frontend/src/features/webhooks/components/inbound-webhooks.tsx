@@ -1,4 +1,4 @@
-import { InboxIcon, PanelRightOpenIcon } from "lucide-react";
+import { PanelRightOpenIcon } from "lucide-react";
 import { useId } from "react";
 import { Link } from "react-router";
 import { useConnectionFilterOptions, useProviders, providerLabel } from "@/features/connections/api/connections";
@@ -29,7 +29,7 @@ function inboundFilters(search: WebhooksSearch): InboundFilters {
 }
 
 function Mono({ value }: { value: string | null }) {
-  if (!value) return <span className="text-muted-foreground">{strings.common.none}</span>;
+  if (!value) return <span className="text-muted-foreground">{strings.common.unknown}</span>;
   return (
     <span className="block max-w-full truncate font-mono text-[0.8125rem]" title={value}>
       {value}
@@ -142,7 +142,6 @@ export function InboundWebhooks({ search }: { search: WebhooksSearch }) {
       emptyState={
         otherFilters ? (
           <EmptyState
-            icon={InboxIcon}
             title={strings.webhooks.inboundFilteredTitle}
             description={strings.webhooks.inboundFilteredBody}
             action={
@@ -153,7 +152,6 @@ export function InboundWebhooks({ search }: { search: WebhooksSearch }) {
           />
         ) : (
           <EmptyState
-            icon={InboxIcon}
             title={strings.webhooks.inboundEmptyTitle}
             description={
               filters.environment

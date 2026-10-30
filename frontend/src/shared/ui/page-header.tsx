@@ -14,11 +14,11 @@ interface PageHeaderProps {
 export function PageHeader({ title, description, eyebrow, actions, children }: PageHeaderProps) {
   return (
     <div className="grid gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0 space-y-1">
-          {eyebrow && <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{eyebrow}</p>}
-          <h1 className="text-xl font-semibold tracking-tight md:text-2xl">{title}</h1>
-          {description && <p className="text-sm text-muted-foreground">{description}</p>}
+          {eyebrow && <p className="text-sm text-muted-foreground">{eyebrow}</p>}
+          <h1 className="text-2xl font-medium tracking-[-0.02em] md:text-[1.75rem] md:leading-9">{title}</h1>
+          {description && <p className="max-w-prose text-sm text-muted-foreground">{description}</p>}
         </div>
         {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
       </div>

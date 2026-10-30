@@ -1,4 +1,3 @@
-import { SearchXIcon } from "lucide-react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { RequirePermission } from "@/features/auth/components/can";
@@ -67,7 +66,7 @@ function Wizard() {
 
   if (connectionId === null) {
     if (providers.data.length === 0) {
-      return <EmptyState icon={SearchXIcon} title={strings.connections.noProviders} />;
+      return <EmptyState title={strings.connections.noProviders} />;
     }
     return (
       <CreateConnectionSteps
@@ -85,7 +84,6 @@ function Wizard() {
     const notFound = isApiError(connection.error) && ["not_found", "invalid_request"].includes(connection.error.code);
     return notFound ? (
       <EmptyState
-        icon={SearchXIcon}
         title={strings.connections.notFoundTitle}
         description={strings.connections.notFoundBody}
         action={

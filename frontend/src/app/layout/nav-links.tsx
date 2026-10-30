@@ -1,9 +1,8 @@
 import { NavLink } from "react-router";
 import { strings } from "@/shared/lib/strings";
 import { cn } from "@/shared/lib/utils";
-import { Separator } from "@/shared/ui/separator";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
-import { navGroups, type NavItem } from "./nav";
+import { settingsItem, workItems, type NavItem } from "./nav";
 
 interface NavLinksProps {
   collapsed?: boolean;
@@ -19,13 +18,13 @@ function NavItemLink({ item, collapsed, onNavigate }: { item: NavItem; collapsed
       aria-label={collapsed ? item.label : undefined}
       className={({ isActive }) =>
         cn(
-          "relative flex h-9 items-center gap-3 rounded-md px-2.5 text-sm font-medium text-sidebar-foreground transition-colors outline-none before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full before:bg-sidebar-primary before:opacity-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 max-md:h-11",
-          isActive && "bg-sidebar-accent text-sidebar-primary before:opacity-100 hover:text-sidebar-primary",
+          "group/nav flex h-9 items-center gap-3 rounded-md px-2.5 text-sm text-muted-foreground transition-colors outline-none hover:text-sidebar-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 max-md:h-11",
+          isActive && "bg-sidebar-accent font-medium text-sidebar-accent-foreground",
           collapsed && "justify-center px-0",
         )
       }
     >
-      <item.icon className="size-4 shrink-0" aria-hidden="true" />
+      <item.icon className="size-4 shrink-0 group-aria-[current=page]/nav:text-sidebar-primary" strokeWidth={1.75} aria-hidden="true" />
       {!collapsed && <span className="truncate">{item.label}</span>}
     </NavLink>
   );
@@ -38,28 +37,22 @@ function NavItemLink({ item, collapsed, onNavigate }: { item: NavItem; collapsed
   );
 }
 
-/** The main navigation: one `nav`, its links grouped under small labels (a separator when collapsed). */
+/** The main navigation: the working pages, then Settings apart at the bottom of the same `nav`. */
 export function NavLinks({ collapsed = false, onNavigate }: NavLinksProps) {
   return (
-    <nav aria-label={strings.nav.label} className="grid gap-3">
-      {navGroups.map((group, index) => (
-        <div key={group.label} className="grid gap-0.5">
-          {collapsed ? (
-            index > 0 && <Separator className="mx-auto mb-1 w-6" />
-          ) : (
-            <span aria-hidden="true" className="px-2.5 pb-1 text-[0.6875rem] font-medium tracking-wider text-muted-foreground uppercase">
-              {group.label}
-            </span>
-          )}
-          <ul className="grid gap-0.5">
-            {group.items.map((item) => (
-              <li key={item.to}>
-                <NavItemLink item={item} collapsed={collapsed} onNavigate={onNavigate} />
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
+    <nav aria-label={strings.nav.label} className="flex h-full flex-col justify-between gap-6">
+      <ul className="grid gap-0.5">
+        {workItems.map((item) => (
+          <li key={item.to}>
+            <NavItemLink item={item} collapsed={collapsed} onNavigate={onNavigate} />
+          </li>
+        ))}
+      </ul>
+      <ul className="grid gap-0.5">
+        <li>
+          <NavItemLink item={settingsItem} collapsed={collapsed} onNavigate={onNavigate} />
+        </li>
+      </ul>
     </nav>
   );
 }

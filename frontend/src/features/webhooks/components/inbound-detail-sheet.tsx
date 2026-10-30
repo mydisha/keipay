@@ -1,4 +1,3 @@
-import { SearchXIcon } from "lucide-react";
 import { Link } from "react-router";
 import { providerLabel, useProviders } from "@/features/connections/api/connections";
 import { strings } from "@/shared/lib/strings";
@@ -18,8 +17,8 @@ import { ResultBadge, SignatureBadge } from "./inbound-badges";
 const linkClass =
   "rounded-sm text-link underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50";
 
-function MonoOrNone({ value, label }: { value: string | null; label: string }) {
-  return value ? <IdText value={value} label={label} /> : <span className="text-muted-foreground">{strings.common.none}</span>;
+function MonoOr({ value, label, fallback }: { value: string | null; label: string; fallback: string }) {
+  return value ? <IdText value={value} label={label} /> : <span className="text-muted-foreground">{fallback}</span>;
 }
 
 function RawBody({ inbound }: { inbound: InboundWebhookDetail }) {
@@ -31,7 +30,7 @@ function RawBody({ inbound }: { inbound: InboundWebhookDetail }) {
       ) : (
         <pre
           data-testid="raw-body-text"
-          className="max-h-80 overflow-auto rounded-md border bg-card p-3 font-mono text-xs whitespace-pre-wrap break-all"
+          className="max-h-80 overflow-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap break-all"
         >
           {inbound.raw_body}
         </pre>
@@ -68,20 +67,20 @@ function InboundDetail({ inbound }: { inbound: InboundWebhookDetail }) {
           <DateTimeText value={inbound.received_at} />
         </Fact>
         <Fact label={strings.webhooks.eventKey}>
-          <MonoOrNone value={inbound.event_key} label={strings.webhooks.eventKey} />
+          <MonoOr value={inbound.event_key} label={strings.webhooks.eventKey} fallback={strings.common.unknown} />
         </Fact>
         <Fact label={strings.webhooks.providerStatus}>
           {inbound.provider_status ? (
             <span className="font-mono text-[0.8125rem]">{inbound.provider_status}</span>
           ) : (
-            <span className="text-muted-foreground">{strings.common.none}</span>
+            <span className="text-muted-foreground">{strings.common.unknown}</span>
           )}
         </Fact>
         <Fact label={strings.webhooks.reference}>
-          <MonoOrNone value={inbound.reference} label={strings.webhooks.reference} />
+          <MonoOr value={inbound.reference} label={strings.webhooks.reference} fallback={strings.common.unknown} />
         </Fact>
         <Fact label={strings.webhooks.paymentId}>
-          <MonoOrNone value={inbound.payment_id} label={strings.webhooks.paymentId} />
+          <MonoOr value={inbound.payment_id} label={strings.webhooks.paymentId} fallback={strings.common.none} />
         </Fact>
         <Fact label={strings.webhooks.eventId}>
           {inbound.event ? (
@@ -109,7 +108,7 @@ export function InboundDetailSheet({ id, onClose }: { id: string | null; onClose
   else if (inbound.isError)
     body = isNotFound(inbound.error) ? (
       <EmptyState
-        icon={SearchXIcon}
+        variant="inline"
         headingLevel={3}
         title={strings.webhooks.inboundNotFoundTitle}
         description={strings.webhooks.inboundNotFoundBody}

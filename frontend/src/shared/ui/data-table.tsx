@@ -188,9 +188,9 @@ export function DataTable<T>({
     body = emptyState;
   } else if (isMobile) {
     body = (
-      <ul aria-label={caption} data-testid="data-cards" className="grid gap-3">
+      <ul aria-label={caption} data-testid="data-cards" className="divide-y rounded-xl border bg-card shadow-xs">
         {rows.map((row) => (
-          <li key={row.id}>
+          <li key={row.id} className="p-4">
             <RowCard columns={columns} row={row.original} />
           </li>
         ))}
@@ -203,14 +203,14 @@ export function DataTable<T>({
           <tr
             key={row.id}
             onClick={onRowClick ? () => onRowClick(row.original) : undefined}
-            className={cn("border-b transition-colors last:border-0 hover:bg-muted/40", onRowClick && "cursor-pointer")}
+            className={cn("h-11 border-b transition-colors last:border-0 hover:bg-muted/60", onRowClick && "cursor-pointer")}
           >
             {row.getVisibleCells().map((cell, index) => {
               const column = columns[index];
               return (
                 <td
                   key={cell.id}
-                  className={cn("px-3 py-2.5 align-middle", column?.align === "right" && "text-right", column?.className)}
+                  className={cn("px-3 py-2 align-middle first:pl-4 last:pr-4", column?.align === "right" && "text-right", column?.className)}
                   onClick={column?.card === "actions" ? (event) => event.stopPropagation() : undefined}
                 >
                   {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -296,17 +296,17 @@ function TableShell<T>({
   children: ReactNode;
 }) {
   return (
-    <div className="relative overflow-x-auto rounded-lg border bg-card shadow-xs">
+    <div className="relative overflow-x-auto rounded-xl border bg-card shadow-xs">
       <table className="w-full text-sm" aria-busy={busy || undefined}>
         <caption className="sr-only">{caption}</caption>
-        <thead className="border-b bg-muted/40">
+        <thead className="border-b">
           <tr>
             {columns.map((column) => (
               <th
                 key={column.id}
                 scope="col"
                 className={cn(
-                  "h-10 px-3 text-left text-xs font-medium whitespace-nowrap text-muted-foreground",
+                  "h-10 px-3 text-left text-xs font-normal whitespace-nowrap text-muted-foreground first:pl-4 last:pr-4",
                   column.align === "right" && "text-right",
                 )}
               >
@@ -326,7 +326,7 @@ function RowCard<T>({ columns, row }: { columns: DataColumn<T>[]; row: T }) {
   const actions = columns.filter((column) => column.card === "actions");
   const fields = columns.filter((column) => column.card === undefined);
   return (
-    <div className="grid gap-3 rounded-lg border bg-card p-4 shadow-xs">
+    <div className="grid gap-3">
       {title && <div className="min-w-0 font-medium">{title.cell(row)}</div>}
       <dl className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] items-center gap-x-4 gap-y-2 text-sm">
         {fields.map((column) => (
@@ -349,9 +349,9 @@ function RowCard<T>({ columns, row }: { columns: DataColumn<T>[]; row: T }) {
 
 function CardSkeleton({ count }: { count: number }) {
   return (
-    <div className="grid gap-3" aria-busy="true">
+    <div className="divide-y rounded-xl border bg-card shadow-xs" aria-busy="true">
       {Array.from({ length: count }, (_, i) => (
-        <div key={i} data-testid="skeleton-card" className="grid gap-2 rounded-lg border bg-card p-4 shadow-xs">
+        <div key={i} data-testid="skeleton-card" className="grid gap-2 p-4">
           <Skeleton className="h-4 w-1/2" />
           <Skeleton className="h-4 w-full" />
           <Skeleton className="h-4 w-3/4" />

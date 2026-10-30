@@ -1,5 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Loader2Icon, PlugIcon } from "lucide-react";
+import { Loader2Icon } from "lucide-react";
 import { useState } from "react";
 import { useForm, type Control } from "react-hook-form";
 import { Link, useNavigate } from "react-router";
@@ -101,7 +101,7 @@ function RunDialogBody({ create, onCancel }: { create: ReturnType<typeof useCrea
 function NoEligibleConnection({ mode, onCancel }: { mode: Mode; onCancel: () => void }) {
   return (
     <EmptyState
-      icon={PlugIcon}
+      variant="inline"
       headingLevel={3}
       className="py-8"
       title={strings.reconciliation.noEligibleTitle}

@@ -110,9 +110,10 @@ describe("Summary tab", () => {
     expect(rows[0]).toHaveTextContent("Rp300.000");
     expect(rows[0]).toHaveTextContent("Rp295.005");
     expect(rows[0]).toHaveTextContent("1 without fee");
-    // Amounts use the row's own currency; no connection shows a dash.
+    // Amounts use the row's own currency; a row without a connection says so in words.
     expect(rows[1]).toHaveTextContent("US$10,50");
-    expect(within(rows[1]!).getAllByText("—").length).toBeGreaterThan(0);
+    expect(within(rows[1]!).getByText("None")).toBeInTheDocument();
+    expect(rows[1]).not.toHaveTextContent("—");
     expect(rows[1]).not.toHaveTextContent("without fee");
 
     const reports = await screen.findByRole("table", { name: "Payments" });

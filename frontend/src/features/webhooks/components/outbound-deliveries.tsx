@@ -1,4 +1,4 @@
-import { PanelRightOpenIcon, WebhookIcon } from "lucide-react";
+import { PanelRightOpenIcon } from "lucide-react";
 import { Link } from "react-router";
 import { AppFilterSelect } from "@/features/apps/components/app-filter-select";
 import { AppLabel } from "@/features/apps/components/app-label";
@@ -84,7 +84,8 @@ export function OutboundDeliveries({ search }: { search: WebhooksSearch }) {
       align: "right",
       cell: (d) =>
         d.last_response_status === null ? (
-          <span className="text-muted-foreground">{strings.common.none}</span>
+          // No attempt yet, or attempts that never got an HTTP reply (timeouts, refused connections).
+          <span className="text-muted-foreground">{d.attempts === 0 ? strings.common.notYet : strings.common.none}</span>
         ) : (
           <span className="font-mono tabular-nums">{d.last_response_status}</span>
         ),
@@ -158,7 +159,6 @@ export function OutboundDeliveries({ search }: { search: WebhooksSearch }) {
       emptyState={
         otherFilters ? (
           <EmptyState
-            icon={WebhookIcon}
             title={strings.webhooks.outboundFilteredTitle}
             description={strings.webhooks.outboundFilteredBody}
             action={
@@ -169,7 +169,6 @@ export function OutboundDeliveries({ search }: { search: WebhooksSearch }) {
           />
         ) : (
           <EmptyState
-            icon={WebhookIcon}
             title={strings.webhooks.outboundEmptyTitle}
             description={
               filters.environment

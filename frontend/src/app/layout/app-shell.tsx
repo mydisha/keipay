@@ -44,7 +44,7 @@ export function AppShell() {
         <main
           id="main"
           tabIndex={-1}
-          className="mx-auto grid w-full max-w-7xl min-w-0 flex-1 content-start gap-6 px-4 py-6 outline-none md:px-6 md:py-8 lg:px-8 [&>*]:min-w-0"
+          className="mx-auto grid w-full max-w-7xl min-w-0 flex-1 content-start gap-8 px-4 py-8 outline-none md:px-6 md:py-10 lg:px-8 [&>*]:min-w-0"
         >
           <Outlet />
         </main>

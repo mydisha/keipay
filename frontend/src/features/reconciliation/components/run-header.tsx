@@ -112,10 +112,10 @@ export function RunHeader({ run, exportHref }: { run: ReconciliationRun; exportH
                 <DateTimeText value={run.created_at} />
               </Fact>
               <Fact label={strings.reconciliation.started}>
-                <DateTimeText value={run.started_at} />
+                <DateTimeText value={run.started_at} fallback={strings.common.notYet} />
               </Fact>
               <Fact label={strings.reconciliation.finished}>
-                <DateTimeText value={run.finished_at} />
+                <DateTimeText value={run.finished_at} fallback={strings.common.notYet} />
               </Fact>
             </FactList>
           </CardContent>

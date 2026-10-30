@@ -1,4 +1,4 @@
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { setTestCookie } from "@/test/cookies";
 import { me } from "@/test/fixtures";
@@ -96,12 +96,14 @@ describe("Login page", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("describes the product beside the form", async () => {
+  it("shows only the product name, one heading and the form", async () => {
     mockApi({ "GET /admin/me": signedOut });
     renderApp("/login");
-    const panel = await screen.findByRole("region", { name: "About KeiPay" });
-    expect(panel).toHaveTextContent("One API for every payment gateway.");
-    expect(panel).toHaveTextContent("KeiPay never holds funds.");
+    await screen.findByRole("button", { name: "Sign in" });
+    const main = screen.getByRole("main");
+    expect(within(main).getByText("KeiPay")).toBeInTheDocument();
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    // No brand panel or marketing column beside the form.
+    expect(main.querySelectorAll("section")).toHaveLength(0);
   });
 });

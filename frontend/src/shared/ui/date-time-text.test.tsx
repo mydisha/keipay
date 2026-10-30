@@ -32,9 +32,10 @@ describe("DateTimeText", () => {
     expect(tooltip).toHaveTextContent(/2 Jan 2026, 01\.30\.00 WIB/);
   });
 
-  it.each([null, "", "garbage"])("renders an em dash for %s", (value) => {
+  it.each([null, "", "garbage"])("says None in words for %s", (value) => {
     renderText(value);
-    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.getByText("None")).toBeInTheDocument();
+    expect(screen.queryByText("—")).not.toBeInTheDocument();
     expect(document.querySelector("time")).toBeNull();
   });
 });

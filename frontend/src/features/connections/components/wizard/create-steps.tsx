@@ -187,7 +187,7 @@ export function CreateConnectionSteps({ providers, initialEnvironment, onCreated
                       aria-labelledby={providerLabelId}
                       value={field.value}
                       onValueChange={chooseProvider}
-                      className="grid gap-2 sm:grid-cols-2"
+                      className="divide-y border-y"
                     >
                       {providers.map((provider) => {
                         const itemId = `${providerLabelId}-${provider.name}`;
@@ -195,7 +195,7 @@ export function CreateConnectionSteps({ providers, initialEnvironment, onCreated
                           <Label
                             key={provider.name}
                             htmlFor={itemId}
-                            className="flex cursor-pointer items-start gap-3 rounded-lg border bg-card p-4 font-normal shadow-xs has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:ring-1 has-[[data-state=checked]]:ring-primary"
+                            className="flex cursor-pointer items-start gap-3 py-3 font-normal max-md:min-h-11"
                           >
                             <RadioGroupItem id={itemId} value={provider.name} className="mt-0.5" />
                             <span className="grid gap-0.5">

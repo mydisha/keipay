@@ -1,4 +1,4 @@
-import { PlugIcon, PlusIcon } from "lucide-react";
+import { PlusIcon } from "lucide-react";
 import { Link } from "react-router";
 import { EnvironmentBadge } from "@/features/apps/components/environment-badge";
 import { Can, usePermission } from "@/features/auth/components/can";
@@ -6,13 +6,13 @@ import { providerLabel, useProviders, type ConnectionListItem } from "@/features
 import { LastTest } from "@/features/connections/components/last-test";
 import { strings } from "@/shared/lib/strings";
 import { Button } from "@/shared/ui/button";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/shared/ui/card";
+import { Card, CardAction, CardContent, CardFooter, CardHeader, CardTitle } from "@/shared/ui/card";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { StatusBadge } from "@/shared/ui/status-badge";
 
 const MAX_ROWS = 5;
 
-/** Up to five connections of the environment with their status and last test. */
+/** Up to five connections of the environment, one ruled line each, with their status and last test. */
 export function ConnectionsHealthCard({ connections }: { connections: ConnectionListItem[] }) {
   const canWrite = usePermission("connections:write");
   const providers = useProviders();
@@ -20,19 +20,27 @@ export function ConnectionsHealthCard({ connections }: { connections: Connection
   const more = connections.length - shown.length;
 
   return (
-    <Card>
-      <CardHeader>
+    <Card className="overflow-hidden">
+      <CardHeader className="items-center">
         <CardTitle>{strings.dashboard.healthTitle}</CardTitle>
-        <CardDescription>{strings.dashboard.healthBody}</CardDescription>
+        {shown.length > 0 && (
+          <CardAction className="row-span-1 self-center">
+            <Link
+              to="/connections"
+              className="rounded-sm text-sm text-link underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            >
+              {strings.dashboard.viewConnections}
+            </Link>
+          </CardAction>
+        )}
       </CardHeader>
       <CardContent className={shown.length > 0 ? "p-0" : undefined}>
         {shown.length === 0 ? (
           <EmptyState
-            icon={PlugIcon}
+            variant="inline"
             headingLevel={3}
             title={strings.dashboard.healthEmptyTitle}
             description={canWrite ? strings.dashboard.healthEmptyBody : strings.dashboard.healthEmptyBodyReadOnly}
-            className="border-0 bg-transparent py-8"
             action={
               <Can permission="connections:write">
                 <Button asChild variant="outline">
@@ -68,14 +76,7 @@ export function ConnectionsHealthCard({ connections }: { connections: Connection
           </ul>
         )}
       </CardContent>
-      {shown.length > 0 && (
-        <CardFooter className="justify-between text-sm">
-          <span className="text-muted-foreground">{more > 0 ? strings.dashboard.moreConnections(more) : null}</span>
-          <Link to="/connections" className="rounded-sm text-link underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50">
-            {strings.dashboard.viewConnections}
-          </Link>
-        </CardFooter>
-      )}
+      {more > 0 && <CardFooter className="text-sm text-muted-foreground">{strings.dashboard.moreConnections(more)}</CardFooter>}
     </Card>
   );
 }

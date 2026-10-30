@@ -19,7 +19,7 @@ export function WebhookSetup({ connection, provider }: WebhookSetupProps) {
         <span id={labelId} className="text-sm font-medium">
           {strings.connections.callbackUrl}
         </span>
-        <div className="flex min-w-0 items-center gap-2 rounded-md border bg-muted/50 px-3 py-2">
+        <div className="flex min-w-0 items-center gap-2">
           <code
             aria-labelledby={labelId}
             data-testid="callback-url"

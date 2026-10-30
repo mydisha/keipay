@@ -40,7 +40,7 @@ export function AccountTab() {
   }
 
   return (
-    <Section id="account-heading" title={strings.settings.accountTitle} description={strings.settings.accountBody}>
+    <Section id="account-heading" title={strings.settings.accountTitle}>
       <Card>
         <CardContent>{details}</CardContent>
         <CardFooter className="justify-between">

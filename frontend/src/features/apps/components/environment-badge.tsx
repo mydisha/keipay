@@ -8,7 +8,7 @@ export function EnvironmentBadge({ environment, className }: { environment: AppE
     <span
       data-environment={environment}
       className={cn(
-        "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap",
+        "inline-flex items-center rounded-sm border px-1.5 py-px text-xs font-medium whitespace-nowrap",
         environment === "test"
           ? "border-test-mode-border bg-test-mode text-test-mode-foreground"
           : "border-border bg-card text-foreground",

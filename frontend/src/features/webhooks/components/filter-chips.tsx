@@ -24,14 +24,14 @@ export function environmentChips(value: Environment | null, onChange: (value: En
 /** A filter that only arrives through a link (endpoint or event id), shown as a chip that removes it. */
 export function RemovableChip({ label, onRemove }: { label: string; onRemove: () => void }) {
   return (
-    <span className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-full border border-primary bg-primary py-0.5 pr-0.5 pl-3 text-xs font-medium text-primary-foreground">
+    <span className="inline-flex max-w-full min-w-0 items-center gap-1 rounded-sm border border-brand bg-brand-soft py-0.5 pr-0.5 pl-2.5 text-xs font-medium text-brand">
       <span className="truncate font-mono" title={label}>
         {label}
       </span>
       <Button
         variant="ghost"
         size="icon-sm"
-        className="size-6 rounded-full text-primary-foreground hover:bg-primary-foreground/15 hover:text-primary-foreground"
+        className="size-6 rounded-sm text-brand hover:bg-brand/10 hover:text-brand"
         onClick={onRemove}
         aria-label={strings.webhooks.removeFilter(label)}
       >

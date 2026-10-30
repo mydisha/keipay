@@ -16,31 +16,18 @@ export interface NavItem {
   icon: LucideIcon;
 }
 
-export interface NavGroup {
-  label: string;
-  items: NavItem[];
-}
-
-/** The sidebar's groups, in order. */
-export const navGroups: NavGroup[] = [
-  { label: strings.nav.groupOverview, items: [{ to: "/", label: strings.nav.dashboard, icon: LayoutDashboardIcon }] },
-  {
-    label: strings.nav.groupOperate,
-    items: [
-      { to: "/apps", label: strings.nav.apps, icon: BoxesIcon },
-      { to: "/connections", label: strings.nav.connections, icon: PlugIcon },
-      { to: "/webhooks", label: strings.nav.webhooks, icon: WebhookIcon },
-      { to: "/payments", label: strings.nav.payments, icon: CreditCardIcon },
-    ],
-  },
-  {
-    label: strings.nav.groupControl,
-    items: [
-      { to: "/reconciliation", label: strings.nav.reconciliation, icon: ScaleIcon },
-      { to: "/settings", label: strings.nav.settings, icon: SettingsIcon },
-    ],
-  },
+/** The pages people work in, top of the sidebar. */
+export const workItems: NavItem[] = [
+  { to: "/", label: strings.nav.dashboard, icon: LayoutDashboardIcon },
+  { to: "/apps", label: strings.nav.apps, icon: BoxesIcon },
+  { to: "/connections", label: strings.nav.connections, icon: PlugIcon },
+  { to: "/webhooks", label: strings.nav.webhooks, icon: WebhookIcon },
+  { to: "/payments", label: strings.nav.payments, icon: CreditCardIcon },
+  { to: "/reconciliation", label: strings.nav.reconciliation, icon: ScaleIcon },
 ];
 
+/** Settings sits apart at the bottom of the sidebar. */
+export const settingsItem: NavItem = { to: "/settings", label: strings.nav.settings, icon: SettingsIcon };
+
 /** Every page link in sidebar order, for the command palette. */
-export const navItems: NavItem[] = navGroups.flatMap((group) => group.items);
+export const navItems: NavItem[] = [...workItems, settingsItem];

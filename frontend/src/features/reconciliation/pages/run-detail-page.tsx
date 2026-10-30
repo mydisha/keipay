@@ -1,4 +1,4 @@
-import { CircleAlertIcon, Loader2Icon, SearchXIcon } from "lucide-react";
+import { CircleAlertIcon, Loader2Icon } from "lucide-react";
 import { Link, useParams } from "react-router";
 import { RequirePermission, usePermission } from "@/features/auth/components/can";
 import { strings } from "@/shared/lib/strings";
@@ -79,7 +79,6 @@ function RunDetail({ id }: { id: string }) {
         <PageHeader title={strings.reconciliation.runTitle} />
         {isNotFound(run.error) ? (
           <EmptyState
-            icon={SearchXIcon}
             title={strings.reconciliation.notFoundTitle}
             description={strings.reconciliation.notFoundBody}
             action={

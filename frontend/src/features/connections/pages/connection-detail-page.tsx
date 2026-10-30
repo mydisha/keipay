@@ -1,4 +1,3 @@
-import { SearchXIcon } from "lucide-react";
 import { Link, useParams } from "react-router";
 import { toast } from "sonner";
 import { usePermission } from "@/features/auth/components/can";
@@ -48,7 +47,6 @@ export function ConnectionDetailPage() {
         <PageHeader title={strings.connections.title} />
         {isNotFound(connection.error) ? (
           <EmptyState
-            icon={SearchXIcon}
             title={strings.connections.notFoundTitle}
             description={strings.connections.notFoundBody}
             action={

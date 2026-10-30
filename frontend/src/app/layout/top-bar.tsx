@@ -1,5 +1,4 @@
 import {
-  FlaskConicalIcon,
   KeyRoundIcon,
   LogOutIcon,
   MenuIcon,
@@ -29,7 +28,17 @@ import {
 } from "@/shared/ui/dropdown-menu";
 import { Label } from "@/shared/ui/label";
 import { Switch } from "@/shared/ui/switch";
-import { initialsOf } from "./sidebar";
+
+/** The first letters of up to two words of a name. */
+export function initialsOf(name: string): string {
+  return name
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word) => word[0]?.toUpperCase() ?? "")
+    .join("");
+}
 
 interface TopBarProps {
   onOpenMenu: () => void;
@@ -38,20 +47,21 @@ interface TopBarProps {
 
 export function TopBar({ onOpenMenu, onOpenPalette }: TopBarProps) {
   return (
-    <header className="sticky top-0 z-40 flex h-14 items-center gap-2 border-b bg-background/80 px-4 backdrop-blur md:px-6 lg:px-8">
-      <Button variant="ghost" size="icon" className="md:hidden" onClick={onOpenMenu} aria-label={strings.nav.openMenu}>
+    <header className="sticky top-0 z-40 flex h-14 items-center gap-2 border-b bg-background px-4 md:px-6 lg:px-8">
+      <Button variant="ghost" className="gap-1.5 px-2 md:hidden" onClick={onOpenMenu} aria-label={strings.nav.openMenu}>
         <MenuIcon aria-hidden="true" />
+        <span aria-hidden="true">{strings.nav.menu}</span>
       </Button>
       <Button
         variant="outline"
-        className="h-9 justify-start gap-2 bg-card text-muted-foreground shadow-xs max-sm:w-11 max-sm:px-0 max-sm:justify-center sm:w-72"
+        className="h-9 justify-start gap-2 text-muted-foreground max-sm:w-11 max-sm:px-0 max-sm:justify-center sm:w-56 md:w-40 lg:w-72"
         onClick={onOpenPalette}
         aria-label={strings.shell.openPalette}
         aria-keyshortcuts="Meta+K Control+K"
       >
         <SearchIcon aria-hidden="true" />
         <span className="max-sm:sr-only">{strings.shell.search}</span>
-        <kbd className="ml-auto hidden rounded border bg-muted px-1.5 font-mono text-[0.6875rem] sm:inline">⌘K</kbd>
+        <kbd className="ml-auto hidden rounded-sm border px-1.5 font-mono text-[0.6875rem] sm:inline">⌘K</kbd>
       </Button>
       <div className="ml-auto flex items-center gap-1 sm:gap-2">
         <ModeSwitch />
@@ -70,15 +80,21 @@ function ModeSwitch() {
     <div
       data-mode={mode}
       className={cn(
-        "flex h-9 items-center gap-2 rounded-full border px-2.5 transition-colors max-md:min-h-11",
-        testing ? "border-test-mode-border bg-test-mode text-test-mode-foreground" : "border-border bg-card text-muted-foreground shadow-xs",
+        "flex h-9 items-center gap-2 rounded-md border px-2.5 transition-colors max-md:min-h-11",
+        testing ? "border-test-mode-border bg-test-mode text-test-mode-foreground" : "border-transparent text-muted-foreground",
       )}
     >
-      <FlaskConicalIcon className="size-3.5 shrink-0" aria-hidden="true" />
       <Label htmlFor={id} className="cursor-pointer text-xs whitespace-nowrap">
-        {strings.shell.modeSwitchLabel}
+        {/* A phone shows "Test"; the switch keeps its full name, which contains the visible word. */}
+        <span className="sm:hidden">{strings.shell.modeSwitchShort}</span>
+        <span className="max-sm:hidden">{strings.shell.modeSwitchLabel}</span>
       </Label>
-      <Switch id={id} checked={testing} onCheckedChange={(checked) => setMode(checked ? "test" : "live")} />
+      <Switch
+        id={id}
+        aria-label={strings.shell.modeSwitchLabel}
+        checked={testing}
+        onCheckedChange={(checked) => setMode(checked ? "test" : "live")}
+      />
     </div>
   );
 }
@@ -116,7 +132,7 @@ function UserMenu() {
         <Button variant="ghost" size="icon" aria-label={strings.shell.userMenu} className="rounded-full">
           <span
             aria-hidden="true"
-            className="flex size-8 items-center justify-center rounded-full bg-sidebar-primary/15 text-xs font-semibold text-sidebar-primary"
+            className="flex size-8 items-center justify-center rounded-full border bg-secondary text-xs font-medium text-secondary-foreground"
           >
             {me ? initialsOf(me.user.name) : ""}
           </span>

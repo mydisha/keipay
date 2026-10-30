@@ -2,9 +2,10 @@ import { useState } from "react";
 import { RequirePermission } from "@/features/auth/components/can";
 import { useMode, type Mode } from "@/shared/lib/mode";
 import { strings } from "@/shared/lib/strings";
+import { Card } from "@/shared/ui/card";
 import { ErrorState } from "@/shared/ui/error-state";
 import { PageHeader } from "@/shared/ui/page-header";
-import { useDashboard, type DashboardRange } from "../api/dashboard";
+import { rangeDays, useDashboard, type DashboardRange } from "../api/dashboard";
 import { AttentionCard } from "../components/attention-card";
 import { ConnectionsHealthCard } from "../components/connections-health-card";
 import { DashboardSkeleton } from "../components/dashboard-skeleton";
@@ -21,9 +22,11 @@ export function DashboardPage() {
   const [range, setRange] = useDashboardRange();
   return (
     <>
-      <PageHeader title={strings.dashboard.title} description={strings.dashboard.subtitle} actions={<RangeChips value={range} onChange={setRange} />}>
-        <p className="text-sm text-muted-foreground">{strings.dashboard.environmentNote(strings.environments[mode] ?? mode)}</p>
-      </PageHeader>
+      <PageHeader
+        title={strings.dashboard.title}
+        description={strings.dashboard.summary(strings.environments[mode] ?? mode, rangeDays(range))}
+        actions={<RangeChips value={range} onChange={setRange} />}
+      />
       <RequirePermission permission="payments:read">
         <DashboardContent range={range} environment={mode} />
       </RequirePermission>
@@ -45,13 +48,14 @@ function DashboardContent({ range, environment }: { range: DashboardRange; envir
 
   return (
     <>
-      <KpiRow dashboard={dashboard} currency={currency} />
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] xl:items-start">
+      {/* The figures and the chart answer the same question, so they share one surface. */}
+      <Card className="overflow-hidden">
+        <KpiRow dashboard={dashboard} currency={currency} className="rounded-none border-0 border-b shadow-none" />
         <VolumeChart dashboard={dashboard} currencies={currencies} currency={currency} onCurrencyChange={setChosen} />
-        <div className="grid gap-4">
-          <ConnectionsHealthCard connections={dashboard.connections} />
-          <AttentionCard dashboard={dashboard} />
-        </div>
+      </Card>
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:items-start">
+        <AttentionCard dashboard={dashboard} />
+        <ConnectionsHealthCard connections={dashboard.connections} />
       </div>
       <RecentPayments payments={dashboard.recent_payments} />
     </>

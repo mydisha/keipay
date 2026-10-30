@@ -2,7 +2,7 @@ import { strings } from "@/shared/lib/strings";
 import { cn } from "@/shared/lib/utils";
 import { summarizeSubscriptions } from "../lib/endpoint-format";
 
-const chip = "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap";
+const chip = "inline-flex items-center rounded-sm border px-1.5 py-px text-xs font-medium whitespace-nowrap";
 
 /** A neutral text badge: body version, Legacy signature, Migrated, Test. */
 export function TagBadge({ children, mono = false, title }: { children: string; mono?: boolean; title?: string }) {

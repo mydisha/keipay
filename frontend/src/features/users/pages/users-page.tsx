@@ -1,4 +1,4 @@
-import { PlusIcon, UsersIcon } from "lucide-react";
+import { PlusIcon } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { useMe } from "@/features/auth/api/auth";
@@ -137,7 +137,7 @@ function UsersSection() {
               {u.name}
             </span>
             {u.id === selfId && (
-              <span className="shrink-0 rounded-full border px-2 py-0.5 text-xs font-medium text-muted-foreground">
+              <span className="shrink-0 rounded-sm border px-1.5 py-px text-xs font-medium text-muted-foreground">
                 {strings.users.you}
               </span>
             )}
@@ -191,7 +191,7 @@ function UsersSection() {
   const copy = confirming ? confirmCopy[confirming.action] : null;
 
   return (
-    <Section id="users-heading" title={strings.users.title} description={strings.users.description} actions={addButton}>
+    <Section id="users-heading" title={strings.users.title} actions={addButton}>
       <DataTable
         caption={strings.users.title}
         columns={columns}
@@ -204,7 +204,6 @@ function UsersSection() {
         resetKey={resetKey}
         emptyState={
           <EmptyState
-            icon={UsersIcon}
             headingLevel={3}
             title={strings.users.emptyTitle}
             description={strings.users.emptyBody}

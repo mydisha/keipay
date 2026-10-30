@@ -1,4 +1,4 @@
-import { BoxesIcon, PlusIcon } from "lucide-react";
+import { PlusIcon } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import { toast } from "sonner";
@@ -126,7 +126,6 @@ export function AppsPage() {
   if (environment !== null) {
     emptyState = (
       <EmptyState
-        icon={BoxesIcon}
         title={strings.apps.emptyEnvironmentTitle(environment)}
         description={strings.apps.emptyEnvironmentBody}
         action={
@@ -142,7 +141,6 @@ export function AppsPage() {
   } else if (status !== null) {
     emptyState = (
       <EmptyState
-        icon={BoxesIcon}
         title={strings.apps.emptyFilteredTitle}
         description={strings.apps.emptyFilteredBody}
         action={
@@ -155,7 +153,6 @@ export function AppsPage() {
   } else {
     emptyState = (
       <EmptyState
-        icon={BoxesIcon}
         title={strings.apps.emptyTitle}
         description={canWrite ? strings.apps.emptyBody : strings.apps.emptyBodyReadOnly}
         action={createButton}

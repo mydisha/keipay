@@ -1,4 +1,4 @@
-import { PlusIcon, TriangleAlertIcon, WebhookIcon } from "lucide-react";
+import { PlusIcon, TriangleAlertIcon } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
@@ -43,7 +43,7 @@ interface Revealed {
 
 function wib(value: string | null): string {
   const date = parseDate(value);
-  return date ? formatDateTimeWIB(date) : strings.common.none;
+  return date ? formatDateTimeWIB(date) : strings.common.unknown;
 }
 
 function autoDisabledText(endpoint: WebhookEndpoint): string {
@@ -211,7 +211,6 @@ export function AppWebhooksTab() {
         skeletonRows={3}
         emptyState={
           <EmptyState
-            icon={WebhookIcon}
             headingLevel={3}
             title={strings.endpoints.emptyTitle}
             description={canWrite ? strings.endpoints.emptyBody : strings.endpoints.emptyBodyReadOnly}

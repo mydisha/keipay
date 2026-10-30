@@ -12,9 +12,9 @@ function lastQuery(api: ReturnType<typeof mockApi>) {
   return request ? Object.fromEntries(new URL(request.url).searchParams) : undefined;
 }
 
-/** The stat card that carries `label`; the nav also says "Payments", so look inside the page. */
+/** The figure that carries `label` (its `dt` and `dd`); the nav also says "Payments", so match the term only. */
 function kpi(label: string) {
-  return within(screen.getByRole("main")).getByText(label, { selector: "span" }).parentElement!;
+  return within(screen.getByRole("main")).getByText(label, { selector: "dt" }).parentElement!;
 }
 
 function emptyDashboard() {
@@ -45,19 +45,21 @@ describe("Dashboard page", () => {
     await screen.findByText("Gross volume");
     const gross = kpi("Gross volume");
     expect(gross).toHaveTextContent("Rp450.000");
-    expect(gross).toHaveTextContent("+350% vs previous 7 days");
+    expect(gross).toHaveTextContent("+350%");
     const count = kpi("Payments");
     expect(count).toHaveTextContent("4");
-    expect(count).toHaveTextContent("+100% vs previous 7 days");
+    expect(count).toHaveTextContent("+100%");
     const rate = kpi("Success rate");
     expect(rate).toHaveTextContent("75%");
-    expect(rate).toHaveTextContent("+25 pp vs previous 7 days");
+    expect(rate).toHaveTextContent("+25 pp");
     expect(rate).toHaveTextContent("3 of 4 finished");
     const delivery = kpi("Delivery success");
     expect(delivery).toHaveTextContent("75%");
-    expect(delivery).toHaveTextContent("3 of 4 finished");
+    expect(delivery).toHaveTextContent("3 of 4 delivered");
     expect(lastQuery(api)).toEqual({ range: "7d", environment: "live" });
-    expect(screen.getByText(/Showing Live apps and connections/)).toBeInTheDocument();
+    // The comparison is named once, in the header, not under every figure.
+    expect(screen.getByText("Live apps and connections over the last 7 days. Changes compare with the 7 days before.")).toBeInTheDocument();
+    expect(screen.queryByText(/vs previous/)).not.toBeInTheDocument();
     expect(screen.queryByTestId("dashboard-skeleton")).not.toBeInTheDocument();
     expect(document.querySelectorAll("[aria-busy=true]")).toHaveLength(0);
   });
@@ -87,7 +89,7 @@ describe("Dashboard page", () => {
     await screen.findByText("Gross volume");
     await user.click(screen.getByRole("switch", { name: "Test mode" }));
     await waitFor(() => expect(lastQuery(api)).toEqual({ range: "7d", environment: "test" }));
-    expect(screen.getByText(/Showing Test apps and connections/)).toBeInTheDocument();
+    expect(screen.getByText(/^Test apps and connections over the last 7 days/)).toBeInTheDocument();
   });
 
   it("shows an empty state per card, never an error, when the range has nothing", async () => {
@@ -96,13 +98,14 @@ describe("Dashboard page", () => {
     expect(await screen.findByText("No payments in this range")).toBeInTheDocument();
     expect(screen.getByText("No connections yet")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Add connection" })).toHaveAttribute("href", "/connections/new");
-    expect(screen.getByTestId("all-clear")).toHaveTextContent("All clear");
+    expect(screen.getByTestId("all-clear")).toHaveTextContent("Nothing to fix");
     expect(screen.getByText("No reconciliation run yet")).toBeInTheDocument();
     expect(screen.getByText("No payments yet")).toBeInTheDocument();
-    const gross = kpi("Gross volume");
-    expect(gross).toHaveTextContent("—");
-    expect(gross).toHaveTextContent("No payments");
+    // Missing figures are written out, never shown as a dash or a change.
+    expect(kpi("Gross volume")).toHaveTextContent(/^Gross volumeNone$/);
+    expect(kpi("Success rate")).toHaveTextContent("Not yet");
     expect(kpi("Success rate")).toHaveTextContent("No finished payments");
+    expect(screen.getByRole("main")).not.toHaveTextContent("—");
     expect(kpi("Delivery success")).toHaveTextContent("No finished deliveries");
     expect(screen.queryByTestId("error-state")).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Currency" })).not.toBeInTheDocument();
@@ -154,7 +157,7 @@ describe("Dashboard page", () => {
     const health = screen.getByRole("list", { name: "Connections" });
     expect(within(health).getByRole("link", { name: "xendit-live" })).toHaveAttribute("href", `/connections/${CON_ID}`);
     expect(within(health).getByText("Passed")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "View all connections" })).toHaveAttribute("href", "/connections");
+    expect(screen.getByRole("link", { name: "View all" })).toHaveAttribute("href", "/connections");
     expect(screen.getByRole("link", { name: "View all payments" })).toHaveAttribute("href", "/payments");
     const recent = screen.getByRole("table", { name: "Recent payments" });
     expect(within(recent).getByText(PAY_ID)).toBeInTheDocument();
@@ -201,10 +204,11 @@ describe("Dashboard page", () => {
     const group = await screen.findByRole("group", { name: "Currency" });
     expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual(["IDR", "USD"]);
     expect(kpi("Gross volume")).toHaveTextContent("Rp150.000");
-    expect(kpi("Gross volume")).toHaveTextContent("+50% vs previous 7 days");
+    expect(kpi("Gross volume")).toHaveTextContent("+50%");
     await user.click(within(group).getByRole("button", { name: "USD" }));
     expect(kpi("Gross volume")).toHaveTextContent("US$10,50");
-    expect(kpi("Gross volume")).toHaveTextContent("New in this range");
+    // USD had nothing in the previous period, so there is no change to show.
+    expect(kpi("Gross volume")).not.toHaveTextContent("%");
     expect(kpi("Payments")).toHaveTextContent("2");
   });
 
@@ -213,7 +217,7 @@ describe("Dashboard page", () => {
     renderApp("/");
     const chart = await screen.findByRole("img", { name: /payments per day over the last 7 days/ });
     await waitFor(() => expect(chart.querySelectorAll(".recharts-bar-rectangle").length).toBeGreaterThan(0));
-    const table = screen.getByRole("table", { name: "Payments per day" });
+    const table = screen.getByRole("table", { name: "Payments per day (WIB)" });
     expect(within(table).getAllByRole("row")).toHaveLength(8);
     expect(within(table).getByRole("columnheader", { name: "Gross IDR" })).toBeInTheDocument();
     const lastDay = within(table).getByRole("rowheader", { name: "29 Okt" }).closest("tr")!;

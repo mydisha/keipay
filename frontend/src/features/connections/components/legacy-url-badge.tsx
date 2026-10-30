@@ -7,7 +7,7 @@ export function LegacyUrlBadge({ className }: { className?: string }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap",
+        "inline-flex items-center rounded-sm border px-1.5 py-px text-xs font-medium whitespace-nowrap",
         toneClasses.info,
         className,
       )}

@@ -1,4 +1,3 @@
-import { CreditCardIcon } from "lucide-react";
 import { Link } from "react-router";
 import { AppLabel } from "@/features/apps/components/app-label";
 import type { Payment } from "@/features/payments/api/payments";
@@ -32,7 +31,6 @@ export function RecentPayments({ payments }: { payments: Payment[] }) {
     <Section
       id="recent-payments-heading"
       title={strings.dashboard.recentTitle}
-      description={strings.dashboard.recentBody}
       actions={
         <Button asChild variant="outline" size="sm">
           <Link to="/payments">{strings.dashboard.viewAllPayments}</Link>
@@ -46,7 +44,6 @@ export function RecentPayments({ payments }: { payments: Payment[] }) {
         getRowId={(p) => p.id}
         emptyState={
           <EmptyState
-            icon={CreditCardIcon}
             headingLevel={3}
             title={strings.dashboard.recentEmptyTitle}
             description={strings.dashboard.recentEmptyBody}

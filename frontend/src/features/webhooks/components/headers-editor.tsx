@@ -48,9 +48,9 @@ export function HeadersEditor({ endpoint, disabled = false }: HeadersEditorProps
           {endpoint.headers.length === 0 ? (
             <p className="text-sm text-muted-foreground">{strings.endpoints.noHeaders}</p>
           ) : (
-            <ul className="grid gap-1 text-sm">
+            <ul className="divide-y border-y text-sm">
               {endpoint.headers.map((hint) => (
-                <li key={hint.name} className="flex min-w-0 items-center justify-between gap-3 rounded-md border px-3 py-2">
+                <li key={hint.name} className="flex min-w-0 items-center justify-between gap-3 py-2">
                   <span className="truncate font-mono text-[0.8125rem]" title={hint.name}>
                     {hint.name}
                   </span>
@@ -72,9 +72,9 @@ export function HeadersEditor({ endpoint, disabled = false }: HeadersEditorProps
       {replacing && (
         <>
           {fields.length === 0 && <p className="text-sm text-muted-foreground">{strings.endpoints.noHeaders}</p>}
-          <ul className="grid gap-3">
+          <ul className="divide-y border-y">
             {fields.map((row, index) => (
-              <li key={row.id} className="grid gap-2 rounded-md border p-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-start">
+              <li key={row.id} className="grid gap-2 py-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-start">
                 <FormField
                   control={form.control}
                   name={`headers.${index}.name`}

@@ -1,4 +1,4 @@
-import { CreditCardIcon, ExternalLinkIcon } from "lucide-react";
+import { ExternalLinkIcon } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router";
 import { AppFilterSelect } from "@/features/apps/components/app-filter-select";
@@ -28,7 +28,7 @@ export function PaymentsPage() {
       id: "id",
       header: strings.payments.payment,
       card: "title",
-      className: "max-w-60",
+      className: "max-w-52",
       cell: (p) => <IdText value={p.id} label={strings.payments.payment} />,
     },
     {
@@ -94,7 +94,6 @@ export function PaymentsPage() {
         emptyState={
           filtered ? (
             <EmptyState
-              icon={CreditCardIcon}
               title={strings.payments.emptyFilteredTitle}
               description={strings.payments.emptyFilteredBody}
               action={
@@ -105,7 +104,6 @@ export function PaymentsPage() {
             />
           ) : (
             <EmptyState
-              icon={CreditCardIcon}
               title={strings.payments.emptyTitle}
               description={strings.payments.emptyBody}
               action={

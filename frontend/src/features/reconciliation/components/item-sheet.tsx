@@ -1,11 +1,10 @@
-import { CopyIcon, SearchXIcon } from "lucide-react";
+import { CopyIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { usePermission } from "@/features/auth/components/can";
 import { AppLabel } from "@/features/apps/components/app-label";
 import { formatDateTimeWIB } from "@/shared/lib/format";
 import { strings } from "@/shared/lib/strings";
 import { Alert, AlertDescription } from "@/shared/ui/alert";
-import { Card } from "@/shared/ui/card";
 import { DateTimeText } from "@/shared/ui/date-time-text";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { ErrorState } from "@/shared/ui/error-state";
@@ -40,8 +39,8 @@ export interface ComparisonRow {
   differs: boolean;
 }
 
-function absoluteTime(value: string | null): ReactNode {
-  if (!value) return <span className="text-muted-foreground">{strings.common.none}</span>;
+function absoluteTime(value: string | null, fallback: string): ReactNode {
+  if (!value) return <span className="text-muted-foreground">{fallback}</span>;
   const date = new Date(value);
   return <time dateTime={date.toISOString()}>{formatDateTimeWIB(date)}</time>;
 }
@@ -101,8 +100,8 @@ export function comparisonRows(keipay: KeipaySide | null, gateway: GatewaySide |
     {
       id: "time",
       label: strings.reconciliation.time,
-      keipay: k((s) => absoluteTime(s.paid_at)),
-      gateway: g((s) => absoluteTime(s.occurred_at)),
+      keipay: k((s) => absoluteTime(s.paid_at, strings.common.notYet)),
+      gateway: g((s) => absoluteTime(s.occurred_at, strings.common.unknown)),
       differs: false,
     },
     {
@@ -118,10 +117,10 @@ export function comparisonRows(keipay: KeipaySide | null, gateway: GatewaySide |
 function Comparison({ item }: { item: ReconciliationItem }) {
   const rows = comparisonRows(item.keipay, item.gateway);
   return (
-    <Card size="compact" className="overflow-hidden">
+    <div className="border-y">
       <table className="w-full table-fixed text-sm">
         <caption className="sr-only">{strings.reconciliation.comparison}</caption>
-        <thead className="border-b bg-muted/50">
+        <thead className="border-b">
           <tr className="text-left text-xs text-muted-foreground">
             <th scope="col" className="w-[30%] px-3 py-2 font-medium">
               {strings.reconciliation.fieldColumn}
@@ -149,7 +148,7 @@ function Comparison({ item }: { item: ReconciliationItem }) {
           ))}
         </tbody>
       </table>
-    </Card>
+    </div>
   );
 }
 
@@ -249,7 +248,7 @@ export function ItemSheet({ run, itemId, onClose }: { run: ReconciliationRun; it
   else
     body = (
       <EmptyState
-        icon={SearchXIcon}
+        variant="inline"
         headingLevel={3}
         title={strings.reconciliation.itemNotFoundTitle}
         description={strings.reconciliation.itemNotFoundBody}

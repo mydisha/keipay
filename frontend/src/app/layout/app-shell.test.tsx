@@ -19,17 +19,22 @@ describe("App shell", () => {
     const nav = await screen.findByRole("navigation", { name: "Main" });
     expect(within(nav).getAllByRole("link").map((a) => a.textContent)).toEqual(NAV);
     expect(within(nav).getByRole("link", { name: "Dashboard" })).toHaveAttribute("aria-current", "page");
-    expect(nav).toHaveTextContent(/Overview.*Operate.*Control/);
+    // Settings sits in its own list at the bottom, apart from the working pages.
+    const lists = within(nav).getAllByRole("list");
+    expect(lists).toHaveLength(2);
+    expect(within(lists[1]!).getAllByRole("link").map((a) => a.textContent)).toEqual(["Settings"]);
   });
 
-  it("shows who is signed in beside the navigation, without a second account menu", async () => {
+  it("has one account menu, opened from the signed-in user's initials", async () => {
     mockApi({ "GET /admin/me": me({ name: "Vera Viewer", role: "viewer" }) });
-    renderApp("/");
-    const identity = await screen.findByTestId("sidebar-identity");
+    const { user } = renderApp("/");
+    const trigger = await screen.findByRole("button", { name: "Account menu" });
+    await waitFor(() => expect(trigger).toHaveTextContent("VV"));
+    expect(screen.getAllByRole("button", { name: "Account menu" })).toHaveLength(1);
+    await user.click(trigger);
+    const identity = await screen.findByTestId("user-menu-identity");
     expect(identity).toHaveTextContent("Vera Viewer");
     expect(identity).toHaveTextContent("Viewer");
-    expect(identity).toHaveTextContent("VV");
-    expect(screen.getAllByRole("button", { name: "Account menu" })).toHaveLength(1);
   });
 
   it("collapses the sidebar and remembers it", async () => {
@@ -101,7 +106,7 @@ describe("App shell", () => {
     setViewport("mobile");
     mockApi({ "GET /admin/apps": { data: [], next_cursor: null } });
     const { user, router } = renderApp("/");
-    await user.click(await screen.findByRole("button", { name: "Open navigation" }));
+    await user.click(await screen.findByRole("button", { name: "Open navigation menu" }));
     const sheet = await screen.findByRole("dialog");
     await user.click(within(sheet).getByRole("link", { name: "Apps" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/apps"));

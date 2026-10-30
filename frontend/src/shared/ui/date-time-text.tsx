@@ -9,12 +9,14 @@ interface DateTimeTextProps {
   /** Reference time for the relative label; defaults to a clock that ticks each minute. */
   now?: Date;
   className?: string;
+  /** Says what a missing time means here ("Not yet" for a step still to come); defaults to "None". */
+  fallback?: string;
 }
 
-export function DateTimeText({ value, now, className }: DateTimeTextProps) {
+export function DateTimeText({ value, now, className, fallback = strings.common.none }: DateTimeTextProps) {
   const clock = useNow();
   const date = parseDate(value);
-  if (!date) return <span className={cn("text-muted-foreground", className)}>{strings.common.none}</span>;
+  if (!date) return <span className={cn("text-muted-foreground", className)}>{fallback}</span>;
   const absolute = formatDateTimeWIB(date);
   return (
     <Tooltip>

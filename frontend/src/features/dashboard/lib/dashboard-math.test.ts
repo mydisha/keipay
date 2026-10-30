@@ -1,34 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { dashboardSeries, dashboardTotals } from "@/test/fixtures";
-import { deltaOf, ratePoints, sortCurrencies, sparklineFrom, sumTotals } from "./dashboard-math";
+import { dashboardTotals } from "@/test/fixtures";
+import { deltaOf, ratePoints, sortCurrencies, sumTotals } from "./dashboard-math";
 
 describe("deltaOf", () => {
-  it("gives the signed percentage change with the comparison period", () => {
-    expect(deltaOf(150, 100, 7)).toEqual({ direction: "up", text: "+50% vs previous 7 days", tone: "positive" });
-    expect(deltaOf(75, 100, 30)).toEqual({ direction: "down", text: "-25% vs previous 30 days", tone: "negative" });
-    expect(deltaOf(100, 100, 7)).toEqual({ direction: "flat", text: "0% vs previous 7 days", tone: "neutral" });
+  it("gives the signed percentage change, toned by direction", () => {
+    expect(deltaOf(150, 100)).toEqual({ text: "+50%", tone: "positive" });
+    expect(deltaOf(75, 100)).toEqual({ text: "-25%", tone: "negative" });
   });
 
   it("rounds to one decimal in id-ID", () => {
-    expect(deltaOf(1, 3, 7).text).toBe("-66,7% vs previous 7 days");
+    expect(deltaOf(1, 3)?.text).toBe("-66,7%");
   });
 
-  it("says new when the previous period was empty, and no change when both are", () => {
-    expect(deltaOf(12, 0, 7)).toEqual({ direction: "up", text: "New in this range", tone: "positive" });
-    expect(deltaOf(0, 0, 7)).toEqual({ direction: "flat", text: "No change", tone: "neutral" });
+  it("shows nothing when there is nothing real to compare", () => {
+    expect(deltaOf(12, 0)).toBeUndefined();
+    expect(deltaOf(0, 0)).toBeUndefined();
+    expect(deltaOf(100, 100)).toBeUndefined();
   });
 });
 
 describe("ratePoints", () => {
   it("gives the change in percentage points", () => {
-    expect(ratePoints(0.75, 0.5, 7)).toEqual({ direction: "up", text: "+25 pp vs previous 7 days", tone: "positive" });
-    expect(ratePoints(0.5, 0.625, 30)).toEqual({ direction: "down", text: "-12,5 pp vs previous 30 days", tone: "negative" });
-    expect(ratePoints(0.5, 0.5, 7)).toEqual({ direction: "flat", text: "No change", tone: "neutral" });
+    expect(ratePoints(0.75, 0.5)).toEqual({ text: "+25 pp", tone: "positive" });
+    expect(ratePoints(0.5, 0.625)).toEqual({ text: "-12,5 pp", tone: "negative" });
   });
 
-  it("gives nothing when either period has no finished payments", () => {
-    expect(ratePoints(null, 0.5, 7)).toBeUndefined();
-    expect(ratePoints(0.5, null, 7)).toBeUndefined();
+  it("gives nothing when the rate did not move or either period has no finished payments", () => {
+    expect(ratePoints(0.5, 0.5)).toBeUndefined();
+    expect(ratePoints(null, 0.5)).toBeUndefined();
+    expect(ratePoints(0.5, null)).toBeUndefined();
   });
 });
 
@@ -37,22 +37,6 @@ describe("sortCurrencies", () => {
     expect(sortCurrencies(["USD", "SGD", "IDR", "USD"])).toEqual(["IDR", "SGD", "USD"]);
     expect(sortCurrencies([])).toEqual([]);
     expect(sortCurrencies(["EUR"])).toEqual(["EUR"]);
-  });
-});
-
-describe("sparklineFrom", () => {
-  const series = dashboardSeries(3, ["IDR", "USD"]);
-  series[1] = { ...series[1]!, created: 4, successful: 2, gross: [{ currency: "IDR", amount: 300 }, { currency: "USD", amount: 5 }] };
-
-  it("reads a count per day", () => {
-    expect(sparklineFrom(series, "created")).toEqual([0, 4, 0]);
-    expect(sparklineFrom(series, "successful")).toEqual([0, 2, 0]);
-  });
-
-  it("reads the gross of one currency per day and zero where it is missing", () => {
-    expect(sparklineFrom(series, { gross: "USD" })).toEqual([0, 5, 0]);
-    expect(sparklineFrom(series, { gross: "SGD" })).toEqual([0, 0, 0]);
-    expect(sparklineFrom([], "created")).toEqual([]);
   });
 });
 

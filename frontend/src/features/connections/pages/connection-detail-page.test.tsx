@@ -37,7 +37,8 @@ describe("Connection detail", () => {
     renderApp(PATH);
     expect(await screen.findByRole("heading", { level: 1, name: "xendit-test" })).toBeInTheDocument();
     expect(screen.getAllByText("Xendit").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("Test")[0]).toHaveAttribute("data-environment", "test");
+    // The top bar also says "Test" on the mode switch, so look inside the page.
+    expect(within(screen.getByRole("main")).getAllByText("Test")[0]).toHaveAttribute("data-environment", "test");
     expect(screen.getByText("Active")).toBeInTheDocument();
     expect(screen.getByText("Legacy URL")).toBeInTheDocument();
 

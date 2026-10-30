@@ -1,4 +1,3 @@
-import { SearchXIcon } from "lucide-react";
 import { Link, Outlet, useOutletContext, useParams } from "react-router";
 import { isApiError } from "@/shared/api/errors";
 import { strings } from "@/shared/lib/strings";
@@ -44,7 +43,6 @@ export function AppDetailPage() {
         <PageHeader title={strings.apps.title} />
         {isNotFound(app.error) ? (
           <EmptyState
-            icon={SearchXIcon}
             title={strings.apps.notFoundTitle}
             description={strings.apps.notFoundBody}
             action={

@@ -10,13 +10,16 @@ const sizeVars: Record<CardSize, string> = {
   compact: "[--card-pad:1rem] [--card-pad-y:1rem]",
 };
 
-/** A bordered surface. Build it from `CardHeader`, `CardContent` and `CardFooter`; never pad the card itself. */
+/**
+ * A surface of paper on the desk. At most one per region: split what is inside with hairlines,
+ * never nest a card in a card. Build it from `CardHeader`, `CardContent` and `CardFooter`.
+ */
 export function Card({ className, size = "default", ...props }: ComponentProps<"div"> & { size?: CardSize }) {
   return (
     <div
       data-slot="card"
       data-size={size}
-      className={cn("group/card rounded-lg border bg-card text-card-foreground shadow-xs", sizeVars[size], className)}
+      className={cn("group/card rounded-xl border bg-card text-card-foreground shadow-xs", sizeVars[size], className)}
       {...props}
     />
   );
@@ -40,7 +43,7 @@ export function CardTitle({ className, as: Heading = "h2", ...props }: Component
   return (
     <Heading
       data-slot="card-title"
-      className={cn(Heading === "h2" ? "text-base font-semibold leading-6" : "text-sm font-semibold leading-5", className)}
+      className={cn(Heading === "h2" ? "text-[0.9375rem] font-medium leading-[1.375rem]" : "text-sm font-medium leading-5", className)}
       {...props}
     />
   );

@@ -25,10 +25,10 @@ export function DetailHeader({ back, eyebrow, title, titleMono = false, badges, 
       <BackLink to={back.to} label={back.label} />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="grid min-w-0 gap-2">
-          {eyebrow && <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{eyebrow}</p>}
+          {eyebrow && <p className="text-sm text-muted-foreground">{eyebrow}</p>}
           <div className="flex min-w-0 flex-wrap items-center gap-2">
             <h1
-              className={cn("min-w-0 truncate text-xl font-semibold tracking-tight md:text-2xl", titleMono && "font-mono")}
+              className={cn("min-w-0 truncate text-2xl font-medium tracking-[-0.02em] md:text-[1.75rem] md:leading-9", titleMono && "font-mono text-xl tracking-normal md:text-2xl")}
               title={title}
             >
               {title}

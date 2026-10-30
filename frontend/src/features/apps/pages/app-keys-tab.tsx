@@ -1,4 +1,4 @@
-import { KeyRoundIcon, PlusIcon } from "lucide-react";
+import { PlusIcon } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { usePermission } from "@/features/auth/components/can";
@@ -122,7 +122,6 @@ export function AppKeysTab() {
         loadMore={list.loadMore}
         emptyState={
           <EmptyState
-            icon={KeyRoundIcon}
             headingLevel={3}
             title={strings.keys.emptyTitle}
             description={canWrite ? strings.keys.emptyBody : strings.keys.emptyBodyReadOnly}

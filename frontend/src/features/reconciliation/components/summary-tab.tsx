@@ -1,4 +1,4 @@
-import { CalendarRangeIcon, DownloadIcon } from "lucide-react";
+import { DownloadIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { AppFilterSelect } from "@/features/apps/components/app-filter-select";
@@ -102,7 +102,7 @@ function summaryColumns(interval: ReportInterval): DataColumn<SummaryRow>[] {
 }
 
 function OptionalMoney({ amount, currency }: { amount: number | null; currency: string }) {
-  if (amount === null) return <span className="block text-right text-muted-foreground">{strings.common.none}</span>;
+  if (amount === null) return <span className="block text-right text-muted-foreground">{strings.common.unknown}</span>;
   return <MoneyText amount={amount} currency={currency} />;
 }
 
@@ -231,10 +231,9 @@ export function SummaryTab({ search }: { search: ReconciliationSearch }) {
           skeletonRows={3}
           emptyState={
             blocked ? (
-              <EmptyState icon={CalendarRangeIcon} headingLevel={3} title={strings.reconciliation.rangeBlocked} />
+              <EmptyState headingLevel={3} title={strings.reconciliation.rangeBlocked} />
             ) : (
               <EmptyState
-                icon={CalendarRangeIcon}
                 headingLevel={3}
                 title={strings.reconciliation.emptyTitle}
                 description={strings.reconciliation.emptyBody}

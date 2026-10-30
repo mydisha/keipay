@@ -1,14 +1,14 @@
-import { CircleCheckBigIcon, PanelRightOpenIcon, SearchXIcon } from "lucide-react";
+import { PanelRightOpenIcon } from "lucide-react";
 import { strings } from "@/shared/lib/strings";
 import { loadMoreList } from "@/shared/lib/use-cursor-pages";
-import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
+import { Chip } from "@/shared/ui/chip";
 import { DataTable, type DataColumn } from "@/shared/ui/data-table";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { IdText } from "@/shared/ui/id-text";
 import { MoneyText } from "@/shared/ui/money-text";
 import { Section } from "@/shared/ui/section";
-import { StatCard } from "@/shared/ui/stat-card";
+import { Stat, StatStrip } from "@/shared/ui/stat-strip";
 import { StatusBadge } from "@/shared/ui/status-badge";
 import {
   isReconciliationResult,
@@ -75,30 +75,29 @@ function itemColumns(onOpen: (item: ReconciliationItem) => void): DataColumn<Rec
   ];
 }
 
-/** One button per result with its count; pressing one filters the items. */
-function ResultCards({ summary, search }: { summary: RunSummary; search: RunSearch }) {
+/** The run's two totals, then one chip per result with its count; pressing a chip filters the items. */
+function ResultCounts({ summary, search }: { summary: RunSummary; search: RunSearch }) {
   return (
     <Section id="results-heading" title={strings.reconciliation.resultsTitle}>
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4 xl:grid-cols-8">
-        <StatCard label={strings.reconciliation.total} value={summary.total.toLocaleString("id-ID")} />
-        <StatCard label={strings.reconciliation.unresolved} value={summary.unresolved.toLocaleString("id-ID")} />
+      <StatStrip className="lg:grid-cols-2">
+        <Stat label={strings.reconciliation.total} value={summary.total.toLocaleString("id-ID")} />
+        <Stat label={strings.reconciliation.unresolved} value={summary.unresolved.toLocaleString("id-ID")} />
+      </StatStrip>
+      <div className="flex flex-wrap gap-1.5">
         {RECONCILIATION_RESULTS.map((result) => {
           const pressed = search.filters.result === result;
+          const count = summary.results[result];
           return (
-            <button
+            <Chip
               key={result}
-              type="button"
-              aria-pressed={pressed}
-              aria-label={`${strings.reconciliation.filterByResult(resultLabel(result))}: ${summary.results[result]}`}
+              pressed={pressed}
+              aria-label={`${strings.reconciliation.filterByResult(resultLabel(result))}: ${count}`}
               onClick={() => search.setResult(pressed ? null : result)}
-              className={cn(
-                "grid content-start gap-1 rounded-lg border bg-card p-4 text-left shadow-xs transition-colors outline-none hover:bg-muted/40 focus-visible:ring-[3px] focus-visible:ring-ring/50",
-                pressed && "border-primary ring-1 ring-primary",
-              )}
+              className="gap-2"
             >
-              <ResultBadge result={result} />
-              <span className="text-2xl font-semibold tracking-tight tabular-nums">{summary.results[result].toLocaleString("id-ID")}</span>
-            </button>
+              {resultLabel(result)}
+              <span className="tabular-nums">{count.toLocaleString("id-ID")}</span>
+            </Chip>
           );
         })}
       </div>
@@ -150,7 +149,6 @@ function ItemsTable({ run, search }: { run: ReconciliationRun; search: RunSearch
         onClearFilters={search.clearFilters}
         emptyState={
           <EmptyState
-            icon={SearchXIcon}
             headingLevel={3}
             title={strings.reconciliation.itemsFilteredTitle}
             description={strings.reconciliation.itemsFilteredBody}
@@ -174,7 +172,6 @@ export function RunResults({ run, search }: { run: ReconciliationRun; search: Ru
   if (run.summary.total === 0) {
     return (
       <EmptyState
-        icon={CircleCheckBigIcon}
         title={strings.reconciliation.nothingTitle}
         description={strings.reconciliation.nothingBody}
       />
@@ -182,7 +179,7 @@ export function RunResults({ run, search }: { run: ReconciliationRun; search: Ru
   }
   return (
     <>
-      <ResultCards summary={run.summary} search={search} />
+      <ResultCounts summary={run.summary} search={search} />
       <ItemsTable run={run} search={search} />
     </>
   );

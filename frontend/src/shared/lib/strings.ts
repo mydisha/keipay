@@ -96,8 +96,8 @@ export const strings = {
     modeSwitchLabel: "Test mode",
     modeSwitchShort: "Test",
     testBannerTitle: "Test mode",
-    testBannerBody:
-      "The Dashboard, the Apps, Connections and Webhooks lists, Reconciliation, new apps and new connections follow this switch. Payments still show every environment until a later release.",
+    testBannerScope: "The dashboard, lists and new records follow this switch.",
+    testBannerPayments: "Payments still show every environment.",
     theme: "Theme",
     themeLight: "Light",
     themeDark: "Dark",

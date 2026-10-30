@@ -96,12 +96,15 @@ describe("Login page", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("shows only the product name, one heading and the form", async () => {
+  it("shows the product name and theme menu above one heading and the form", async () => {
     mockApi({ "GET /admin/me": signedOut });
     renderApp("/login");
     await screen.findByRole("button", { name: "Sign in" });
+    const header = screen.getByRole("banner");
+    expect(within(header).getByText("KeiPay")).toBeInTheDocument();
+    expect(within(header).getByRole("button", { name: "Change theme" })).toBeInTheDocument();
     const main = screen.getByRole("main");
-    expect(within(main).getByText("KeiPay")).toBeInTheDocument();
+    expect(within(main).getByRole("heading", { level: 1, name: "Sign in to KeiPay" })).toBeInTheDocument();
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
     // No brand panel or marketing column beside the form.
     expect(main.querySelectorAll("section")).toHaveLength(0);

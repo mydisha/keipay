@@ -164,9 +164,16 @@ Satu `events` per perubahan status, fan-out menjadi satu `webhook_deliveries` pe
 
 ### 4. Rekonsiliasi status
 
-Rencana. Ini berbeda dari [Rekonsiliasi](#rekonsiliasi) laporan yang sudah ada: reconciler status memajukan payment yang callback-nya hilang, sedangkan rekonsiliasi laporan membandingkan catatan KeiPay dengan catatan PG.
+Berbeda dari [Rekonsiliasi](#rekonsiliasi) laporan: rekonsiliasi status memajukan payment yang callback-nya hilang, sedangkan rekonsiliasi laporan membandingkan catatan KeiPay dengan catatan PG.
 
-`worker.Reconciler` berjalan periodik (default 5 menit):
+**Checkout kedaluwarsa (sudah berjalan).** PG bisa tidak mengirim callback, misalnya notifikasi invoice expired di dashboard PG mati atau callback tidak sampai, sehingga payment tertahan `PENDING` selamanya. `worker.CheckoutChecker` berjalan tiap menit dan memanggil `CheckoutCheckService.CheckOverdue`:
+
+- Mengambil maksimal 50 payment `PENDING` yang punya connection dan ID pembayaran PG, dengan `expires_at` lebih dari 2 menit lalu (PG diberi waktu mengirim callback-nya sendiri) dan kurang dari 72 jam lalu, yang belum pernah dicek atau terakhir dicek 10 menit lalu atau lebih (`payments.status_checked_at`, indeks parsial `idx_payments_pending_expiry`).
+- Untuk connection yang provider-nya mendeklarasikan capability `read_checkout`, membaca checkout lewat interface opsional `provider.CheckoutReader` (`GetCheckout`; Xendit: `GET /v2/invoices/{id}` dengan HTTP biasa, dibaca dengan parser callback yang sama). Hasilnya `InboundEvent{Source: "poll"}`.
+- Status yang masih pending tidak menulis apa pun. Status lain dimasukkan lewat `WebhookService.Process` yang sama dengan callback, sehingga klaim dedupe `(connection_id, event_key, provider_status)`, state machine, payment report, event, dan delivery-nya sama persis; baris `inbound_webhooks` bersumber `poll` (`signature_valid` true, `raw_body` jawaban PG). Callback yang datang belakangan tercatat `duplicate`.
+- Setiap payment yang dicoba ditandai sudah dicek apa pun hasilnya, jadi PG yang gagal hanya ditanya lagi setelah 10 menit. Jawaban untuk reference lain tidak diterapkan.
+
+**Attempt (rencana, bersama routing multi-gateway).** `worker.Reconciler` berjalan periodik (default 5 menit):
 
 - Attempt `CREATED` dengan payment `PENDING` yang lebih tua dari `RECONCILE_MIN_AGE` (default 15 menit) dan belum kedaluwarsa → `adapter.GetStatus`. Kalau statusnya maju, dimasukkan lewat `WebhookService.Process` yang sama sebagai `InboundEvent{Source: "poll"}`, sehingga idempotency dan state machine-nya sama persis dengan webhook.
 - Attempt `UNKNOWN` → `FindByReference`. Kalau ditemukan dan payment belum punya attempt aktif, attempt itu diadopsi. Kalau sudah ada attempt aktif lain, attempt yang ditemukan dibatalkan lewat `CancelCheckout`.

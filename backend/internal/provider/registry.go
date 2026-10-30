@@ -13,8 +13,8 @@ type Registry struct {
 }
 
 // NewRegistry registers ps. Two adapters with one name, or an adapter that
-// declares ListTransactions without implementing TransactionLister, is an
-// error.
+// declares ListTransactions or ReadCheckout without implementing
+// TransactionLister or CheckoutReader, is an error.
 func NewRegistry(ps ...Provider) (*Registry, error) {
 	r := &Registry{byName: make(map[Name]Provider, len(ps))}
 	for _, p := range ps {
@@ -24,6 +24,9 @@ func NewRegistry(ps ...Provider) (*Registry, error) {
 		}
 		if _, lists := p.(TransactionLister); p.Capabilities().ListTransactions && !lists {
 			return nil, fmt.Errorf("provider %q declares list_transactions but cannot list transactions", n)
+		}
+		if _, reads := p.(CheckoutReader); p.Capabilities().ReadCheckout && !reads {
+			return nil, fmt.Errorf("provider %q declares read_checkout but cannot read checkouts", n)
 		}
 		r.byName[n] = p
 	}

@@ -142,7 +142,8 @@ const xenditDescriptor = `{
       {"code": "RETAIL_ALFAMART", "label": "Alfamart"}, {"code": "RETAIL_INDOMARET", "label": "Indomaret"}
     ],
     "currencies": ["IDR"], "can_restrict_channels": true, "can_cancel": true, "reports_fee": true,
-    "list_transactions": true
+    "list_transactions": true,
+    "read_checkout": true
   },
   "webhook_setup": {
     "instructions": [

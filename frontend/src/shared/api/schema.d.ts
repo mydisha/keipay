@@ -2144,6 +2144,8 @@ export interface components {
             reports_fee: boolean;
             /** @description KeiPay can pull the gateway's transactions for a period, so connections of this provider can be reconciled. */
             list_transactions: boolean;
+            /** @description KeiPay can read a checkout back from the gateway. A pending payment whose checkout expired without a callback is then read back and moved to the status the gateway reports. */
+            read_checkout: boolean;
         };
         ProviderWebhookSetup: {
             /** @description Plain-text steps, in order, for pasting the connection's `webhook_url` into the gateway dashboard. */
@@ -2949,10 +2951,14 @@ export interface components {
             connection: components["schemas"]["ConnectionSummary"];
             provider: components["schemas"]["ProviderName"];
             /**
-             * @description `webhook` (a gateway callback). Other sources may be added.
+             * @description `webhook`: a gateway callback. `poll`: KeiPay read the
+             *     checkout back from the gateway because it expired without a
+             *     callback (provider capability `read_checkout`); `raw_body` is
+             *     the gateway's answer and `signature_valid` is `true`. Other
+             *     sources may be added.
              * @enum {string}
              */
-            source: "webhook";
+            source: "webhook" | "poll";
             signature_valid: boolean;
             result: components["schemas"]["InboundWebhookResult"];
             /** @description A short explanation, e.g. which field mismatched; may be empty. Never contains secrets. */

@@ -4437,7 +4437,7 @@ components:
 
     ProviderCapabilities:
       type: object
-      required: [channels, currencies, can_restrict_channels, can_cancel, reports_fee, list_transactions]
+      required: [channels, currencies, can_restrict_channels, can_cancel, reports_fee, list_transactions, read_checkout]
       properties:
         channels:
           type: array
@@ -4462,6 +4462,9 @@ components:
         list_transactions:
           type: boolean
           description: KeiPay can pull the gateway's transactions for a period, so connections of this provider can be reconciled.
+        read_checkout:
+          type: boolean
+          description: KeiPay can read a checkout back from the gateway. A pending payment whose checkout expired without a callback is then read back and moved to the status the gateway reports.
 
     ProviderWebhookSetup:
       type: object
@@ -5797,8 +5800,13 @@ components:
           $ref: '#/components/schemas/ProviderName'
         source:
           type: string
-          description: '`webhook` (a gateway callback). Other sources may be added.'
-          enum: [webhook]
+          description: |
+            `webhook`: a gateway callback. `poll`: KeiPay read the
+            checkout back from the gateway because it expired without a
+            callback (provider capability `read_checkout`); `raw_body` is
+            the gateway's answer and `signature_valid` is `true`. Other
+            sources may be added.
+          enum: [webhook, poll]
         signature_valid:
           type: boolean
         result:

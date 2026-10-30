@@ -1,6 +1,7 @@
 package provider_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -41,9 +42,16 @@ func TestRegistry(t *testing.T) {
 	}
 }
 
-// withoutLister hides the fake's ListTransactions: only the Provider methods
-// are promoted from the embedded interface.
+// withoutLister hides the fake's ListTransactions and GetCheckout: only the
+// Provider methods are promoted from the embedded interface.
 type withoutLister struct{ provider.Provider }
+
+// withoutReader keeps the fake's ListTransactions but hides GetCheckout.
+type withoutReader struct{ provider.Provider }
+
+func (w withoutReader) ListTransactions(ctx context.Context, a provider.Account, q provider.TransactionQuery) (*provider.TransactionPage, error) {
+	return w.Provider.(provider.TransactionLister).ListTransactions(ctx, a, q)
+}
 
 // An adapter declaring list_transactions must implement it.
 func TestRegistryRequiresTransactionListerForCapability(t *testing.T) {
@@ -52,7 +60,7 @@ func TestRegistryRequiresTransactionListerForCapability(t *testing.T) {
 		t.Fatal("adapter declaring list_transactions without ListTransactions was accepted")
 	}
 	plain := named("plain")
-	plain.Caps.ListTransactions = false
+	plain.Caps.ListTransactions, plain.Caps.ReadCheckout = false, false
 	if _, err := provider.NewRegistry(withoutLister{plain}); err != nil {
 		t.Fatalf("adapter without the capability: %v", err)
 	}
@@ -61,6 +69,25 @@ func TestRegistryRequiresTransactionListerForCapability(t *testing.T) {
 	}
 	if !xendit.New().Capabilities().ListTransactions {
 		t.Fatal("xendit does not declare list_transactions")
+	}
+}
+
+// An adapter declaring read_checkout must implement GetCheckout.
+func TestRegistryRequiresCheckoutReaderForCapability(t *testing.T) {
+	declares := named("declares")
+	if _, err := provider.NewRegistry(withoutReader{declares}); err == nil {
+		t.Fatal("adapter declaring read_checkout without GetCheckout was accepted")
+	}
+	plain := named("plain")
+	plain.Caps.ReadCheckout = false
+	if _, err := provider.NewRegistry(withoutReader{plain}); err != nil {
+		t.Fatalf("adapter without the capability: %v", err)
+	}
+	if _, err := provider.NewRegistry(declares, xendit.New()); err != nil {
+		t.Fatalf("adapters that read checkouts: %v", err)
+	}
+	if !xendit.New().Capabilities().ReadCheckout {
+		t.Fatal("xendit does not declare read_checkout")
 	}
 }
 

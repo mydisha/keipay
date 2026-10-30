@@ -70,6 +70,13 @@ type Fake struct {
 	ListFunc func(q provider.TransactionQuery) (*provider.TransactionPage, error)
 	// Lists records every ListTransactions call.
 	Lists []provider.TransactionQuery
+
+	// Checkouts answers GetCheckout by provider payment id; an id missing
+	// from it is ErrNotFound. GetErr, when set, is returned instead.
+	Checkouts map[string]provider.InboundEvent
+	GetErr    error
+	// Gets records the provider payment id of every GetCheckout call.
+	Gets []string
 }
 
 // New returns a Fake named "fake" with two secret string credentials
@@ -94,7 +101,7 @@ func New() *Fake {
 		Caps: provider.Capabilities{
 			Channels:   []domain.Channel{domain.ChannelQRIS, domain.ChannelVABCA, domain.ChannelEwalletOVO},
 			Currencies: []string{"IDR"}, CanRestrictChannels: true, CanCancel: true, ReportsFee: true,
-			ListTransactions: true,
+			ListTransactions: true, ReadCheckout: true,
 		},
 	}
 }
@@ -233,6 +240,34 @@ func (f *Fake) ListTransactions(_ context.Context, _ provider.Account, q provide
 		page.NextCursor = strconv.Itoa(i + 1)
 	}
 	return &page, nil
+}
+
+// GetCheckout records the call and answers from GetErr or Checkouts. The
+// event gets Source "poll" and the raw answer is the event as JSON.
+func (f *Fake) GetCheckout(_ context.Context, _ provider.Account, providerPaymentID string) (*provider.InboundEvent, []byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Gets = append(f.Gets, providerPaymentID)
+	if f.GetErr != nil {
+		return nil, nil, f.GetErr
+	}
+	ev, ok := f.Checkouts[providerPaymentID]
+	if !ok {
+		return nil, nil, fmt.Errorf("%w: checkout %s", provider.ErrNotFound, providerPaymentID)
+	}
+	ev.Source = domain.InboundSourcePoll
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &ev, raw, nil
+}
+
+// GetCalls returns the provider payment ids GetCheckout was called with.
+func (f *Fake) GetCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.Gets...)
 }
 
 // ListCalls returns how many times ListTransactions ran.

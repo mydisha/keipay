@@ -238,6 +238,9 @@ func (s *WebhookService) newInbound(conn *domain.Connection, raw []byte, result 
 // callbackInbound is the log row of a verified, parsed callback.
 func (s *WebhookService) callbackInbound(conn *domain.Connection, ev provider.InboundEvent, raw []byte, result domain.InboundResult, detail string) *domain.InboundWebhook {
 	w := s.newInbound(conn, raw, result, detail)
+	if ev.Source != "" {
+		w.Source = ev.Source
+	}
 	key, status, ref := ev.EventKey, ev.ProviderStatus, ev.Reference
 	w.EventKey, w.ProviderStatus, w.Reference = &key, &status, &ref
 	return w

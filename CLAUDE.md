@@ -69,7 +69,8 @@ Service-layer (ports-and-adapters); dependencies point inward to
   the only place routes are registered.
 - `internal/repository/{postgres,redis}`: implementations of domain interfaces,
   no business logic.
-- `internal/worker`: asynq enqueuer, webhook forwarder, sweeper, reconciliation run job.
+- `internal/worker`: asynq enqueuer, webhook forwarder, sweeper, reconciliation run job,
+  checkout checker.
 - `internal/provider`: gateway port (`Provider`, `Registry`, schemas,
   capabilities, error classes); one adapter package per gateway
   (`internal/provider/xendit`), registered in `cmd/server/main.go`.
@@ -133,7 +134,11 @@ postgres implementation → migration in `backend/migrations/` → wire in main.
    itself from the endpoint's retry policy (asynq retries only
    infrastructure errors). `worker.Sweeper` re-enqueues `PENDING`
    deliveries whose `next_attempt_at` is overdue. Replay is one more manual
-   attempt of the same delivery (same event id and body).
+   attempt of the same delivery (same event id and body). A lost callback
+   is covered by `worker.CheckoutChecker`: every minute it reads back the
+   checkout of pending payments that expired over two minutes ago
+   (`provider.CheckoutReader`, capability `read_checkout`) and feeds a
+   non-pending answer to `WebhookService.Process` as source `poll`.
 5. **Admin sessions**: the session id in the `keipay_session` cookie is only
    a Redis key (stored hashed); every authenticated request still loads the
    user from Postgres, so disabling a user or changing a role takes effect at

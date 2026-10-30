@@ -171,6 +171,7 @@ func (a *Adapter) Capabilities() provider.Capabilities {
 		CanCancel:           true,
 		ReportsFee:          true,
 		ListTransactions:    true,
+		ReadCheckout:        true,
 	}
 }
 

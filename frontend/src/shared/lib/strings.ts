@@ -244,7 +244,7 @@ export const strings = {
     latestRun: "Latest reconciliation run",
     noRuns: "No reconciliation run yet",
     recentTitle: "Recent payments",
-    recentBody: "The newest payments across every environment.",
+    recentBody: "The newest payments of this environment.",
     viewAllPayments: "View all payments",
     recentEmptyTitle: "No payments yet",
     recentEmptyBody: "Payments created through the API show up here.",

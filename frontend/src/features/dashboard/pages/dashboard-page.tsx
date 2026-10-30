@@ -46,7 +46,7 @@ function DashboardContent({ range, environment }: { range: DashboardRange; envir
   return (
     <>
       <KpiRow dashboard={dashboard} currency={currency} />
-      <div className="grid gap-4 xl:grid-cols-[2fr_1fr] xl:items-start">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] xl:items-start">
         <VolumeChart dashboard={dashboard} currencies={currencies} currency={currency} onCurrencyChange={setChosen} />
         <div className="grid gap-4">
           <ConnectionsHealthCard connections={dashboard.connections} />

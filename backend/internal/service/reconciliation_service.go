@@ -66,10 +66,12 @@ type ReconciliationDeps struct {
 	Connections domain.ConnectionRepository
 	Registry    *provider.Registry
 	Source      TransactionSource
-	Tx          domain.TxManager
-	Enqueuer    RunEnqueuer
-	Audit       Auditor
-	Log         *zap.Logger
+	// Reports, when set, receives the fees a run learns from the gateway.
+	Reports  domain.PaymentReportRepository
+	Tx       domain.TxManager
+	Enqueuer RunEnqueuer
+	Audit    Auditor
+	Log      *zap.Logger
 }
 
 // ReconciliationService starts, runs and shows reconciliation runs and
@@ -79,6 +81,7 @@ type ReconciliationService struct {
 	conns    domain.ConnectionRepository
 	registry *provider.Registry
 	source   TransactionSource
+	reports  domain.PaymentReportRepository
 	tx       domain.TxManager
 	enqueuer RunEnqueuer
 	audit    Auditor
@@ -92,8 +95,8 @@ func NewReconciliationService(d ReconciliationDeps) *ReconciliationService {
 	if log == nil {
 		log = zap.NewNop()
 	}
-	return &ReconciliationService{runs: d.Runs, conns: d.Connections, registry: d.Registry, source: d.Source, tx: d.Tx,
-		enqueuer: d.Enqueuer, audit: d.Audit, log: log, now: time.Now}
+	return &ReconciliationService{runs: d.Runs, conns: d.Connections, registry: d.Registry, source: d.Source,
+		reports: d.Reports, tx: d.Tx, enqueuer: d.Enqueuer, audit: d.Audit, log: log, now: time.Now}
 }
 
 // CreateRunInput asks for a run of one connection over [From, To), both RFC
@@ -493,11 +496,39 @@ func (s *ReconciliationService) finish(ctx context.Context, loaded *domain.Recon
 		if err != nil {
 			return err
 		}
+		if err := s.fillFees(ctx, items); err != nil {
+			return err
+		}
 		finished := s.now().UTC().Truncate(time.Microsecond)
 		run.Status, run.Summary, run.UnresolvedCount, run.Error, run.FinishedAt =
 			domain.RunSucceeded, domain.NewReconciliationSummary(items), unresolved, nil, &finished
 		return s.runs.UpdateRun(ctx, run)
 	})
+}
+
+// fillFees stores the gateway's fee on reports whose fee the callback did
+// not carry. Only a matched item with exactly one gateway transaction
+// qualifies, so the fee is that payment's own and never a sum over a
+// duplicate; a fee above the gross is left alone. The items keep the
+// snapshot they were compared with.
+func (s *ReconciliationService) fillFees(ctx context.Context, items []domain.ReconciliationItem) error {
+	if s.reports == nil {
+		return nil
+	}
+	for _, it := range items {
+		if it.Result != domain.ResultMatched || it.PaymentID == nil || it.Keipay == nil || it.Keipay.Fee != nil ||
+			it.Gateway == nil || it.Gateway.Fee == nil || it.Gateway.TransactionCount != 1 {
+			continue
+		}
+		fee := *it.Gateway.Fee
+		if fee < 0 || fee > it.Keipay.Amount {
+			continue
+		}
+		if _, err := s.reports.FillFee(ctx, *it.PaymentID, fee); err != nil {
+			return fmt.Errorf("fill fee of %s: %w", it.Reference, err)
+		}
+	}
+	return nil
 }
 
 func (s *ReconciliationService) logSuperseded(ctx context.Context, runID int64, runCount int) {

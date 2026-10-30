@@ -821,9 +821,11 @@ gateway agree about every payment (see the
 
 **Fees.** KeiPay records the gateway fee from the payment callback: the
 paid amount minus Xendit's `adjusted_received_amount` (what you receive).
-When the callback does not carry that field, the fee and net are unknown,
-and the run does not compare fees for that payment. On the gateway side the
-fee is Xendit's fee plus its VAT.
+When the callback does not carry that field (Xendit's test mode never
+does), the fee and net start unknown. A run that matches the payment with
+exactly one gateway transaction then stores that transaction's fee on the
+report, and later runs compare it. On the gateway side the fee is Xendit's
+fee plus its VAT.
 
 Without a worker, runs stay `queued`. At most two runs work at a time, on
 workers of their own, so a long run never delays webhook forwarding; the

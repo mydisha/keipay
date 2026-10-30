@@ -396,3 +396,39 @@ func TestIntegrationPaymentReportSummary(t *testing.T) {
 		t.Fatalf("empty range = %+v %v", rows, err)
 	}
 }
+
+// FillFee writes only an unknown fee, with the net the CHECKs require, and
+// never overwrites a fee a callback stored.
+func TestIntegrationPaymentReportFillFee(t *testing.T) {
+	d := newReportDB(t)
+	ctx := context.Background()
+	at := time.Date(2026, 10, 29, 8, 0, 0, 0, time.UTC)
+	unknown := d.add(t, d.initech, d.testConn, "IDR", 150000, nil, at)
+	known := d.add(t, d.initech, d.testConn, "IDR", 5000, i64(100), at)
+
+	feeOf := func(p *domain.Payment) (fee, net *int64) {
+		t.Helper()
+		if err := d.pool.QueryRow(ctx, `SELECT fee, net FROM payment_reports WHERE payment_id = $1`, p.ID).Scan(&fee, &net); err != nil {
+			t.Fatal(err)
+		}
+		return fee, net
+	}
+	if ok, err := d.repo.FillFee(ctx, unknown.ID, 2220); err != nil || !ok {
+		t.Fatalf("fill unknown: %v, %v", ok, err)
+	}
+	if fee, net := feeOf(unknown); fee == nil || *fee != 2220 || net == nil || *net != 147780 {
+		t.Fatalf("filled = %v / %v", fee, net)
+	}
+	if ok, err := d.repo.FillFee(ctx, unknown.ID, 9999); err != nil || ok {
+		t.Fatalf("second fill: %v, %v", ok, err)
+	}
+	if ok, err := d.repo.FillFee(ctx, known.ID, 7); err != nil || ok {
+		t.Fatalf("fill known: %v, %v", ok, err)
+	}
+	if fee, _ := feeOf(known); *fee != 100 {
+		t.Fatalf("known fee overwritten: %d", *fee)
+	}
+	if ok, err := d.repo.FillFee(ctx, 987654321, 1); err != nil || ok {
+		t.Fatalf("no report: %v, %v", ok, err)
+	}
+}

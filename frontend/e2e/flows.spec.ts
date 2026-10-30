@@ -160,7 +160,7 @@ test.describe("shell", () => {
   test("test mode, theme and sidebar state persist; the palette navigates", async ({ page }) => {
     await signInToDashboard(page);
     const banner = page.getByText(
-      /The Dashboard, the Apps, Connections and Webhooks lists, Reconciliation, new apps and new connections follow this switch/,
+      /The dashboard, lists and new records follow this switch/,
     );
     await expect(banner).toHaveCount(0);
 

@@ -56,7 +56,7 @@ describe("App shell", () => {
     const banner = screen.getByTestId("test-mode-banner");
     expect(banner).toHaveTextContent("Test mode");
     expect(banner).not.toHaveTextContent(/filtered|only test data|showing test/i);
-    expect(banner).toHaveTextContent("Reconciliation");
+    expect(banner).toHaveTextContent("follow this switch");
     expect(banner).toHaveTextContent("Payments still show every environment");
     expect(window.localStorage.getItem(storageKeys.mode)).toBe("test");
 

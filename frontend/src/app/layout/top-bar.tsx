@@ -1,19 +1,9 @@
-import {
-  KeyRoundIcon,
-  LogOutIcon,
-  MenuIcon,
-  MonitorIcon,
-  MoonIcon,
-  SearchIcon,
-  SettingsIcon,
-  SunIcon,
-} from "lucide-react";
+import { KeyRoundIcon, LogOutIcon, MenuIcon, SearchIcon, SettingsIcon } from "lucide-react";
 import { useId } from "react";
 import { Link } from "react-router";
 import { useMe, useSignOut } from "@/features/auth/api/auth";
 import { useMode } from "@/shared/lib/mode";
 import { strings } from "@/shared/lib/strings";
-import { useTheme, type Theme } from "@/shared/lib/theme";
 import { cn } from "@/shared/lib/utils";
 import { Button } from "@/shared/ui/button";
 import {
@@ -21,13 +11,12 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/shared/ui/dropdown-menu";
 import { Label } from "@/shared/ui/label";
 import { Switch } from "@/shared/ui/switch";
+import { ThemeMenu } from "@/shared/ui/theme-menu";
 
 /** The first letters of up to two words of a name. */
 export function initialsOf(name: string): string {
@@ -77,14 +66,14 @@ function ModeSwitch() {
   const id = useId();
   const testing = mode === "test";
   return (
-    <div
-      data-mode={mode}
-      className={cn(
-        "flex h-9 items-center gap-2 rounded-md border px-2.5 transition-colors max-md:min-h-11",
-        testing ? "border-test-mode-border bg-test-mode text-test-mode-foreground" : "border-transparent text-muted-foreground",
-      )}
-    >
-      <Label htmlFor={id} className="cursor-pointer text-xs whitespace-nowrap">
+    <div data-mode={mode} className="flex h-9 items-center gap-2 px-1.5 max-md:min-h-11">
+      <Label
+        htmlFor={id}
+        className={cn(
+          "cursor-pointer text-xs whitespace-nowrap transition-colors",
+          testing ? "text-warning-foreground" : "font-normal text-muted-foreground",
+        )}
+      >
         {/* A phone shows "Test"; the switch keeps its full name, which contains the visible word. */}
         <span className="sm:hidden">{strings.shell.modeSwitchShort}</span>
         <span className="max-sm:hidden">{strings.shell.modeSwitchLabel}</span>
@@ -94,32 +83,9 @@ function ModeSwitch() {
         aria-label={strings.shell.modeSwitchLabel}
         checked={testing}
         onCheckedChange={(checked) => setMode(checked ? "test" : "live")}
+        className="data-[state=checked]:bg-warning-foreground"
       />
     </div>
-  );
-}
-
-const themeIcons: Record<Theme, typeof SunIcon> = { light: SunIcon, dark: MoonIcon, system: MonitorIcon };
-
-function ThemeMenu() {
-  const { theme, setTheme } = useTheme();
-  const Icon = themeIcons[theme];
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" aria-label={strings.shell.toggleTheme}>
-          <Icon aria-hidden="true" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuLabel>{strings.shell.theme}</DropdownMenuLabel>
-        <DropdownMenuRadioGroup value={theme} onValueChange={(value) => setTheme(value as Theme)}>
-          <DropdownMenuRadioItem value="light">{strings.shell.themeLight}</DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="dark">{strings.shell.themeDark}</DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="system">{strings.shell.themeSystem}</DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 

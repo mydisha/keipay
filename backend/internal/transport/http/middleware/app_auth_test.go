@@ -573,3 +573,61 @@ func TestAppAuthLimiterDownIs503(t *testing.T) {
 	c := f.addKey(t, "acme", domain.EnvLive, nil)
 	assertEnvelope(t, serve(f.engine(f.svc, prefixCipher{}), signed(c.apiKey, c.secret, now(), `{}`)), 503, domain.CodeAuthUnavailable)
 }
+
+// The nonce bounds are inclusive and count bytes, not characters: a
+// multibyte character fails even when the character count fits. A refused
+// nonce is not an authentication failure, so it reaches neither the nonce
+// store nor the failure counters.
+func TestAppAuthNonceBounds(t *testing.T) {
+	f := newAuthFixture(t)
+	f.withLimits(10, 10)
+	c := f.addKey(t, "acme", domain.EnvLive, nil)
+	r := f.engine(f.svc, prefixCipher{})
+	ts := now()
+	ipKey, keyKey := "ip:192.0.2.1", "key:"+c.key.Hash+":192.0.2.1"
+
+	for _, nonce := range []string{
+		strings.Repeat("a", 16),
+		strings.Repeat("b", 64),
+		"!" + strings.Repeat("~", 15),
+		"nonce.with-safe_chars/+=16",
+	} {
+		if w := serve(r, signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, nonce, "")); w.Code != http.StatusOK {
+			t.Fatalf("%q: %d %s", nonce, w.Code, w.Body.String())
+		}
+		if !f.nonces.seen["nonce:"+c.key.Hash+":"+nonce] {
+			t.Fatalf("%q not recorded: %v", nonce, f.nonces.seen)
+		}
+	}
+	// A GET without any body at all signs the same as one with an empty body.
+	noBody := signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, strings.Repeat("c", 16), "")
+	noBody.Body, noBody.ContentLength = http.NoBody, 0
+	if w := serve(r, noBody); w.Code != http.StatusOK {
+		t.Fatalf("no body: %d %s", w.Code, w.Body.String())
+	}
+
+	seen, touches := len(f.nonces.seen), f.keys.Touches
+	for _, nonce := range []string{
+		strings.Repeat("a", 15),
+		strings.Repeat("b", 65),
+		strings.Repeat("ü", 16),                 // 16 characters, 32 bytes, none of them ASCII
+		"nonce-" + strings.Repeat("x", 9) + "é", // 16 characters, 17 bytes
+		strings.Repeat("\x7f", 16),
+		strings.Repeat("a", 15) + "\x00",
+	} {
+		w := serve(r, signedV2(http.MethodGet, "/x", c.apiKey, c.secret, ts, nonce, ""))
+		assertEnvelope(t, w, 400, domain.CodeInvalidRequest)
+		if !strings.Contains(w.Body.String(), `"field":"X-Nonce"`) || strings.Contains(w.Body.String(), nonce) {
+			t.Fatalf("%q: %s", nonce, w.Body.String())
+		}
+	}
+	if len(f.nonces.seen) != seen || f.keys.Touches != touches {
+		t.Fatalf("a refused nonce reached the store: nonces %d -> %d, touches %d -> %d", seen, len(f.nonces.seen), touches, f.keys.Touches)
+	}
+	if f.limiter.Value(ipKey) != 0 || f.limiter.Value(keyKey) != 0 {
+		t.Fatalf("a refused nonce counted as a failure: ip %d, key %d", f.limiter.Value(ipKey), f.limiter.Value(keyKey))
+	}
+	if n := f.logs.FilterField(zap.String("log_type", "security")).Len(); n != 0 {
+		t.Fatalf("security events = %d, want none", n)
+	}
+}

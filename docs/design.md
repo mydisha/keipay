@@ -618,7 +618,7 @@ Semua list memakai cursor pagination (lihat [Konvensi](#konvensi)). Setiap endpo
 
 ## Admin Console (frontend/)
 
-Stack: React 19 + Vite + TypeScript sebagai SPA yang disajikan backend Go; Tailwind v4 dengan shadcn/ui (style new-york, Radix, CSS variables untuk light dan dark); ikon lucide; font IBM Plex Sans dan IBM Plex Mono; react-router 7; TanStack Query untuk server state dan TanStack Table untuk tabel; react-hook-form + zod; sonner; cmdk; openapi-typescript + openapi-fetch untuk client dari kontrak. Test memakai Vitest + Testing Library dan Playwright (headless). Library UI atau state management lain hanya ditambah dengan alasan yang dicatat di dokumen ini.
+Stack: React 19 + Vite + TypeScript sebagai SPA yang disajikan backend Go; Tailwind v4 dengan shadcn/ui (style new-york, Radix, CSS variables untuk light dan dark); ikon lucide; font IBM Plex Sans dan IBM Plex Mono; react-router 7; TanStack Query untuk server state dan TanStack Table untuk tabel; react-hook-form + zod; sonner; cmdk; openapi-typescript + openapi-fetch untuk client dari kontrak; recharts lewat wrapper `Chart` shadcn untuk grafik dashboard (SVG, tree-shakeable, warnanya dari token `--chart-*`, tanpa CSS runtime). Test memakai Vitest + Testing Library dan Playwright (headless). Library UI atau state management lain hanya ditambah dengan alasan yang dicatat di dokumen ini.
 
 Token, komponen dasar, pola tabel, pola halaman detail, aturan state loading/empty/error, mobile, dark mode, dan format Rp/tanggal/ID ada di `DESIGN.md` di root repo. Badge health (sehat, menurun, down, maintenance, circuit open) ditambahkan ke sana bersama fitur health.
 
@@ -628,7 +628,7 @@ Navigasi (sidebar yang bisa diciutkan, top bar dengan switch Test/Live dan banne
 
 | Menu | Isi | Belum dibangun |
 |---|---|---|
-| Dashboard | Volume per provider, success rate create, status health, delivery gagal, item rekonsiliasi belum resolved | Seluruhnya; saat ini empty state |
+| Dashboard | Volume kotor dan jumlah payment per currency untuk 7 atau 30 hari terakhir (mengikuti switch Test/Live, dibandingkan dengan periode sebelumnya), grafik harian, success rate, delivery berhasil, kesehatan connection, hal yang perlu perhatian (delivery gagal, inbound bermasalah, item rekonsiliasi belum resolved, run terakhir), payment terbaru; semuanya dari `GET /admin/dashboard` | Volume per provider dan status health per channel (ikut fitur health) |
 | Apps | List cursor → detail dengan tab Overview, API keys, Webhooks, Routing | Tab Routing (empty state) |
 | Connections | List, wizard tambah connection, detail (setting, kredensial, channel, test, aktif/nonaktif), health per channel, toggle maintenance | Health dan maintenance |
 | Webhooks | Tab Outbound (delivery ke app, replay) dan Inbound (dari PG, raw body + hasil verifikasi), dengan cursor, filter, dan detail berisi log attempt; endpoint diatur di tab Webhooks detail app | – |

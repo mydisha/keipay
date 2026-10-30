@@ -254,13 +254,25 @@ func ConnectionListFromDomain(page domain.PageResult[domain.Connection]) Connect
 type ConnectionTestResponse struct {
 	Result     domain.ConnectionTestStatus `json:"result"`
 	Message    string                      `json:"message"`
+	Warnings   []ConnectionTestWarning     `json:"warnings"`
 	TestedAt   time.Time                   `json:"tested_at"`
 	Connection Connection                  `json:"connection"`
 }
 
+// ConnectionTestWarning is a problem a passed test found.
+type ConnectionTestWarning struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 // ConnectionTestFromService converts a test result.
 func ConnectionTestFromService(r *service.ConnectionTestResult) ConnectionTestResponse {
-	return ConnectionTestResponse{Result: r.Result, Message: r.Message, TestedAt: r.TestedAt.UTC(), Connection: ConnectionFromService(r.Detail)}
+	warnings := make([]ConnectionTestWarning, 0, len(r.Warnings))
+	for _, w := range r.Warnings {
+		warnings = append(warnings, ConnectionTestWarning{Code: w.Code, Message: w.Message})
+	}
+	return ConnectionTestResponse{Result: r.Result, Message: r.Message, Warnings: warnings, TestedAt: r.TestedAt.UTC(),
+		Connection: ConnectionFromService(r.Detail)}
 }
 
 // ChannelChoice is one entry of PUT /admin/connections/{id}/channels.

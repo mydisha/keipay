@@ -277,8 +277,11 @@ func TestConnectionAdminFlow(t *testing.T) {
 
 	// Test: the fake Xendit API refuses every key.
 	m = decode(t, f.send(admin, http.MethodPost, path+"/test", ""), 200)
-	keysOf(t, "test", m, "result", "message", "tested_at", "connection")
+	keysOf(t, "test", m, "result", "message", "warnings", "tested_at", "connection")
 	c = m["connection"].(map[string]any)
+	if w, ok := m["warnings"].([]any); !ok || len(w) != 0 {
+		t.Fatalf("a failed test has warnings: %v", m["warnings"])
+	}
 	if m["result"] != "failed" || m["message"] != "The provider rejected the credentials (HTTP 401)." || c["last_test_status"] != "failed" ||
 		c["last_test_error"] != m["message"] || c["last_tested_at"] != m["tested_at"] {
 		t.Fatalf("test = %v", m)

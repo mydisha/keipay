@@ -173,6 +173,7 @@ describe("Connection detail", () => {
       [`POST /admin/connections/${CON_ID}/test`]: {
         result: "failed",
         message: "Could not reach the provider. Try again later.",
+        warnings: [],
         tested_at: "2026-01-01T00:05:00Z",
         connection: connection({
           last_test_status: "failed",
@@ -185,6 +186,24 @@ describe("Connection detail", () => {
     await user.click(await screen.findByRole("button", { name: "Test connection" }));
     expect(await screen.findByText("Test failed. Could not reach the provider. Try again later.")).toBeInTheDocument();
     expect(within(region("Overview")).getByText("Failed")).toBeInTheDocument();
+  });
+
+  it("warns after a passed test that found a problem", async () => {
+    mockApi({
+      ...providers,
+      [DETAIL]: { connection: connection() },
+      [`POST /admin/connections/${CON_ID}/test`]: {
+        result: "ok",
+        message: "Credentials accepted.",
+        warnings: [{ code: "transactions_unavailable", message: "The provider refused to list transactions with these credentials, so reconciliation runs will fail. Give the key read access to transactions." }],
+        tested_at: "2026-01-01T00:05:00Z",
+        connection: connection({ last_test_status: "ok", last_tested_at: "2026-01-01T00:05:00Z" }),
+      },
+    });
+    const { user } = renderApp(PATH);
+    await user.click(await screen.findByRole("button", { name: "Test connection" }));
+    expect(await screen.findByText("Test passed. Credentials accepted.")).toBeInTheDocument();
+    expect(await screen.findByText(/reconciliation runs will fail/)).toBeInTheDocument();
   });
 
   it("disables only after the name is typed", async () => {

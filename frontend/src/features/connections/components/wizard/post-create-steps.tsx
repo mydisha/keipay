@@ -31,6 +31,8 @@ interface TestOutcome {
   result: "ok" | "failed";
   message: string | null;
   testedAt: string | null;
+  /** Only this session's test has them; they are not stored. */
+  warnings: { code: string; message: string }[];
 }
 
 /** The latest result: this session's test, else what the connection stored. */
@@ -41,6 +43,7 @@ function outcomeOf(connection: Connection, latest: TestOutcome | null): TestOutc
     result: connection.last_test_status,
     message: connection.last_test_error,
     testedAt: connection.last_tested_at,
+    warnings: [],
   };
 }
 
@@ -55,7 +58,8 @@ export function TestStep({ connection, provider, onContinue, onSkip }: StepProps
   function runTest() {
     setLatest(null);
     test.mutate(connection.id, {
-      onSuccess: (data) => setLatest({ result: data.result, message: data.message, testedAt: data.tested_at }),
+      onSuccess: (data) =>
+        setLatest({ result: data.result, message: data.message, testedAt: data.tested_at, warnings: data.warnings }),
     });
   }
 
@@ -120,6 +124,12 @@ export function TestStep({ connection, provider, onContinue, onSkip }: StepProps
                 <AlertDescription>{strings.connections.testFailedHint}</AlertDescription>
               </Alert>
             )}
+            {outcome.warnings.map((w) => (
+              <Alert key={w.code} variant="warning" data-testid="test-warning">
+                <TriangleAlertIcon aria-hidden="true" />
+                <AlertDescription>{w.message}</AlertDescription>
+              </Alert>
+            ))}
           </div>
         )}
         {!test.isPending && !test.isError && !outcome && (

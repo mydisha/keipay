@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -417,10 +418,71 @@ func TestConnectionTestOutcomes(t *testing.T) {
 			if len(logs) != 1 || logs[0].Action != "connection.test" {
 				t.Fatalf("audit = %v", f.actions())
 			}
-			assertJSON(t, "after", logs[0].After, map[string]any{"result": string(tc.result), "tested_at": f.clock.Now()})
+			assertJSON(t, "after", logs[0].After, map[string]any{"result": string(tc.result), "tested_at": f.clock.Now(), "warnings": []any{}})
+			if len(res.Warnings) != 0 {
+				t.Fatalf("warnings = %+v", res.Warnings)
+			}
+			if lists := f.fake.ListCalls(); lists != map[bool]int{true: 1, false: 0}[tc.result == "ok"] {
+				t.Fatalf("transaction probes = %d", lists)
+			}
 			if unexpected := f.logs.FilterMessage("connection test failed unexpectedly").Len(); unexpected != map[bool]int{true: 1, false: 0}[tc.name == "other"] {
 				t.Fatalf("unexpected-failure logs = %d", unexpected)
 			}
+		})
+	}
+}
+
+// Regression: credentials that pass but cannot list transactions passed
+// silently, and the first reconciliation run then failed. The test now warns
+// when the gateway refuses the transaction list, and only then.
+func TestConnectionTestWarnsWithoutTransactionAccess(t *testing.T) {
+	cases := []struct {
+		name     string
+		caps     bool
+		listErr  error
+		warnings []string
+		probes   int
+	}{
+		{"refused", true, provider.NewStatusError(provider.ErrRejected, 403, "REQUEST_FORBIDDEN_ERROR"), []string{"transactions_unavailable"}, 1},
+		{"allowed", true, nil, nil, 1},
+		{"unreachable is not a warning", true, provider.NewStatusError(provider.ErrRetryable, 503, "down"), nil, 1},
+		{"provider without the capability", false, nil, nil, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newConnFixture(t)
+			c := f.addConnection(t, "fake-test", domain.EnvTest)
+			f.audit.Reset()
+			f.fake.Caps.ListTransactions = tc.caps
+			f.fake.ListErrs = []error{tc.listErr}
+			res, err := f.svc.Test(adminCtx(), c.PublicID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			codes := []string(nil)
+			for _, w := range res.Warnings {
+				codes = append(codes, w.Code)
+				if w.Message == "" || strings.Contains(w.Message, "FORBIDDEN") {
+					t.Fatalf("message = %q", w.Message)
+				}
+			}
+			if res.Result != domain.ConnectionTestOK || !slices.Equal(codes, tc.warnings) {
+				t.Fatalf("result %s, warnings %v; want ok, %v", res.Result, codes, tc.warnings)
+			}
+			if got := f.fake.ListCalls(); got != tc.probes {
+				t.Fatalf("probes = %d", got)
+			}
+			if tc.probes == 1 {
+				q := f.fake.Lists[0]
+				if q.Limit != 1 || !q.To.Equal(f.clock.Now()) || !q.From.Equal(f.clock.Now().Add(-time.Hour)) {
+					t.Fatalf("probe = %+v", q)
+				}
+			}
+			want := []any{}
+			for _, code := range tc.warnings {
+				want = append(want, code)
+			}
+			assertJSON(t, "after", f.audit.Logs()[0].After, map[string]any{"result": "ok", "tested_at": f.clock.Now(), "warnings": want})
 		})
 	}
 }

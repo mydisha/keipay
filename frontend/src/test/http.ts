@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { me } from "./fixtures";
+import { dashboard, me } from "./fixtures";
 
 export type Handler = (request: Request) => Response | Promise<Response>;
 
@@ -20,6 +20,7 @@ export const signedOut = () => json(401, errorBody("session_required", "session 
  */
 const defaultRoutes: Record<string, Handler | object> = {
   "GET /admin/me": () => json(200, me()),
+  "GET /admin/dashboard": () => json(200, dashboard()),
   "GET /admin/setup": { setup_required: false, setup_token_required: false },
 };
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { currencyExponent, formatDateTimeWIB, formatMoney, formatRelative, parseDate } from "./format";
+import { currencyExponent, formatDateTimeWIB, formatDayWIB, formatMoney, formatPercent, formatRelative, parseDate } from "./format";
 
 describe("formatMoney", () => {
   it.each([
@@ -42,6 +42,30 @@ describe("formatDateTimeWIB", () => {
     expect(text).toContain("2 Jan 2026");
     expect(text).toContain("01.30");
     expect(text.endsWith("WIB")).toBe(true);
+  });
+});
+
+describe("formatPercent", () => {
+  it.each([
+    [0.925, "92,5%"],
+    [1, "100%"],
+    [0, "0%"],
+    [0.3333, "33,3%"],
+  ])("%d → %s", (ratio, expected) => {
+    expect(formatPercent(ratio)).toBe(expected);
+  });
+
+  it("signs non-zero values on request and leaves zero alone", () => {
+    expect(formatPercent(0.125, { signed: true })).toBe("+12,5%");
+    expect(formatPercent(-0.5, { signed: true })).toBe("-50%");
+    expect(formatPercent(0, { signed: true })).toBe("0%");
+  });
+});
+
+describe("formatDayWIB", () => {
+  it("shows the WIB day and short month across the UTC date boundary", () => {
+    expect(formatDayWIB(new Date("2026-09-30T17:00:00Z"))).toBe("1 Okt");
+    expect(formatDayWIB(new Date("2026-01-01T18:30:00Z"))).toBe("2 Jan");
   });
 });
 

@@ -48,6 +48,15 @@ export function formatNumber(value: number): string {
   return numberFormat.format(value);
 }
 
+/** A ratio as a percentage, e.g. 0.925 → "92,5%"; `signed` adds + or − to non-zero values. */
+export function formatPercent(ratio: number, { signed = false, fractionDigits = 1 }: { signed?: boolean; fractionDigits?: number } = {}): string {
+  return new Intl.NumberFormat(DISPLAY_LOCALE, {
+    style: "percent",
+    maximumFractionDigits: fractionDigits,
+    signDisplay: signed ? "exceptZero" : "auto",
+  }).format(ratio);
+}
+
 export function parseDate(value: string | Date | null | undefined): Date | null {
   if (value === null || value === undefined || value === "") return null;
   const date = value instanceof Date ? value : new Date(value);
@@ -82,6 +91,13 @@ const monthFormat = new Intl.DateTimeFormat(DISPLAY_LOCALE, { month: "long", yea
 /** "1 Okt 2026": the WIB calendar day of an instant. */
 export function formatDateWIB(date: Date): string {
   return dateFormat.format(date);
+}
+
+const dayFormat = new Intl.DateTimeFormat(DISPLAY_LOCALE, { day: "numeric", month: "short", timeZone: DISPLAY_TIME_ZONE });
+
+/** "1 Okt": the WIB calendar day of an instant without the year, for chart axes. */
+export function formatDayWIB(date: Date): string {
+  return dayFormat.format(date);
 }
 
 /** "Oktober 2026": the WIB month of an instant. */

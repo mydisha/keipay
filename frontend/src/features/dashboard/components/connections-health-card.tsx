@@ -1,0 +1,81 @@
+import { PlugIcon, PlusIcon } from "lucide-react";
+import { Link } from "react-router";
+import { EnvironmentBadge } from "@/features/apps/components/environment-badge";
+import { Can, usePermission } from "@/features/auth/components/can";
+import { providerLabel, useProviders, type ConnectionListItem } from "@/features/connections/api/connections";
+import { LastTest } from "@/features/connections/components/last-test";
+import { strings } from "@/shared/lib/strings";
+import { Button } from "@/shared/ui/button";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/shared/ui/card";
+import { EmptyState } from "@/shared/ui/empty-state";
+import { StatusBadge } from "@/shared/ui/status-badge";
+
+const MAX_ROWS = 5;
+
+/** Up to five connections of the environment with their status and last test. */
+export function ConnectionsHealthCard({ connections }: { connections: ConnectionListItem[] }) {
+  const canWrite = usePermission("connections:write");
+  const providers = useProviders();
+  const shown = connections.slice(0, MAX_ROWS);
+  const more = connections.length - shown.length;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{strings.dashboard.healthTitle}</CardTitle>
+        <CardDescription>{strings.dashboard.healthBody}</CardDescription>
+      </CardHeader>
+      <CardContent className={shown.length > 0 ? "p-0" : undefined}>
+        {shown.length === 0 ? (
+          <EmptyState
+            icon={PlugIcon}
+            headingLevel={3}
+            title={strings.dashboard.healthEmptyTitle}
+            description={canWrite ? strings.dashboard.healthEmptyBody : strings.dashboard.healthEmptyBodyReadOnly}
+            className="border-0 bg-transparent py-8"
+            action={
+              <Can permission="connections:write">
+                <Button asChild variant="outline">
+                  <Link to="/connections/new">
+                    <PlusIcon aria-hidden="true" />
+                    {strings.dashboard.addConnection}
+                  </Link>
+                </Button>
+              </Can>
+            }
+          />
+        ) : (
+          <ul aria-label={strings.dashboard.healthTitle} className="divide-y">
+            {shown.map((connection) => (
+              <li key={connection.id} className="grid gap-1 px-(--card-pad) py-3">
+                <span className="flex min-w-0 flex-wrap items-center gap-2">
+                  <Link
+                    to={`/connections/${connection.id}`}
+                    title={connection.name}
+                    className="truncate rounded-sm font-mono text-[0.8125rem] font-medium underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  >
+                    {connection.name}
+                  </Link>
+                  <EnvironmentBadge environment={connection.environment} />
+                  {connection.status !== "active" && <StatusBadge status={connection.status} />}
+                </span>
+                <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  <span>{providerLabel(providers.data, connection.provider)}</span>
+                  <LastTest connection={connection} />
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+      {shown.length > 0 && (
+        <CardFooter className="justify-between text-sm">
+          <span className="text-muted-foreground">{more > 0 ? strings.dashboard.moreConnections(more) : null}</span>
+          <Link to="/connections" className="rounded-sm text-link underline-offset-4 outline-none hover:underline focus-visible:ring-[3px] focus-visible:ring-ring/50">
+            {strings.dashboard.viewConnections}
+          </Link>
+        </CardFooter>
+      )}
+    </Card>
+  );
+}

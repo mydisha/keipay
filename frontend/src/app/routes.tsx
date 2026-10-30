@@ -1,6 +1,5 @@
 import { Navigate, type RouteObject } from "react-router";
 import { AuthSkeleton } from "@/features/auth/components/auth-layout";
-import { DashboardPage } from "@/features/dashboard/pages/dashboard-page";
 import { AppShell } from "./layout/app-shell";
 import { PublicOnly, RequireAuth } from "./require-auth";
 
@@ -51,9 +50,12 @@ export const routes: RouteObject[] = [
         <AppShell />
       </RequireAuth>
     ),
+    // Feature pages load on first visit to keep the initial bundle small.
     children: [
-      { index: true, element: <DashboardPage /> },
-      // Feature pages load on first visit to keep the initial bundle small.
+      {
+        index: true,
+        lazy: async () => ({ Component: (await import("@/features/dashboard/pages/dashboard-page")).DashboardPage }),
+      },
       {
         path: "apps",
         lazy: async () => ({ Component: (await import("@/features/apps/pages/apps-page")).AppsPage }),

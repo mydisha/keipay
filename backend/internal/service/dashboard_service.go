@@ -45,13 +45,14 @@ func (s *DashboardService) Get(ctx context.Context, q domain.DashboardQuery) (*d
 	}
 	w := r.WindowAt(s.deps.Now())
 	w.Environment = q.Environment
-	d := &domain.Dashboard{Environment: q.Environment, Range: r, Window: w}
+	d := &domain.Dashboard{Range: r, Window: w}
 
 	totals, err := s.deps.Dashboard.PaymentTotals(ctx, w)
 	if err != nil {
 		return nil, fmt.Errorf("dashboard payment totals: %w", err)
 	}
 	d.Payments.ByCurrency = foldTotals(totals)
+	d.Payments.Totals = sumTotals(d.Payments.ByCurrency)
 	series, err := s.deps.Dashboard.PaymentSeries(ctx, w)
 	if err != nil {
 		return nil, fmt.Errorf("dashboard payment series: %w", err)
@@ -111,6 +112,16 @@ func foldTotals(rows []domain.DashboardPaymentTotalsRow) []domain.DashboardCurre
 	}
 	slices.SortFunc(out, func(a, b domain.DashboardCurrencyTotals) int { return strings.Compare(a.Currency, b.Currency) })
 	return out
+}
+
+// sumTotals adds the counts of every currency, per period.
+func sumTotals(byCurrency []domain.DashboardCurrencyTotals) domain.DashboardPeriodTotals {
+	var sum domain.DashboardPeriodTotals
+	for _, t := range byCurrency {
+		sum.Current = sum.Current.Plus(t.Current)
+		sum.Previous = sum.Previous.Plus(t.Previous)
+	}
+	return sum
 }
 
 // foldSeries spreads rows over one point per day of the window, so days

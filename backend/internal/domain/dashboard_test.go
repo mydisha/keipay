@@ -78,14 +78,14 @@ func TestDashboardRates(t *testing.T) {
 // problems.
 func TestNewDashboardInbound(t *testing.T) {
 	in := NewDashboardInbound(nil)
-	if len(in.ByResult) != 8 || in.Total != 0 || in.Applied != 0 || in.Problems != 0 {
+	if len(in.ByResult) != len(InboundResults()) || in.Total != 0 || in.Applied != 0 || in.Problems != 0 {
 		t.Fatalf("empty inbound = %+v", in)
 	}
 	in = NewDashboardInbound(map[InboundResult]int64{
 		InboundApplied: 5, InboundStale: 1, InboundDuplicate: 2, InboundMismatch: 1, InboundUnmapped: 1,
 		InboundInvalidSignature: 1, InboundInvalidPayload: 1, InboundError: 1, "other": 9,
 	})
-	if in.Total != 13 || in.Applied != 5 || in.Problems != 5 || len(in.ByResult) != 8 {
+	if in.Total != 13 || in.Applied != 5 || in.Problems != 5 || len(in.ByResult) != len(InboundResults()) {
 		t.Fatalf("inbound = %+v", in)
 	}
 	for _, r := range InboundResults() {

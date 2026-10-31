@@ -16,13 +16,42 @@ type DashboardPaymentTotals struct {
 	Expired     int64    `json:"expired"`
 	Failed      int64    `json:"failed"`
 	Successful  int64    `json:"successful"`
+	Finished    int64    `json:"finished"`
 	Gross       int64    `json:"gross"`
 	SuccessRate *float64 `json:"success_rate"`
 }
 
 func dashboardTotalsFromDomain(t domain.DashboardPaymentTotals) DashboardPaymentTotals {
 	return DashboardPaymentTotals{Created: t.Created, Pending: t.Pending, Paid: t.Paid, Settled: t.Settled,
-		Expired: t.Expired, Failed: t.Failed, Successful: t.Successful(), Gross: t.Gross, SuccessRate: t.SuccessRate()}
+		Expired: t.Expired, Failed: t.Failed, Successful: t.Successful(), Finished: t.Finished(), Gross: t.Gross,
+		SuccessRate: t.SuccessRate()}
+}
+
+// DashboardPaymentCounts counts the payments created in one period across
+// every currency, so it has no amount. SuccessRate is null when no payment
+// finished.
+type DashboardPaymentCounts struct {
+	Created     int64    `json:"created"`
+	Pending     int64    `json:"pending"`
+	Paid        int64    `json:"paid"`
+	Settled     int64    `json:"settled"`
+	Expired     int64    `json:"expired"`
+	Failed      int64    `json:"failed"`
+	Successful  int64    `json:"successful"`
+	Finished    int64    `json:"finished"`
+	SuccessRate *float64 `json:"success_rate"`
+}
+
+func dashboardCountsFromDomain(t domain.DashboardPaymentTotals) DashboardPaymentCounts {
+	return DashboardPaymentCounts{Created: t.Created, Pending: t.Pending, Paid: t.Paid, Settled: t.Settled,
+		Expired: t.Expired, Failed: t.Failed, Successful: t.Successful(), Finished: t.Finished(), SuccessRate: t.SuccessRate()}
+}
+
+// DashboardPeriodCounts compares the current period's counts with the
+// previous one's, across every currency.
+type DashboardPeriodCounts struct {
+	Current  DashboardPaymentCounts `json:"current"`
+	Previous DashboardPaymentCounts `json:"previous"`
 }
 
 // DashboardCurrencyTotals compares one currency's current period with the
@@ -50,6 +79,7 @@ type DashboardSeriesPoint struct {
 
 // DashboardPayments is the payment part of the dashboard.
 type DashboardPayments struct {
+	Totals     DashboardPeriodCounts     `json:"totals"`
 	ByCurrency []DashboardCurrencyTotals `json:"by_currency"`
 	Series     []DashboardSeriesPoint    `json:"series"`
 }
@@ -61,6 +91,7 @@ type DashboardDeliveries struct {
 	Pending     int64    `json:"pending"`
 	Delivered   int64    `json:"delivered"`
 	Failed      int64    `json:"failed"`
+	Finished    int64    `json:"finished"`
 	SuccessRate *float64 `json:"success_rate"`
 }
 
@@ -110,14 +141,16 @@ type DashboardResponse struct {
 // timestamps are UTC.
 func DashboardFromDomain(d *domain.Dashboard) DashboardResponse {
 	out := DashboardResponse{
-		Environment: d.Environment, Range: d.Range,
+		Environment: d.Window.Environment, Range: d.Range,
 		From: d.Window.From.UTC(), To: d.Window.To.UTC(), PreviousFrom: d.Window.PreviousFrom.UTC(),
 		Payments: DashboardPayments{
+			Totals: DashboardPeriodCounts{Current: dashboardCountsFromDomain(d.Payments.Totals.Current),
+				Previous: dashboardCountsFromDomain(d.Payments.Totals.Previous)},
 			ByCurrency: make([]DashboardCurrencyTotals, 0, len(d.Payments.ByCurrency)),
 			Series:     make([]DashboardSeriesPoint, 0, len(d.Payments.Series)),
 		},
 		Deliveries: DashboardDeliveries{Total: d.Deliveries.Total, Pending: d.Deliveries.Pending, Delivered: d.Deliveries.Delivered,
-			Failed: d.Deliveries.Failed, SuccessRate: d.Deliveries.SuccessRate()},
+			Failed: d.Deliveries.Failed, Finished: d.Deliveries.Finished(), SuccessRate: d.Deliveries.SuccessRate()},
 		Inbound: DashboardInbound{Total: d.Inbound.Total, Applied: d.Inbound.Applied, Problems: d.Inbound.Problems,
 			ByResult: DashboardInboundResults{
 				Applied: d.Inbound.ByResult[domain.InboundApplied], Stale: d.Inbound.ByResult[domain.InboundStale],

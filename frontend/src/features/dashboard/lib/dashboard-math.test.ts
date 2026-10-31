@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dashboardTotals } from "@/test/fixtures";
-import { deltaOf, ratePoints, sortCurrencies, sumTotals } from "./dashboard-math";
+import { deltaOf, ratePoints, sortCurrencies } from "./dashboard-math";
 
 describe("deltaOf", () => {
   it("gives the signed percentage change, toned by direction", () => {
@@ -37,26 +36,5 @@ describe("sortCurrencies", () => {
     expect(sortCurrencies(["USD", "SGD", "IDR", "USD"])).toEqual(["IDR", "SGD", "USD"]);
     expect(sortCurrencies([])).toEqual([]);
     expect(sortCurrencies(["EUR"])).toEqual(["EUR"]);
-  });
-});
-
-describe("sumTotals", () => {
-  it("adds the counts of every currency and recomputes the rate", () => {
-    const totals = sumTotals(
-      [
-        { currency: "IDR", current: dashboardTotals({ created: 4, successful: 3, expired: 1 }), previous: dashboardTotals({ created: 1 }) },
-        { currency: "USD", current: dashboardTotals({ created: 2, successful: 1, failed: 1 }), previous: dashboardTotals() },
-      ],
-      "current",
-    );
-    expect(totals.created).toBe(6);
-    expect(totals.successful).toBe(4);
-    expect(totals.success_rate).toBeCloseTo(4 / 6);
-    expect(totals.gross).toBe(0);
-  });
-
-  it("has no rate when nothing finished, and zero counts without currencies", () => {
-    expect(sumTotals([{ currency: "IDR", current: dashboardTotals({ created: 2, pending: 2 }), previous: dashboardTotals() }], "current").success_rate).toBeNull();
-    expect(sumTotals([], "previous")).toEqual({ created: 0, pending: 0, paid: 0, settled: 0, expired: 0, failed: 0, successful: 0, gross: 0, success_rate: null });
   });
 });

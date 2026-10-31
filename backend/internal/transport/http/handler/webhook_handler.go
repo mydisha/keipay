@@ -13,6 +13,7 @@ import (
 	"github.com/mydisha/keipay/backend/internal/domain"
 	"github.com/mydisha/keipay/backend/internal/pkg/id"
 	"github.com/mydisha/keipay/backend/internal/pkg/logger"
+	"github.com/mydisha/keipay/backend/internal/provider"
 	"github.com/mydisha/keipay/backend/internal/service"
 	"github.com/mydisha/keipay/backend/internal/transport/http/dto"
 	"github.com/mydisha/keipay/backend/internal/transport/http/middleware"
@@ -92,7 +93,9 @@ func (h *WebhookHandler) receive(c *gin.Context, resolve resolver) {
 		return
 	}
 
-	ev, err := h.conns.VerifyCallback(conn, c.Request.Header, raw)
+	ev, err := h.conns.VerifyCallback(conn, provider.CallbackRequest{
+		Path: c.Request.URL.EscapedPath(), Header: c.Request.Header, Body: raw,
+	})
 	if err != nil {
 		if limited := h.recordRejected(ctx, conn, raw, err); limited != nil {
 			response.Error(c, limited)

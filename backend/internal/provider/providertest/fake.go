@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"strconv"
 	"sync"
 
@@ -77,6 +76,8 @@ type Fake struct {
 	GetErr    error
 	// Gets records the provider payment id of every GetCheckout call.
 	Gets []string
+	// Verifies records every VerifyWebhook call.
+	Verifies []provider.CallbackRequest
 }
 
 // New returns a Fake named "fake" with two secret string credentials
@@ -172,8 +173,11 @@ func (f *Fake) CancelCheckout(_ context.Context, a provider.Account, providerPay
 }
 
 // VerifyWebhook compares TokenHeader with the "token" credential.
-func (f *Fake) VerifyWebhook(a provider.Account, h http.Header, _ []byte) error {
-	got, want := h.Get(TokenHeader), a.Credentials["token"]
+func (f *Fake) VerifyWebhook(a provider.Account, r provider.CallbackRequest) error {
+	f.mu.Lock()
+	f.Verifies = append(f.Verifies, r)
+	f.mu.Unlock()
+	got, want := r.Header.Get(TokenHeader), a.Credentials["token"]
 	if got == "" || want == "" || subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
 		return provider.ErrInvalidSignature
 	}

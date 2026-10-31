@@ -1,4 +1,4 @@
-package xendit
+package provider
 
 import (
 	"crypto/tls"
@@ -7,9 +7,10 @@ import (
 	"net"
 )
 
-// notSent reports whether a transport error happened before the request
-// could reach Xendit: name resolution, connecting, or the TLS handshake.
-func notSent(err error) bool {
+// NotSent reports whether a transport error happened before the request
+// could reach the gateway: name resolution, connecting, or the TLS
+// handshake. Such a request may be retried without risking a duplicate.
+func NotSent(err error) bool {
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
 		return true

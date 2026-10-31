@@ -1,16 +1,7 @@
 import { useId, type ReactNode } from "react";
-import { Fact as SharedFact, FactList } from "@/shared/ui/fact-list";
+import { FactList } from "@/shared/ui/fact-list";
 import { Section } from "@/shared/ui/section";
 import { Skeleton } from "@/shared/ui/skeleton";
-
-/** A label/value row in a detail panel. */
-export function Fact({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
-  return (
-    <SharedFact label={label} className={className}>
-      {children}
-    </SharedFact>
-  );
-}
 
 /** The `dl` that holds a panel's facts, with the narrow label column of a side panel. */
 export function Facts({ children, className }: { children: ReactNode; className?: string }) {

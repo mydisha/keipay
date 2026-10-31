@@ -5,7 +5,7 @@ import { Skeleton } from "./skeleton";
 export type StatTone = "positive" | "negative" | "neutral";
 
 export interface StatChange {
-  /** Says what it is compared with ("+12,5% vs previous 7 days"); the colour only reinforces the text. */
+  /** Says what it is compared with ("+12,5%"; the page header names the period it is compared with); the colour only reinforces the text. */
   text: string;
   tone?: StatTone;
 }

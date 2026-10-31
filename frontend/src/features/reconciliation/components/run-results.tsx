@@ -1,4 +1,5 @@
 import { PanelRightOpenIcon } from "lucide-react";
+import { formatNumber } from "@/shared/lib/format";
 import { strings } from "@/shared/lib/strings";
 import { loadMoreList } from "@/shared/lib/use-cursor-pages";
 import { Button } from "@/shared/ui/button";
@@ -80,8 +81,8 @@ function ResultCounts({ summary, search }: { summary: RunSummary; search: RunSea
   return (
     <Section id="results-heading" title={strings.reconciliation.resultsTitle}>
       <StatStrip className="lg:grid-cols-2">
-        <Stat label={strings.reconciliation.total} value={summary.total.toLocaleString("id-ID")} />
-        <Stat label={strings.reconciliation.unresolved} value={summary.unresolved.toLocaleString("id-ID")} />
+        <Stat label={strings.reconciliation.total} value={formatNumber(summary.total)} />
+        <Stat label={strings.reconciliation.unresolved} value={formatNumber(summary.unresolved)} />
       </StatStrip>
       <div className="flex flex-wrap gap-1.5">
         {RECONCILIATION_RESULTS.map((result) => {
@@ -96,7 +97,7 @@ function ResultCounts({ summary, search }: { summary: RunSummary; search: RunSea
               className="gap-2"
             >
               {resultLabel(result)}
-              <span className="tabular-nums">{count.toLocaleString("id-ID")}</span>
+              <span className="tabular-nums">{formatNumber(count)}</span>
             </Chip>
           );
         })}

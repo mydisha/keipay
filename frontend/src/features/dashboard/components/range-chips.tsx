@@ -8,7 +8,7 @@ export function RangeChips({ value, onChange }: { value: DashboardRange; onChang
     <div role="group" aria-label={strings.dashboard.rangeLabel} className="flex flex-wrap items-center gap-1.5">
       {DASHBOARD_RANGES.map((range) => (
         <Chip key={range} pressed={value === range} onClick={() => onChange(range)}>
-          {strings.dashboard.ranges[range] ?? range}
+          {strings.dashboard.ranges[range]}
         </Chip>
       ))}
     </div>

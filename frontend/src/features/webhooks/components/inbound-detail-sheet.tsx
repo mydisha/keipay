@@ -11,7 +11,8 @@ import { useInboundWebhook, type InboundWebhookDetail } from "../api/inbound";
 import { parseJsonBody } from "../lib/inbound-labels";
 import { eventDeliveriesPath } from "../lib/webhooks-search";
 import { isNotFound } from "./delivery-detail-sheet";
-import { DetailSection, DetailSkeleton, Fact, Facts } from "./detail-parts";
+import { Fact } from "@/shared/ui/fact-list";
+import { DetailSection, DetailSkeleton, Facts } from "./detail-parts";
 import { ResultBadge, SignatureBadge } from "./inbound-badges";
 
 const linkClass =

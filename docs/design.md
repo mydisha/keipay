@@ -75,7 +75,7 @@ internal/
     provider.go, registry.go  port Provider, Capabilities, Registry, kelas error, schema
     xendit/                   adapter Xendit Invoice
     midtrans/                 adapter Snap (rencana)
-    doku/                     adapter Checkout (rencana)
+    doku/                     adapter DOKU Checkout
     providertest/             fake Provider untuk test service
   service/
     payment_service.go        create payment; lewat RoutingService + attempt loop (rencana)
@@ -255,8 +255,15 @@ type Provider interface {
 	CreateCheckout(ctx context.Context, a Account, in CheckoutInput) (*CheckoutOutput, error)
 	CancelCheckout(ctx context.Context, a Account, providerPaymentID string) error
 
-	VerifyWebhook(a Account, h http.Header, rawBody []byte) error
+	VerifyWebhook(a Account, r CallbackRequest) error
 	ParseWebhook(rawBody []byte) (*InboundEvent, error)
+}
+
+// Callback seperti yang diterima URL callback connection.
+type CallbackRequest struct {
+	Path   string // path URL callback publik, termasuk prefix HTTP_BASE_URL
+	Header http.Header
+	Body   []byte
 }
 
 // Opsional, untuk rekonsiliasi; wajib kalau Capabilities.ListTransactions.
@@ -265,7 +272,7 @@ type TransactionLister interface {
 }
 ```
 
-`VerifyWebhook` cukup membaca header; port ini tidak mengimpor Gin. Detail schema, `Descriptor`, dan `ValidateAccount` ada di [Connections dan provider](#connections-dan-provider).
+`VerifyWebhook` membaca header, body, dan path URL callback publik (DOKU ikut menandatangani path itu); port ini tidak mengimpor Gin. Detail schema, `Descriptor`, dan `ValidateAccount` ada di [Connections dan provider](#connections-dan-provider).
 
 Routing multi-gateway (rencana) menambah dua method ke port, dipakai attempt loop dan reconciler status, beserta `Channel` di `InboundEvent`:
 
@@ -309,22 +316,24 @@ func (r *Registry) Has(n Name) bool
 func (r *Registry) All() []Provider // untuk UI: daftar provider + schema
 ```
 
-Dibuat di `cmd/server/main.go` (`provider.NewRegistry(xendit.New())`). Menambah PG baru berarti menulis satu paket adapter dan satu argumen registrasi.
+Dibuat di `cmd/server/main.go` (`provider.NewRegistry(xendit.New(), doku.New())`). Menambah PG baru berarti menulis satu paket adapter dan satu argumen registrasi.
 
 ### Catatan per adapter
 
-Adapter Xendit sudah dibangun. Kolom Midtrans dan DOKU adalah rencana dan **harus diverifikasi ulang terhadap dokumentasi resmi** saat adapternya ditulis.
+Adapter Xendit dan DOKU sudah dibangun. Kolom Midtrans adalah rencana dan **harus diverifikasi ulang terhadap dokumentasi resmi** saat adapternya ditulis.
 
 | | Xendit (Invoice) | Midtrans (Snap) | DOKU (Checkout) |
 |---|---|---|---|
-| Reference di PG | `external_id` | `order_id` (unik per merchant, maks 50 karakter) | `order.invoice_number` |
+| Reference di PG | `external_id` | `order_id` (unik per merchant, maks 50 karakter) | `order.invoice_number`: `kp_pay_<ULID>` dikirim sebagai `KP<ULID>` (28 karakter tanpa simbol, karena DOKU membatasi 30 karakter saat kartu aktif) dan dipetakan balik saat callback |
 | Batasi metode | `payment_methods` | `enabled_payments` | `payment.payment_method_types` |
-| Verifikasi webhook | header `x-callback-token` == token connection (constant-time) | `signature_key` = SHA512(`order_id`+`status_code`+`gross_amount`+server key) | header `Signature`: HMAC-SHA256 atas Client-Id, Request-Id, Timestamp, Target, Digest |
-| Lookup by reference | `GET /v2/invoices?external_id=` | `GET /v2/{order_id}/status` | API status by invoice number |
-| Batalkan | expire invoice | `POST /v2/{order_id}/cancel` atau expire | verifikasi saat implementasi |
+| Verifikasi webhook | header `x-callback-token` == token connection (constant-time) | `signature_key` = SHA512(`order_id`+`status_code`+`gross_amount`+server key) | header `Signature` = `HMACSHA256=` + base64(HMAC-SHA256(`secret_key`, baris `Client-Id`, `Request-Id`, `Request-Timestamp`, `Request-Target` = path URL callback, `Digest` = base64(SHA-256(body)))); `Client-Id` harus sama dengan connection |
+| Lookup by reference | `GET /v2/invoices?external_id=` | `GET /v2/{order_id}/status` | `GET /orders/v1/status/{invoice_number}` (non-SNAP, tanpa Digest) |
+| Batalkan | expire invoice | `POST /v2/{order_id}/cancel` atau expire | `POST /checkout/v3/cancellations`; DOKU hanya membatalkan sebagian VA dan QRIS, dan hanya kalau fitur itu aktif di Back Office, jadi penolakan wajar |
 | Kredensial | `secret_key`, `callback_token` | `server_key`, `client_key` (opsional) | `client_id`, `secret_key` |
 
-Adapter Xendit ada di `internal/provider/xendit`; pemetaan status Xendit ada di `ParseWebhook` adapter itu, bukan di `webhook_service.go`.
+Adapter Xendit ada di `internal/provider/xendit` dan adapter DOKU di `internal/provider/doku`; pemetaan status ada di `ParseWebhook` masing-masing adapter, bukan di `webhook_service.go`.
+
+DOKU dipanggil di `api-sandbox.doku.com` untuk connection test dan `api.doku.com` untuk live. DOKU tidak punya API daftar transaksi dan notifikasinya tidak memuat fee, jadi connection DOKU belum ikut rekonsiliasi (`ListTransactions` false). Payment DOKU yang callback-nya hilang tetap dibaca balik lewat API status.
 
 ### Normalisasi status
 
@@ -332,11 +341,13 @@ State machine `domain.PaymentStatus` memakai `CanTransitionTo` (PENDING → PAID
 
 | Normal | Xendit | Midtrans `transaction_status` | DOKU |
 |---|---|---|---|
-| `PENDING` | `PENDING` | `pending`; `capture` + `fraud_status=challenge` | pending |
-| `PAID` | `PAID` | `settlement`; `capture` + `fraud_status=accept` | success |
+| `PENDING` | `PENDING` | `pending`; `capture` + `fraud_status=challenge` | `PENDING`, `TIMEOUT`, `REDIRECT`, `ORDER_GENERATED`, `ORDER_RECOVERED` |
+| `PAID` | `PAID` | `settlement`; `capture` + `fraud_status=accept` | `SUCCESS` |
 | `SETTLED` | `SETTLED` | tidak ada (Midtrans tidak mengirim event dana cair) | tidak ada |
-| `EXPIRED` | `EXPIRED` | `expire` | expired |
-| `FAILED` | `FAILED`, `STOPPED` | `deny`, `cancel`, `failure` | failed |
+| `EXPIRED` | `EXPIRED` | `expire` | `EXPIRED`, `ORDER_EXPIRED` |
+| `FAILED` | `FAILED`, `STOPPED` | `deny`, `cancel`, `failure` | `FAILED`, `CANCELLED` |
+
+Status refund DOKU (`REFUNDED`, `PARTIAL_REFUNDED`, `VOIDED`) belum punya padanan di KeiPay dan diperlakukan sama seperti status yang tidak dikenal.
 
 Status yang tidak dikenal → `ParseWebhook` mengembalikan `Status` kosong, inbound dicatat dengan `result = unmapped`, dan PG tetap di-ack. Webhook tidak boleh di-apply diam-diam, dan status yang tidak dikenal tidak pernah dipetakan ke nilai default.
 
@@ -936,7 +947,7 @@ Setiap fase bisa dirilis dan dijalankan sendiri. Fondasi sampai rekonsiliasi mem
 | 5. Rekonsiliasi | `ledger_entries` → `payment_reports`, matcher independen sumber, `reconciliation_runs` (`rec_`) + item sebagai job asynq, resolve dengan audit, export CSV streaming | 3, 4 | Setiap jenis hasil match teruji |
 | 6. Routing multi-gateway | `app_connections`, konfigurasi routing berversi, `payment_attempts`, attempt loop + adopsi, `RoutingService`, reconciler, simulate, timeline payment | 3, 4 | Properti 1–7, 10, 11 lulus |
 | 7. Adapter Midtrans | Snap + webhook + status + cancel, tanpa perubahan frontend | 6 | Skenario sandbox end-to-end lulus |
-| 8. Adapter DOKU | Jalur Checkout atau SNAP BI (belum dipilih; memengaruhi skema signature dan kredensial), tanpa perubahan frontend | 6 | Skenario sandbox end-to-end lulus |
+| 8. Adapter DOKU | DOKU Checkout dengan signature non-SNAP, tanpa perubahan frontend; alur direct (VA dan QRIS lewat SNAP, Indomaret dan Alfamart non-SNAP) | 3, 4 | Skenario sandbox end-to-end lulus |
 | 9. Health dan dashboard | Circuit breaker Redis, maintenance manual/terjadwal, `/admin/health`, dashboard | 6 | Transisi breaker dan fail-open teruji, diverifikasi di browser |
 
 ## Catatan hukum

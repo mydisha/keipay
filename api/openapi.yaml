@@ -138,7 +138,8 @@ info:
 
     ## Connections and providers
 
-    A provider is a gateway adapter built into KeiPay (today: `xendit`).
+    A provider is a gateway adapter built into KeiPay (today: `xendit`
+    and `doku`).
     `GET /admin/providers` describes each one: its credential and
     settings fields (`ConfigSchema`), capabilities and webhook setup
     steps. The console renders its forms from that data, so a new
@@ -524,7 +525,13 @@ paths:
         `provider` to equal the connection's provider, then verifies the
         callback with that connection's credentials before reading the
         body. For `xendit`, the `x-callback-token` header must equal the
-        connection's `callback_token` (constant-time comparison).
+        connection's `callback_token` (constant-time comparison). For
+        `doku`, `Client-Id` must equal the connection's `client_id` and
+        `Signature` must be `HMACSHA256=` and the base64 HMAC-SHA256, under
+        the connection's `secret_key`, of the lines `Client-Id`,
+        `Request-Id`, `Request-Timestamp`, `Request-Target` (the path of
+        this URL, including any path of `HTTP_BASE_URL`) and `Digest`
+        (base64 SHA-256 of the body).
 
         - Unknown connection id, malformed id, or a provider that differs
           from the connection's: `404 not_found`. Not recorded.
@@ -2135,7 +2142,9 @@ paths:
       description: |
         Calls the gateway with the stored credentials (Xendit: list one
         invoice, which needs the invoice read permission KeiPay uses
-        anyway) with a 10-second timeout. The outcome is a result, not an
+        anyway; DOKU: ask for the status of an order that does not exist,
+        which DOKU answers only after checking the signature) with a
+        10-second timeout. The outcome is a result, not an
         error: `200` with `result` `ok` or `failed` and a short `message`
         that never contains credentials or raw gateway responses. Stores
         `last_tested_at`, `last_test_status` and `last_test_error` and
@@ -3868,7 +3877,7 @@ components:
 
     GatewayCallback:
       type: object
-      description: The provider's own callback body, stored raw. For `xendit` see `XenditInvoiceCallback`.
+      description: The provider's own callback body, stored raw. For `xendit` see `XenditInvoiceCallback`; for `doku`, DOKU's HTTP notification (`order.invoice_number`, `order.amount`, `transaction.status`).
       additionalProperties: true
 
     XenditInvoiceCallback:
@@ -4415,10 +4424,10 @@ components:
       type: string
       pattern: '^[a-z][a-z0-9_]{1,31}$'
       description: |
-        A provider adapter built into the server, e.g. `xendit`. The set
+        A provider adapter built into the server, e.g. `xendit` or `doku`. The set
         is whatever `GET /admin/providers` returns; an unknown name is
         rejected with rule `oneof`.
-      examples: [xendit]
+      examples: [xendit, doku]
 
     Channel:
       type: string
@@ -4852,6 +4861,7 @@ components:
           type: string
         xendit_invoice_id:
           type: string
+          description: The gateway's own payment id (Xendit invoice id, DOKU invoice number). The name predates other gateways.
         amount:
           type: integer
           format: int64
@@ -6217,7 +6227,7 @@ components:
           description: A short explanation, e.g. which field mismatched; may be empty. Never contains secrets.
         event_key:
           type: [string, 'null']
-          description: The gateway's event key (Xendit invoice id); `null` when the body could not be read or verification failed.
+          description: The gateway's event key (Xendit invoice id, DOKU invoice number); `null` when the body could not be read or verification failed.
         provider_status:
           type: [string, 'null']
           description: The gateway's own status value.

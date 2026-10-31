@@ -6,12 +6,12 @@ receives the gateway's callback, and forwards a normalized, signed event to
 the webhook endpoints of the app that created the payment. It also
 reconciles its records with the gateway's.
 
-> **Status: early.** Today KeiPay supports **Xendit Invoice**. Gateway
-> accounts are configured in the console as connections (any number, each
-> `test` or `live`), and each app uses one default connection. Routing an
-> app across several connections (`auto`, weighted, fallback) and Midtrans
-> and DOKU adapters are designed in [`docs/design.md`](docs/design.md) but
-> not built yet.
+> **Status: early.** Today KeiPay supports **Xendit Invoice** and **DOKU
+> Checkout**. Gateway accounts are configured in the console as connections
+> (any number, each `test` or `live`), and each app uses one default
+> connection. Routing an app across several connections (`auto`, weighted,
+> fallback) and a Midtrans adapter are designed in
+> [`docs/design.md`](docs/design.md) but not built yet.
 
 **Contents:**
 [How it works](#how-it-works) ·
@@ -20,6 +20,7 @@ reconciles its records with the gateway's.
 [Docker](#running-everything-with-docker) ·
 [First sign-in](#first-sign-in) ·
 [Connect a gateway](#connect-a-gateway-xendit) ·
+[Connect DOKU](#connect-doku) ·
 [API contract](#api-contract) ·
 [App API](#app-api) ·
 [Webhooks sent to your app](#webhooks-sent-to-your-app) ·
@@ -185,7 +186,7 @@ minutes ago (for up to three days, at most every ten minutes per payment).
 A status other than pending is applied exactly like a callback, with the
 same events, and the inbound log shows it with source `poll`. A callback
 that arrives later is a duplicate. Providers that can read a checkout back
-have the capability `read_checkout` (Xendit does).
+have the capability `read_checkout` (Xendit and DOKU do).
 
 ### Payment status
 
@@ -480,6 +481,39 @@ to the connection's own URL and remove the two variables (the server warns
 while they are set). Apps whose environment differs from the key's (for
 example `live` apps with a development key) get no default connection and
 are listed in the server log.
+
+## Connect DOKU
+
+DOKU connections create a **DOKU Checkout** page for each payment. The
+steps are the same as for Xendit; only the credentials and the place to
+paste the callback URL differ.
+
+1. **Connections → Add connection.** Pick DOKU and the environment. DOKU
+   keys do not say which environment they belong to: choose `test` for a
+   sandbox account (KeiPay calls `api-sandbox.doku.com`) and `live` for a
+   production account (`api.doku.com`).
+2. Paste the **Client ID** and the **Secret Key** (DOKU Back Office →
+   Integration → API Keys). The secret key signs every request and
+   verifies every notification.
+3. KeiPay tests the credentials by asking for the status of an order that
+   does not exist; DOKU checks the signature first.
+4. Copy the connection's **callback URL**,
+   `https://<your-host>/webhooks/doku/con_…`, into DOKU Back Office →
+   Settings → Payment Settings → each payment method → Configure →
+   Notification URL. DOKU signs each notification together with the path
+   of that URL, so paste it unchanged. If KeiPay is served under a path
+   prefix, `HTTP_BASE_URL` must include it.
+5. Choose the **channels**; KeiPay sends them as DOKU's
+   `payment_method_types`. Optional settings: the checkout lifetime in
+   minutes (DOKU's default is 60), the page language, and whether DOKU
+   sends the customer back to the payment's success URL after paying.
+
+DOKU checks out in IDR only. A payment's reference `kp_pay_<ULID>` travels
+as the invoice number `KP<ULID>`, which stays within DOKU's 30-character
+limit for card payments. DOKU has no transaction list API and does not
+report fees, so DOKU connections cannot be [reconciled](#reconciliation)
+yet; a lost notification is still covered by the read-back of expired
+checkouts.
 
 ## API contract
 
@@ -918,6 +952,17 @@ such as an ngrok static domain: random quick-tunnel domains can change
 while you wait for a callback, and the Xendit dashboard refused a
 `trycloudflare.com` URL. In the test-mode checkout, each payment method
 has a button that simulates the payment.
+
+### Against the DOKU sandbox
+
+`go test ./internal/provider/doku -run Sandbox` creates a checkout on a
+DOKU sandbox account and reads its status back when
+`DOKU_SANDBOX_CLIENT_ID` and `DOKU_SANDBOX_SECRET_KEY` are set in the
+environment (for example `set -a; . ../.env; set +a` from `backend/`);
+without them the test is skipped. For
+notifications, use a tunnel with a fixed domain as above and paste the
+connection's callback URL into the sandbox Back Office; the DOKU sandbox
+checkout page can simulate each payment method.
 
 ## Contributing and security
 

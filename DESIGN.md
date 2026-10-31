@@ -5,29 +5,23 @@ that is not here, add it here first.
 
 ## Direction
 
-Set by the product owner; this section transcribes it.
-
 - **What it is:** an operations console for payments. It is calm, dense and
   easy to trust, like a payment provider's dashboard, not a landing page. The
   pages are clean and tidy, with the same structure everywhere.
-- **Visual language:** the Kei ledger family, shared with KeiRouter. Ivory
+- **Visual language:** the Kei ledger family. Ivory
   paper and a pine-black ink for text and buttons. Pine is a thin signal for
   links, focus, the active page and the outcome that matters in a chart.
   Lists and figures are split by 1px rules like ledger columns, with at most
   one surface per region and never a card inside a card.
 - **Identity motifs:** ruled hairlines between rows and figures, and payment
   references set in mono like the lines of a receipt.
-- **Logo:** the name "KeiPay" as a text wordmark until the owner supplies a
-  drawn mark.
+- **Logo:** the name "KeiPay" as a text wordmark.
 - **Missing values** are written out for what they mean ("Not set", "Never",
   "Not yet", "Unknown", "None"), never a dash.
-- **Design Read:** payment operations console for the people who run KeiPay,
-  in a quiet two-tone ledger style.
-
-| Surface | ENERGY | RHYTHM | MOTION | Why |
-|---|---|---|---|---|
-| Console pages | 1 | 1 | 1 | People come to read numbers and act. Pages are predictable, and motion is only hover and focus feedback. |
-| Auth pages | 1 | 1 | 1 | One task per screen, so nothing competes with the form. |
+- **Pace:** console and auth pages are quiet. People come to read numbers
+  and act, so layouts are predictable, motion is only hover and focus
+  feedback, and an auth page has one task with nothing competing with its
+  form.
 
 Code lives in `frontend/`. Tokens are in `frontend/src/app/styles.css`, shared
 components in `frontend/src/shared/ui`, and every user-facing string in
@@ -51,9 +45,7 @@ never raw hex, rgb or Tailwind palette colours such as `text-red-600`.
 
 ### Colour
 
-| Token | Use |
-|---|---|
-The palette is the KeiRouter ledger palette: neutrals are ivory (hue 95) in
+The palette is the Kei ledger palette: neutrals are ivory (hue 95) in
 light and charcoal with a pine cast (hue 165) in dark, never pure white or
 black.
 
@@ -111,7 +103,7 @@ Recheck contrast when you change a token.
 
 ### Typography
 
-- Sans: IBM Plex Sans 400/500/600, chosen by the owner: an industrial grotesk
+- Sans: IBM Plex Sans 400/500/600: an industrial grotesk
   that reads like printed statements. Mono: IBM Plex Mono 400/500 for ids,
   keys, slugs, event names and JSON, never for headings or prose.
 - Base size 14px (`text-sm`, line height 20px). Inputs use 16px below 768px so
@@ -171,14 +163,13 @@ Import from `@/shared/ui/*`. Prefer these over new markup.
 | `JsonViewer` | Raw payloads and before/after snapshots. Collapsible, pretty-printed, copyable; long payloads are cut in the view but copied in full. |
 | `Timeline` | Ordered events (payment lifecycle, delivery attempts) with time, title, a text status and an optional body. |
 | `PageHeader` | The `h1`, one sentence of context, page actions, an optional eyebrow above the title, and `children` for the row under it (range chips, a note). |
-| `Card` (`CardHeader`, `CardTitle`, `CardDescription`, `CardAction`, `CardContent`, `CardFooter`) | Every surface, at most one per region. Split what is inside with hairlines (`divide-y`, `border-t`), never a card or bordered box inside a card. `CardHeader` carries the title (`h2`, or `h3` with `as`), an optional sentence only when it adds a fact, and an action on the right; `CardContent` the body; `CardFooter` a closing row such as a form's buttons. `size="compact"` for side panels. |
+| `Card` (`CardHeader`, `CardTitle`, `CardDescription`, `CardAction`, `CardContent`, `CardFooter`) | Every surface, at most one per region. Split what is inside with hairlines (`divide-y`, `border-t`), never a card or bordered box inside a card. `CardHeader` carries the title (`h2`, or `h3` with `as`), an optional sentence only when it adds a fact, and an action on the right; `CardContent` the body; `CardFooter` a closing row such as a form's buttons. `size="compact"` for a small block of facts beside a header (a run's figures). |
 | `Section` / `SectionHeader` | The only way to write an `h2` (or `h3`) with its sentence and actions: `<section aria-labelledby={id}>` with `gap-3` to its content. Pass the heading id other code relies on (`audit-log-heading`). |
 | `DetailHeader` | The header of every detail page: `BackLink`, an optional eyebrow, the title (`titleMono` for an id), badges, one sentence, inline facts, and the write actions on the right. `DetailHeaderSkeleton` while loading. |
 | `BackLink` | "Back to …" above a detail page or a wizard. |
 | `FactList` / `Fact` | Label/value pairs as a definition list: `rows` (label column, detail cards), `inline` (under a title), `tiles` (a grid of small facts). `mono` for ids and slugs; a missing value says "Not set". |
 | `StatStrip` / `Stat` | Figures that belong together as one surface split by hairlines, not separate cards: label, value in tabular figures, then the change as text and one line of context. A value that is a word for missing data ("Not yet") is set with `empty` so it never reads as a figure. `StatStripSkeleton` while loading. |
-| `Chart` (`ChartContainer`, `ChartTooltip`, `ChartTooltipContent`, `ChartLegend`, `ChartLegendContent`) | recharts wrapped so series colours only come from `chart-1` … `chart-5`. Every chart has an `aria-label` and an `sr-only` table of its rows. |
-| `Separator` | A hairline between groups of controls. |
+| `Chart` (`ChartContainer`, `ChartTooltip`, `ChartLegend`, `ChartLegendContent`) | recharts wrapped so series colours only come from `chart-1` … `chart-5`. A chart writes its own tooltip content for what it shows. Every chart has an `aria-label` and an `sr-only` table of its rows. |
 | `Alert` | Inline messages inside forms and sections. |
 | `Tabs` | Sibling views of one resource (Webhooks: Outbound, Inbound) that share a URL. Underline style; 24px to the content. |
 | `LinkTabs` | Sibling views that each have their own URL (Settings: Account, Users, Audit log; an app's Overview, API keys, Webhooks, Routing): links styled as the same underline tabs inside a labelled `nav`, `aria-current="page"` on the active one. |
@@ -496,7 +487,8 @@ the 7 days before."). The page is a `RequirePermission` on `payments:read`.
    days. Amounts are never added across currencies: gross volume is in the
    currency picked with the chips above the chart (IDR first), shown only
    when the range has more than one; counts and the success rate cover every
-   currency. No sparklines.
+   currency and come from `payments.totals`, so the console never computes a
+   rate the server also defines. No sparklines.
 2. Two ruled lists side by side from 1024px. Needs attention: failed
    deliveries (`/webhooks?status=FAILED`), rejected callbacks
    (`/webhooks?tab=inbound`) and unresolved reconciliation items

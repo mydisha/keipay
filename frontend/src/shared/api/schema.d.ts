@@ -106,7 +106,13 @@ export interface paths {
          *     `provider` to equal the connection's provider, then verifies the
          *     callback with that connection's credentials before reading the
          *     body. For `xendit`, the `x-callback-token` header must equal the
-         *     connection's `callback_token` (constant-time comparison).
+         *     connection's `callback_token` (constant-time comparison). For
+         *     `doku`, `Client-Id` must equal the connection's `client_id` and
+         *     `Signature` must be `HMACSHA256=` and the base64 HMAC-SHA256, under
+         *     the connection's `secret_key`, of the lines `Client-Id`,
+         *     `Request-Id`, `Request-Timestamp`, `Request-Target` (the path of
+         *     this URL, including any path of `HTTP_BASE_URL`) and `Digest`
+         *     (base64 SHA-256 of the body).
          *
          *     - Unknown connection id, malformed id, or a provider that differs
          *       from the connection's: `404 not_found`. Not recorded.
@@ -1000,7 +1006,9 @@ export interface paths {
          * Test a connection's credentials
          * @description Calls the gateway with the stored credentials (Xendit: list one
          *     invoice, which needs the invoice read permission KeiPay uses
-         *     anyway) with a 10-second timeout. The outcome is a result, not an
+         *     anyway; DOKU: ask for the status of an order that does not exist,
+         *     which DOKU answers only after checking the signature) with a
+         *     10-second timeout. The outcome is a result, not an
          *     error: `200` with `result` `ok` or `failed` and a short `message`
          *     that never contains credentials or raw gateway responses. Stores
          *     `last_tested_at`, `last_test_status` and `last_test_error` and
@@ -1788,7 +1796,7 @@ export interface components {
             /** Format: date-time */
             expected_settlement_at?: string;
         };
-        /** @description The provider's own callback body, stored raw. For `xendit` see `XenditInvoiceCallback`. */
+        /** @description The provider's own callback body, stored raw. For `xendit` see `XenditInvoiceCallback`; for `doku`, DOKU's HTTP notification (`order.invoice_number`, `order.amount`, `transaction.status`). */
         GatewayCallback: {
             [key: string]: unknown;
         };
@@ -2124,10 +2132,11 @@ export interface components {
             api_secret: string;
         };
         /**
-         * @description A provider adapter built into the server, e.g. `xendit`. The set
+         * @description A provider adapter built into the server, e.g. `xendit` or `doku`. The set
          *     is whatever `GET /admin/providers` returns; an unknown name is
          *     rejected with rule `oneof`.
          * @example xendit
+         * @example doku
          */
         ProviderName: string;
         /**
@@ -2375,6 +2384,7 @@ export interface components {
             reference: string;
             app: components["schemas"]["AppSummary"];
             order_id: string;
+            /** @description The gateway's own payment id (Xendit invoice id, DOKU invoice number). The name predates other gateways. */
             xendit_invoice_id: string;
             /** Format: int64 */
             amount: number;
@@ -3244,7 +3254,7 @@ export interface components {
             result: components["schemas"]["InboundWebhookResult"];
             /** @description A short explanation, e.g. which field mismatched; may be empty. Never contains secrets. */
             result_detail: string;
-            /** @description The gateway's event key (Xendit invoice id); `null` when the body could not be read or verification failed. */
+            /** @description The gateway's event key (Xendit invoice id, DOKU invoice number); `null` when the body could not be read or verification failed. */
             event_key: string | null;
             /** @description The gateway's own status value. */
             provider_status: string | null;

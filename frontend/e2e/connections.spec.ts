@@ -73,7 +73,10 @@ test.describe.serial("connections", () => {
     await page.getByRole("link", { name: "Add connection" }).first().click();
     await expect(page.getByRole("heading", { level: 1, name: "Add connection" })).toBeVisible();
 
-    // Step 1: provider, environment, name.
+    // Step 1: provider, environment, name. With more than one provider none
+    // is chosen for the operator.
+    await expect(page.getByRole("radio", { name: /DOKU/ })).not.toBeChecked();
+    await page.getByRole("radio", { name: /Xendit/ }).click();
     await expect(page.getByRole("radio", { name: /Xendit/ })).toBeChecked();
     await page.getByRole("radio", { name: "Test", exact: true }).click();
     await page.getByLabel("Name").fill(connectionName);

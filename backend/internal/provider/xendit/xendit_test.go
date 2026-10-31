@@ -303,18 +303,18 @@ func TestVerifyWebhook(t *testing.T) {
 		if token != "" {
 			h.Set("X-Callback-Token", token)
 		}
-		if err := a.VerifyWebhook(account, h, nil); !errors.Is(err, provider.ErrInvalidSignature) {
+		if err := a.VerifyWebhook(account, provider.CallbackRequest{Header: h}); !errors.Is(err, provider.ErrInvalidSignature) {
 			t.Errorf("%s: err = %v", name, err)
 		}
 	}
 	h := http.Header{}
 	h.Set("x-callback-token", "cb-token-123")
-	if err := a.VerifyWebhook(account, h, nil); err != nil {
+	if err := a.VerifyWebhook(account, provider.CallbackRequest{Header: h}); err != nil {
 		t.Fatalf("valid token: %v", err)
 	}
 	empty := provider.Account{Credentials: provider.Credentials{}}
 	h.Set("x-callback-token", "")
-	if err := a.VerifyWebhook(empty, h, nil); !errors.Is(err, provider.ErrInvalidSignature) {
+	if err := a.VerifyWebhook(empty, provider.CallbackRequest{Header: h}); !errors.Is(err, provider.ErrInvalidSignature) {
 		t.Fatalf("empty stored token: %v", err)
 	}
 }

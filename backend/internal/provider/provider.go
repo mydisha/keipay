@@ -110,6 +110,16 @@ type InboundEvent struct {
 	Source    string
 }
 
+// CallbackRequest is a gateway callback as it reached the connection's
+// callback URL.
+type CallbackRequest struct {
+	// Path is the path of the public callback URL the gateway called,
+	// including any prefix of HTTP_BASE_URL, for gateways that sign it.
+	Path   string
+	Header http.Header
+	Body   []byte
+}
+
 // Provider is a payment gateway adapter. Every method that calls the gateway
 // wraps its failure in exactly one of ErrRejected, ErrRetryable,
 // ErrUnknownOutcome or ErrNotFound.
@@ -127,7 +137,7 @@ type Provider interface {
 	// CancelCheckout makes an unpaid checkout unpayable.
 	CancelCheckout(ctx context.Context, a Account, providerPaymentID string) error
 	// VerifyWebhook authenticates a callback; failure is ErrInvalidSignature.
-	VerifyWebhook(a Account, h http.Header, rawBody []byte) error
+	VerifyWebhook(a Account, r CallbackRequest) error
 	ParseWebhook(rawBody []byte) (*InboundEvent, error)
 }
 

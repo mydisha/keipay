@@ -161,15 +161,15 @@ func TestProvidersDescribeXendit(t *testing.T) {
 		_, b := f.as(t, role)
 		m := decode(t, f.send(b, http.MethodGet, "/admin/providers", ""), http.StatusOK)
 		data := m["data"].([]any)
-		if len(data) != 2 || data[0].(map[string]any)["name"] != "fake" {
+		if len(data) != 3 || data[0].(map[string]any)["name"] != "doku" || data[1].(map[string]any)["name"] != "fake" {
 			t.Fatalf("%s: providers = %v", role, data)
 		}
 		var want any
 		if err := json.Unmarshal([]byte(xenditDescriptor), &want); err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(data[1], want) {
-			got, _ := json.MarshalIndent(data[1], "", "  ")
+		if !reflect.DeepEqual(data[2], want) {
+			got, _ := json.MarshalIndent(data[2], "", "  ")
 			t.Fatalf("%s: xendit descriptor =\n%s", role, got)
 		}
 	}

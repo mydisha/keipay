@@ -6,12 +6,12 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 KeiPay is a self-hosted payment orchestrator. Apps (formerly tenants) call one
 API with their own API keys; KeiPay creates the checkout on the payment gateway
-through the app's default connection (today: a Xendit Invoice on the
-operator's own Xendit account), receives the gateway webhook on that
-connection's own URL, and forwards a normalized, signed event to the
+through the app's default connection (today: a Xendit Invoice or a DOKU
+Checkout on the operator's own gateway account), receives the gateway webhook
+on that connection's own URL, and forwards a normalized, signed event to the
 originating app. KeiPay never holds funds. See `README.md` for the API and
 webhook contracts, and `docs/design.md` for the multi-gateway design (routing,
-attempts, Midtrans/DOKU adapters) that is not built yet.
+attempts, the Midtrans adapter) that is not built yet.
 
 ## Repository layout
 
@@ -73,7 +73,8 @@ Service-layer (ports-and-adapters); dependencies point inward to
   checkout checker.
 - `internal/provider`: gateway port (`Provider`, `Registry`, schemas,
   capabilities, error classes); one adapter package per gateway
-  (`internal/provider/xendit`), registered in `cmd/server/main.go`.
+  (`internal/provider/xendit`, `internal/provider/doku`), registered in
+  `cmd/server/main.go`.
 - `internal/pkg`: crypto (AES-256-GCM), hmac, keygen, logger.
 - Wiring is manual DI in `cmd/server/main.go`.
 

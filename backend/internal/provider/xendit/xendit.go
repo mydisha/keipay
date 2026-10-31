@@ -248,8 +248,8 @@ func (a *Adapter) CancelCheckout(ctx context.Context, acc provider.Account, invo
 
 // VerifyWebhook compares x-callback-token with the connection's token in
 // constant time.
-func (a *Adapter) VerifyWebhook(acc provider.Account, h http.Header, _ []byte) error {
-	got, want := h.Get(CallbackTokenHeader), acc.Credentials[keyCallbackToken]
+func (a *Adapter) VerifyWebhook(acc provider.Account, r provider.CallbackRequest) error {
+	got, want := r.Header.Get(CallbackTokenHeader), acc.Credentials[keyCallbackToken]
 	if got == "" || want == "" || subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
 		return provider.ErrInvalidSignature
 	}
@@ -574,7 +574,7 @@ func classify(ctx context.Context, create bool, resp *http.Response, sdkErr *com
 		}
 	}
 	if terr := rec.lastErr(); terr != nil {
-		if notSent(terr) && ctx.Err() == nil {
+		if provider.NotSent(terr) && ctx.Err() == nil {
 			return fmt.Errorf("%w: %v", provider.ErrRetryable, terr)
 		}
 		return fmt.Errorf("%w: %v", uncertain, terr)

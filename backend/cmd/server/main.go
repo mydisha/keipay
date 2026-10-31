@@ -18,6 +18,7 @@ import (
 	"github.com/mydisha/keipay/backend/internal/pkg/crypto"
 	"github.com/mydisha/keipay/backend/internal/pkg/logger"
 	"github.com/mydisha/keipay/backend/internal/provider"
+	"github.com/mydisha/keipay/backend/internal/provider/doku"
 	"github.com/mydisha/keipay/backend/internal/provider/xendit"
 	"github.com/mydisha/keipay/backend/internal/repository/postgres"
 	redisrepo "github.com/mydisha/keipay/backend/internal/repository/redis"
@@ -135,7 +136,7 @@ func main() {
 	log.Debug("asynq enqueuer initialized")
 
 	// Gateway adapters built into this server.
-	registry, err := provider.NewRegistry(xendit.New())
+	registry, err := provider.NewRegistry(xendit.New(), doku.New())
 	if err != nil {
 		log.Fatal("failed to register providers", zap.Error(err))
 	}

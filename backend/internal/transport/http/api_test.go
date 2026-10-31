@@ -22,6 +22,7 @@ import (
 	"github.com/mydisha/keipay/backend/internal/pkg/crypto"
 	"github.com/mydisha/keipay/backend/internal/pkg/id"
 	"github.com/mydisha/keipay/backend/internal/provider"
+	"github.com/mydisha/keipay/backend/internal/provider/doku"
 	"github.com/mydisha/keipay/backend/internal/provider/providertest"
 	"github.com/mydisha/keipay/backend/internal/provider/xendit"
 	"github.com/mydisha/keipay/backend/internal/service"
@@ -210,7 +211,8 @@ func newAPI(t *testing.T, frontendDir string, opts ...apiOption) *apiFixture {
 	f.deps.Sessions = auth
 	f.deps.Auth = handler.NewAuthHandler(auth, f.deps.Cookies, service.NewToken)
 	f.deps.Users = handler.NewUserHandler(service.NewUserService(f.users, directTx{}, auditSvc, hasher))
-	registry, err := provider.NewRegistry(f.fake, xendit.New(xendit.WithBaseURL(f.xenditAPI.URL)))
+	registry, err := provider.NewRegistry(f.fake, xendit.New(xendit.WithBaseURL(f.xenditAPI.URL)),
+		doku.New(doku.WithBaseURL("http://127.0.0.1:1")))
 	if err != nil {
 		t.Fatal(err)
 	}

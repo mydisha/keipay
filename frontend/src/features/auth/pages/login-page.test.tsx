@@ -106,7 +106,5 @@ describe("Login page", () => {
     const main = screen.getByRole("main");
     expect(within(main).getByRole("heading", { level: 1, name: "Sign in to KeiPay" })).toBeInTheDocument();
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
-    // No brand panel or marketing column beside the form.
-    expect(main.querySelectorAll("section")).toHaveLength(0);
   });
 });

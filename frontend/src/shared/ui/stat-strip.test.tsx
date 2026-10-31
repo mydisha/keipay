@@ -20,10 +20,10 @@ describe("StatStrip", () => {
   it("writes the change as text with its comparison, coloured by tone", () => {
     render(
       <StatStrip>
-        <Stat label="Gross volume" value="Rp150.000" change={{ text: "+12,5% vs previous 7 days", tone: "positive" }} hint="IDR" />
+        <Stat label="Gross volume" value="Rp150.000" change={{ text: "+12,5%", tone: "positive" }} hint="IDR" />
       </StatStrip>,
     );
-    expect(screen.getByText("+12,5% vs previous 7 days")).toHaveClass("text-success-foreground");
+    expect(screen.getByText("+12,5%")).toHaveClass("text-success-foreground");
     expect(screen.getByText("IDR")).toBeInTheDocument();
   });
 

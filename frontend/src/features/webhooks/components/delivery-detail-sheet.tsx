@@ -18,7 +18,8 @@ import { Timeline, type TimelineItem } from "@/shared/ui/timeline";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/shared/ui/tooltip";
 import { useDelivery, useReplayDelivery, type WebhookDeliveryAttempt, type WebhookDeliveryDetail } from "../api/deliveries";
 import { TagBadge } from "./endpoint-badges";
-import { DetailSection, DetailSkeleton, Fact, Facts } from "./detail-parts";
+import { Fact } from "@/shared/ui/fact-list";
+import { DetailSection, DetailSkeleton, Facts } from "./detail-parts";
 
 export function isNotFound(error: unknown): boolean {
   return isApiError(error) && (error.code === "not_found" || error.code === "invalid_request");

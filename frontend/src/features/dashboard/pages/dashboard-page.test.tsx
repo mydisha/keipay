@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
-import { CON_ID, dashboard, dashboardSeries, dashboardTotals, me, PAY_ID, payment, REC_ID } from "@/test/fixtures";
+import { CON_ID, dashboard, dashboardCounts, dashboardSeries, dashboardTotals, me, noDashboardTotals, PAY_ID, payment, REC_ID } from "@/test/fixtures";
 import { errorBody, json, mockApi } from "@/test/http";
 import { stubElementSize } from "@/test/layout";
 import { renderApp } from "@/test/render";
@@ -19,8 +19,8 @@ function kpi(label: string) {
 
 function emptyDashboard() {
   return dashboard({
-    payments: { by_currency: [], series: dashboardSeries(7, []) },
-    deliveries: { total: 0, pending: 0, delivered: 0, failed: 0, success_rate: null },
+    payments: { totals: noDashboardTotals(), by_currency: [], series: dashboardSeries(7, []) },
+    deliveries: { total: 0, pending: 0, delivered: 0, failed: 0, finished: 0, success_rate: null },
     inbound: {
       total: 0,
       applied: 0,
@@ -65,7 +65,7 @@ describe("Dashboard page", () => {
   });
 
   it("asks for 30 days from the chip and keeps the range in the URL", async () => {
-    const api = mockApi({ [DASHBOARD]: () => json(200, dashboard({ range: "30d", payments: { by_currency: [], series: dashboardSeries(30, []) } })) });
+    const api = mockApi({ [DASHBOARD]: () => json(200, dashboard({ range: "30d", payments: { totals: noDashboardTotals(), by_currency: [], series: dashboardSeries(30, []) } })) });
     const { user, router } = renderApp("/");
     const group = await screen.findByRole("group", { name: "Range" });
     expect(within(group).getByRole("button", { name: "Last 7 days" })).toHaveAttribute("aria-pressed", "true");
@@ -81,6 +81,25 @@ describe("Dashboard page", () => {
     await screen.findByText("Gross volume");
     expect(lastQuery(api)).toEqual({ range: "30d", environment: "live" });
     expect(screen.getByRole("button", { name: "Last 30 days" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("falls back to 7 days for an unknown range in the URL instead of sending it", async () => {
+    const api = mockApi({ [DASHBOARD]: dashboard() });
+    renderApp("/?range=3d");
+    await screen.findByText("Gross volume");
+    expect(lastQuery(api)).toEqual({ range: "7d", environment: "live" });
+    expect(api.to("GET", "/admin/dashboard").every((request) => new URL(request.url).searchParams.get("range") === "7d")).toBe(true);
+    expect(screen.getByRole("button", { name: "Last 7 days" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByTestId("error-state")).not.toBeInTheDocument();
+  });
+
+  it("drops ?range= when going back to the default 7 days", async () => {
+    const api = mockApi({ [DASHBOARD]: dashboard() });
+    const { user, router } = renderApp("/?range=30d");
+    const group = await screen.findByRole("group", { name: "Range" });
+    await user.click(within(group).getByRole("button", { name: "Last 7 days" }));
+    await waitFor(() => expect(lastQuery(api)).toEqual({ range: "7d", environment: "live" }));
+    expect(router.state.location.search).toBe("");
   });
 
   it("follows the Test mode switch and says so", async () => {
@@ -184,16 +203,20 @@ describe("Dashboard page", () => {
     mockApi({
       [DASHBOARD]: dashboard({
         payments: {
+          totals: {
+            current: dashboardCounts({ created: 2, paid: 2, successful: 2, finished: 2, success_rate: 1 }),
+            previous: dashboardCounts({ created: 1, paid: 1, successful: 1, finished: 1, success_rate: 1 }),
+          },
           by_currency: [
             {
               currency: "USD",
-              current: dashboardTotals({ created: 1, paid: 1, successful: 1, gross: 1050, success_rate: 1 }),
+              current: dashboardTotals({ created: 1, paid: 1, successful: 1, finished: 1, gross: 1050, success_rate: 1 }),
               previous: dashboardTotals(),
             },
             {
               currency: "IDR",
-              current: dashboardTotals({ created: 1, paid: 1, successful: 1, gross: 150000, success_rate: 1 }),
-              previous: dashboardTotals({ created: 1, paid: 1, successful: 1, gross: 100000, success_rate: 1 }),
+              current: dashboardTotals({ created: 1, paid: 1, successful: 1, finished: 1, gross: 150000, success_rate: 1 }),
+              previous: dashboardTotals({ created: 1, paid: 1, successful: 1, finished: 1, gross: 100000, success_rate: 1 }),
             },
           ],
           series,
@@ -209,7 +232,9 @@ describe("Dashboard page", () => {
     expect(kpi("Gross volume")).toHaveTextContent("US$10,50");
     // USD had nothing in the previous period, so there is no change to show.
     expect(kpi("Gross volume")).not.toHaveTextContent("%");
-    expect(kpi("Payments")).toHaveTextContent("2");
+    // Counts and rates come from the totals across every currency, whichever currency is chosen.
+    expect(kpi("Payments").querySelector("dd > span")).toHaveTextContent(/^2$/);
+    expect(kpi("Success rate")).toHaveTextContent("2 of 2 finished");
   });
 
   it("renders the chart as a named image with a text table of every day", async () => {

@@ -85,10 +85,26 @@ type DashboardPaymentTotals struct {
 // Successful is how many payments were paid or settled.
 func (t DashboardPaymentTotals) Successful() int64 { return t.Paid + t.Settled }
 
-// SuccessRate is successful over finished (successful, expired or failed)
-// payments, nil when none finished.
+// Finished is how many payments reached an outcome: successful, expired or
+// failed.
+func (t DashboardPaymentTotals) Finished() int64 { return t.Successful() + t.Expired + t.Failed }
+
+// SuccessRate is successful over finished payments, nil when none finished.
 func (t DashboardPaymentTotals) SuccessRate() *float64 {
-	return rate(t.Successful(), t.Successful()+t.Expired+t.Failed)
+	return rate(t.Successful(), t.Finished())
+}
+
+// Plus adds the counts of o, for totals across currencies. Gross stays 0
+// because amounts in different currencies do not add up.
+func (t DashboardPaymentTotals) Plus(o DashboardPaymentTotals) DashboardPaymentTotals {
+	return DashboardPaymentTotals{Created: t.Created + o.Created, Pending: t.Pending + o.Pending, Paid: t.Paid + o.Paid,
+		Settled: t.Settled + o.Settled, Expired: t.Expired + o.Expired, Failed: t.Failed + o.Failed}
+}
+
+// DashboardPeriodTotals compares the current period with the previous one.
+type DashboardPeriodTotals struct {
+	Current  DashboardPaymentTotals
+	Previous DashboardPaymentTotals
 }
 
 // rate is n over total, nil when total is 0.
@@ -127,10 +143,12 @@ type DashboardDeliveryCounts struct {
 	Failed    int64
 }
 
-// SuccessRate is delivered over finished (delivered or failed) deliveries,
-// nil when none finished.
+// Finished is how many deliveries reached an outcome: delivered or failed.
+func (c DashboardDeliveryCounts) Finished() int64 { return c.Delivered + c.Failed }
+
+// SuccessRate is delivered over finished deliveries, nil when none finished.
 func (c DashboardDeliveryCounts) SuccessRate() *float64 {
-	return rate(c.Delivered, c.Delivered+c.Failed)
+	return rate(c.Delivered, c.Finished())
 }
 
 // DashboardInbound counts the gateway callbacks received in a period.
@@ -151,8 +169,9 @@ func InboundResults() []InboundResult {
 
 // NewDashboardInbound totals counts per result, listing every result.
 func NewDashboardInbound(counts map[InboundResult]int64) DashboardInbound {
-	in := DashboardInbound{ByResult: make(map[InboundResult]int64, 8)}
-	for _, r := range InboundResults() {
+	results := InboundResults()
+	in := DashboardInbound{ByResult: make(map[InboundResult]int64, len(results))}
+	for _, r := range results {
 		n := counts[r]
 		in.ByResult[r] = n
 		in.Total += n
@@ -192,9 +211,11 @@ type DashboardSeriesPoint struct {
 	Gross       []DashboardCurrencyAmount
 }
 
-// DashboardPayments is the payment part of the dashboard. ByCurrency is
-// sorted by currency; Series has one point per day of the window.
+// DashboardPayments is the payment part of the dashboard. Totals counts
+// every currency together (its Gross is 0); ByCurrency is sorted by
+// currency; Series has one point per day of the window.
 type DashboardPayments struct {
+	Totals     DashboardPeriodTotals
 	ByCurrency []DashboardCurrencyTotals
 	Series     []DashboardSeriesPoint
 }
@@ -209,7 +230,6 @@ type DashboardReconciliation struct {
 
 // Dashboard is the console's overview of one environment over one range.
 type Dashboard struct {
-	Environment    *Environment
 	Range          DashboardRange
 	Window         DashboardWindow
 	Payments       DashboardPayments

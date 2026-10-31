@@ -572,7 +572,17 @@ export function dashboardSeries(days: number, currencies: string[] = ["IDR"], fr
 }
 
 export function dashboardTotals(overrides: Partial<Schemas["DashboardPaymentTotals"]> = {}): Schemas["DashboardPaymentTotals"] {
-  return { created: 0, pending: 0, paid: 0, settled: 0, expired: 0, failed: 0, successful: 0, gross: 0, success_rate: null, ...overrides };
+  return { created: 0, pending: 0, paid: 0, settled: 0, expired: 0, failed: 0, successful: 0, finished: 0, gross: 0, success_rate: null, ...overrides };
+}
+
+/** Counts across every currency for one period; `payments.totals` holds one per period. */
+export function dashboardCounts(overrides: Partial<Schemas["DashboardPaymentCounts"]> = {}): Schemas["DashboardPaymentCounts"] {
+  return { created: 0, pending: 0, paid: 0, settled: 0, expired: 0, failed: 0, successful: 0, finished: 0, success_rate: null, ...overrides };
+}
+
+/** `payments.totals` with nothing in either period. */
+export function noDashboardTotals(): Schemas["DashboardPeriodCounts"] {
+  return { current: dashboardCounts(), previous: dashboardCounts() };
 }
 
 /** A week with a little IDR activity, one connection, one run and one recent payment. */
@@ -587,16 +597,20 @@ export function dashboard(overrides: Partial<Schemas["DashboardResponse"]> = {})
     to: "2026-10-29T17:00:00Z",
     previous_from: "2026-10-15T17:00:00Z",
     payments: {
+      totals: {
+        current: dashboardCounts({ created: 4, paid: 3, expired: 1, successful: 3, finished: 4, success_rate: 0.75 }),
+        previous: dashboardCounts({ created: 2, paid: 1, failed: 1, successful: 1, finished: 2, success_rate: 0.5 }),
+      },
       by_currency: [
         {
           currency: "IDR",
-          current: dashboardTotals({ created: 4, paid: 3, expired: 1, successful: 3, gross: 450000, success_rate: 0.75 }),
-          previous: dashboardTotals({ created: 2, paid: 1, failed: 1, successful: 1, gross: 100000, success_rate: 0.5 }),
+          current: dashboardTotals({ created: 4, paid: 3, expired: 1, successful: 3, finished: 4, gross: 450000, success_rate: 0.75 }),
+          previous: dashboardTotals({ created: 2, paid: 1, failed: 1, successful: 1, finished: 2, gross: 100000, success_rate: 0.5 }),
         },
       ],
       series,
     },
-    deliveries: { total: 5, pending: 1, delivered: 3, failed: 1, success_rate: 0.75 },
+    deliveries: { total: 5, pending: 1, delivered: 3, failed: 1, finished: 4, success_rate: 0.75 },
     inbound: {
       total: 6,
       applied: 4,

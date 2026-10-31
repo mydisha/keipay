@@ -2,7 +2,7 @@ import { formatMoney, formatNumber, formatPercent } from "@/shared/lib/format";
 import { strings } from "@/shared/lib/strings";
 import { Stat, StatStrip } from "@/shared/ui/stat-strip";
 import type { Dashboard } from "../api/dashboard";
-import { deltaOf, ratePoints, sumTotals } from "../lib/dashboard-math";
+import { deltaOf, ratePoints } from "../lib/dashboard-math";
 
 interface KpiRowProps {
   dashboard: Dashboard;
@@ -13,16 +13,13 @@ interface KpiRowProps {
 
 /**
  * Gross volume, payments, success rate and delivery success. Only gross follows the chosen
- * currency; counts and rates cover every currency because they never add amounts.
+ * currency; counts and rates come from the server's totals across every currency.
  */
 export function KpiRow({ dashboard, currency, className }: KpiRowProps) {
-  const { by_currency: byCurrency } = dashboard.payments;
+  const { by_currency: byCurrency, totals } = dashboard.payments;
   const gross = currency ? byCurrency.find((entry) => entry.currency === currency) : undefined;
-  const current = sumTotals(byCurrency, "current");
-  const previous = sumTotals(byCurrency, "previous");
-  const finished = current.successful + current.expired + current.failed;
+  const { current, previous } = totals;
   const deliveries = dashboard.deliveries;
-  const deliveriesFinished = deliveries.delivered + deliveries.failed;
 
   return (
     <StatStrip aria-label={strings.dashboard.figuresLabel} className={className}>
@@ -38,13 +35,15 @@ export function KpiRow({ dashboard, currency, className }: KpiRowProps) {
         value={current.success_rate === null ? strings.common.notYet : formatPercent(current.success_rate)}
         empty={current.success_rate === null}
         change={ratePoints(current.success_rate, previous.success_rate)}
-        hint={finished === 0 ? strings.dashboard.noFinishedPayments : strings.dashboard.successfulOf(current.successful, finished)}
+        hint={current.finished === 0 ? strings.dashboard.noFinishedPayments : strings.dashboard.successfulOf(current.successful, current.finished)}
       />
       <Stat
         label={strings.dashboard.deliverySuccess}
         value={deliveries.success_rate === null ? strings.common.notYet : formatPercent(deliveries.success_rate)}
         empty={deliveries.success_rate === null}
-        hint={deliveriesFinished === 0 ? strings.dashboard.noFinishedDeliveries : strings.dashboard.deliveredOf(deliveries.delivered, deliveriesFinished)}
+        hint={
+          deliveries.finished === 0 ? strings.dashboard.noFinishedDeliveries : strings.dashboard.deliveredOf(deliveries.delivered, deliveries.finished)
+        }
       />
     </StatStrip>
   );

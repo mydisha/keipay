@@ -48,13 +48,28 @@ export function formatNumber(value: number): string {
   return numberFormat.format(value);
 }
 
-/** A ratio as a percentage, e.g. 0.925 → "92,5%"; `signed` adds + or − to non-zero values. */
+const percentFormats = new Map<string, Intl.NumberFormat>();
+
+/** A ratio as a percentage, e.g. 0.925 → "92,5%"; `signed` puts a sign on non-zero values ("+3%", "-3%"). */
 export function formatPercent(ratio: number, { signed = false, fractionDigits = 1 }: { signed?: boolean; fractionDigits?: number } = {}): string {
-  return new Intl.NumberFormat(DISPLAY_LOCALE, {
-    style: "percent",
-    maximumFractionDigits: fractionDigits,
-    signDisplay: signed ? "exceptZero" : "auto",
-  }).format(ratio);
+  const key = `${signed}:${fractionDigits}`;
+  let format = percentFormats.get(key);
+  if (!format) {
+    format = new Intl.NumberFormat(DISPLAY_LOCALE, {
+      style: "percent",
+      maximumFractionDigits: fractionDigits,
+      signDisplay: signed ? "exceptZero" : "auto",
+    });
+    percentFormats.set(key, format);
+  }
+  return format.format(ratio);
+}
+
+const pointsFormat = new Intl.NumberFormat(DISPLAY_LOCALE, { maximumFractionDigits: 1, signDisplay: "exceptZero" });
+
+/** A signed number of percentage points, e.g. 2.5 → "+2,5". */
+export function formatPoints(points: number): string {
+  return pointsFormat.format(points);
 }
 
 export function parseDate(value: string | Date | null | undefined): Date | null {

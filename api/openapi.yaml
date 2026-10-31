@@ -2231,6 +2231,9 @@ paths:
         apps and connections of that environment; without it every
         environment counts.
 
+        - `payments.totals`: the same counts for every currency together,
+          without an amount; the figures that do not depend on currency
+          read from here.
         - `payments.by_currency`: the payments *created* in each period,
           per currency, counted by status. `gross` adds up the amount of
           the paid and settled ones in that currency's minor unit;
@@ -2247,8 +2250,8 @@ paths:
         - `inbound`: the gateway callbacks received in the current period.
           `problems` counts every result except `applied`, `stale` and
           `duplicate`.
-        - `connections`: every connection of the environment, active ones
-          first, then by name.
+        - `connections`: up to 200 connections of the environment, active
+          ones first, then by name.
         - `reconciliation`: the unresolved items of every succeeded run
           (not only the period's) and the newest run, `null` when there
           is none.
@@ -5039,7 +5042,7 @@ components:
     DashboardPaymentTotals:
       type: object
       description: The payments created in one period and one currency, counted by status.
-      required: [created, pending, paid, settled, expired, failed, successful, gross, success_rate]
+      required: [created, pending, paid, settled, expired, failed, successful, finished, gross, success_rate]
       properties:
         created:
           type: integer
@@ -5064,6 +5067,10 @@ components:
           type: integer
           format: int64
           description: '`paid + settled`.'
+        finished:
+          type: integer
+          format: int64
+          description: '`successful + expired + failed`.'
         gross:
           type: integer
           format: int64
@@ -5072,7 +5079,53 @@ components:
           type: [number, 'null']
           minimum: 0
           maximum: 1
-          description: '`successful / (successful + expired + failed)`; `null` when no payment finished.'
+          description: '`successful / finished`; `null` when no payment finished.'
+
+    DashboardPaymentCounts:
+      type: object
+      description: The payments created in one period across every currency, counted by status. Amounts are per currency only, so there is no gross.
+      required: [created, pending, paid, settled, expired, failed, successful, finished, success_rate]
+      properties:
+        created:
+          type: integer
+          format: int64
+        pending:
+          type: integer
+          format: int64
+        paid:
+          type: integer
+          format: int64
+        settled:
+          type: integer
+          format: int64
+        expired:
+          type: integer
+          format: int64
+        failed:
+          type: integer
+          format: int64
+        successful:
+          type: integer
+          format: int64
+          description: '`paid + settled`.'
+        finished:
+          type: integer
+          format: int64
+          description: '`successful + expired + failed`.'
+        success_rate:
+          type: [number, 'null']
+          minimum: 0
+          maximum: 1
+          description: '`successful / finished`; `null` when no payment finished.'
+
+    DashboardPeriodCounts:
+      type: object
+      required: [current, previous]
+      properties:
+        current:
+          $ref: '#/components/schemas/DashboardPaymentCounts'
+        previous:
+          $ref: '#/components/schemas/DashboardPaymentCounts'
 
     DashboardCurrencyTotals:
       type: object
@@ -5127,8 +5180,10 @@ components:
 
     DashboardPayments:
       type: object
-      required: [by_currency, series]
+      required: [totals, by_currency, series]
       properties:
+        totals:
+          $ref: '#/components/schemas/DashboardPeriodCounts'
         by_currency:
           type: array
           description: One entry per currency seen in either period, sorted by code.
@@ -5143,7 +5198,7 @@ components:
     DashboardDeliveries:
       type: object
       description: The webhook deliveries created in the current period, by status.
-      required: [total, pending, delivered, failed, success_rate]
+      required: [total, pending, delivered, failed, finished, success_rate]
       properties:
         total:
           type: integer
@@ -5157,11 +5212,15 @@ components:
         failed:
           type: integer
           format: int64
+        finished:
+          type: integer
+          format: int64
+          description: '`delivered + failed`.'
         success_rate:
           type: [number, 'null']
           minimum: 0
           maximum: 1
-          description: '`delivered / (delivered + failed)`; `null` when no delivery finished.'
+          description: '`delivered / finished`; `null` when no delivery finished.'
 
     DashboardInboundResults:
       type: object
@@ -5256,7 +5315,7 @@ components:
           $ref: '#/components/schemas/DashboardInbound'
         connections:
           type: array
-          description: Every connection of the environment, active ones first, then by name.
+          description: Up to 200 connections of the environment, active ones first, then by name.
           items:
             $ref: '#/components/schemas/ConnectionListItem'
         reconciliation:

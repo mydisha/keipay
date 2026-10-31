@@ -1067,6 +1067,9 @@ export interface paths {
          *     apps and connections of that environment; without it every
          *     environment counts.
          *
+         *     - `payments.totals`: the same counts for every currency together,
+         *       without an amount; the figures that do not depend on currency
+         *       read from here.
          *     - `payments.by_currency`: the payments *created* in each period,
          *       per currency, counted by status. `gross` adds up the amount of
          *       the paid and settled ones in that currency's minor unit;
@@ -1083,8 +1086,8 @@ export interface paths {
          *     - `inbound`: the gateway callbacks received in the current period.
          *       `problems` counts every result except `applied`, `stale` and
          *       `duplicate`.
-         *     - `connections`: every connection of the environment, active ones
-         *       first, then by name.
+         *     - `connections`: up to 200 connections of the environment, active
+         *       ones first, then by name.
          *     - `reconciliation`: the unresolved items of every succeeded run
          *       (not only the period's) and the newest run, `null` when there
          *       is none.
@@ -2527,11 +2530,47 @@ export interface components {
             successful: number;
             /**
              * Format: int64
+             * @description `successful + expired + failed`.
+             */
+            finished: number;
+            /**
+             * Format: int64
              * @description Amount of the successful payments, in the currency's minor unit.
              */
             gross: number;
-            /** @description `successful / (successful + expired + failed)`; `null` when no payment finished. */
+            /** @description `successful / finished`; `null` when no payment finished. */
             success_rate: number | null;
+        };
+        /** @description The payments created in one period across every currency, counted by status. Amounts are per currency only, so there is no gross. */
+        DashboardPaymentCounts: {
+            /** Format: int64 */
+            created: number;
+            /** Format: int64 */
+            pending: number;
+            /** Format: int64 */
+            paid: number;
+            /** Format: int64 */
+            settled: number;
+            /** Format: int64 */
+            expired: number;
+            /** Format: int64 */
+            failed: number;
+            /**
+             * Format: int64
+             * @description `paid + settled`.
+             */
+            successful: number;
+            /**
+             * Format: int64
+             * @description `successful + expired + failed`.
+             */
+            finished: number;
+            /** @description `successful / finished`; `null` when no payment finished. */
+            success_rate: number | null;
+        };
+        DashboardPeriodCounts: {
+            current: components["schemas"]["DashboardPaymentCounts"];
+            previous: components["schemas"]["DashboardPaymentCounts"];
         };
         DashboardCurrencyTotals: {
             /** @description ISO 4217 code. */
@@ -2574,6 +2613,7 @@ export interface components {
             gross: components["schemas"]["DashboardCurrencyAmount"][];
         };
         DashboardPayments: {
+            totals: components["schemas"]["DashboardPeriodCounts"];
             /** @description One entry per currency seen in either period, sorted by code. */
             by_currency: components["schemas"]["DashboardCurrencyTotals"][];
             /** @description One point per day of the current period, oldest first. */
@@ -2589,7 +2629,12 @@ export interface components {
             delivered: number;
             /** Format: int64 */
             failed: number;
-            /** @description `delivered / (delivered + failed)`; `null` when no delivery finished. */
+            /**
+             * Format: int64
+             * @description `delivered + failed`.
+             */
+            finished: number;
+            /** @description `delivered / finished`; `null` when no delivery finished. */
             success_rate: number | null;
         };
         /** @description Callbacks per `InboundWebhookResult`; every result is present. */
@@ -2655,7 +2700,7 @@ export interface components {
             payments: components["schemas"]["DashboardPayments"];
             deliveries: components["schemas"]["DashboardDeliveries"];
             inbound: components["schemas"]["DashboardInbound"];
-            /** @description Every connection of the environment, active ones first, then by name. */
+            /** @description Up to 200 connections of the environment, active ones first, then by name. */
             connections: components["schemas"]["ConnectionListItem"][];
             reconciliation: components["schemas"]["DashboardReconciliation"];
             /** @description The 8 newest payments, newest first. */

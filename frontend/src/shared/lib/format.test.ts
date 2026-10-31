@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { currencyExponent, formatDateTimeWIB, formatDayWIB, formatMoney, formatPercent, formatRelative, parseDate } from "./format";
+import { currencyExponent, formatDateTimeWIB, formatDayWIB, formatMoney, formatPercent, formatPoints, formatRelative, parseDate } from "./format";
 
 describe("formatMoney", () => {
   it.each([
@@ -42,6 +42,14 @@ describe("formatDateTimeWIB", () => {
     expect(text).toContain("2 Jan 2026");
     expect(text).toContain("01.30");
     expect(text.endsWith("WIB")).toBe(true);
+  });
+});
+
+describe("formatPoints", () => {
+  it("signs non-zero points with one decimal in id-ID", () => {
+    expect(formatPoints(2.5)).toBe("+2,5");
+    expect(formatPoints(-10)).toBe("-10");
+    expect(formatPoints(0)).toBe("0");
   });
 });
 

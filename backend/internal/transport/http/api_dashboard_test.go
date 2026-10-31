@@ -58,7 +58,13 @@ func TestDashboardOverHTTP(t *testing.T) {
 		body["to"] != "2026-10-29T17:00:00Z" || body["previous_from"] != "2026-10-15T17:00:00Z" {
 		t.Fatalf("window = %v %v %v %v %v", body["environment"], body["range"], body["from"], body["to"], body["previous_from"])
 	}
-	payments := keysOf(t, "payments", body["payments"], "by_currency", "series")
+	payments := keysOf(t, "payments", body["payments"], "totals", "by_currency", "series")
+	periods := keysOf(t, "totals", payments["totals"], "current", "previous")
+	counts := keysOf(t, "totals.current", periods["current"], "created", "pending", "paid", "settled", "expired", "failed",
+		"successful", "finished", "success_rate")
+	if counts["created"] != float64(0) || counts["success_rate"] != nil {
+		t.Fatalf("empty totals = %v", counts)
+	}
 	series := payments["series"].([]any)
 	if len(series) != 7 {
 		t.Fatalf("series has %d points", len(series))
@@ -67,7 +73,7 @@ func TestDashboardOverHTTP(t *testing.T) {
 	if point["period_start"] != "2026-10-22T17:00:00Z" || point["period_end"] != "2026-10-23T17:00:00Z" {
 		t.Fatalf("point = %v", point)
 	}
-	keysOf(t, "deliveries", body["deliveries"], "total", "pending", "delivered", "failed", "success_rate")
+	keysOf(t, "deliveries", body["deliveries"], "total", "pending", "delivered", "failed", "finished", "success_rate")
 	inbound := keysOf(t, "inbound", body["inbound"], "total", "applied", "problems", "by_result")
 	keysOf(t, "by_result", inbound["by_result"], "applied", "stale", "duplicate", "mismatch", "unmapped", "invalid_signature",
 		"invalid_payload", "error")
@@ -113,14 +119,19 @@ func TestDashboardData(t *testing.T) {
 		t.Fatalf("by_currency = %v", by)
 	}
 	cur := keysOf(t, "currency", by[0], "currency", "current", "previous")
-	totals := keysOf(t, "current", cur["current"], "created", "pending", "paid", "settled", "expired", "failed", "successful", "gross", "success_rate")
+	totals := keysOf(t, "current", cur["current"], "created", "pending", "paid", "settled", "expired", "failed", "successful",
+		"finished", "gross", "success_rate")
 	if cur["currency"] != "IDR" || totals["successful"] != float64(2) || totals["gross"] != float64(5000) || totals["success_rate"] != float64(2)/3 {
 		t.Fatalf("current = %v", totals)
 	}
 	if prev := cur["previous"].(map[string]any); prev["created"] != float64(0) || prev["success_rate"] != nil {
 		t.Fatalf("previous = %v", prev)
 	}
-	if d := body["deliveries"].(map[string]any); d["success_rate"] != 0.5 || d["total"] != float64(2) {
+	all := body["payments"].(map[string]any)["totals"].(map[string]any)["current"].(map[string]any)
+	if all["successful"] != totals["successful"] || all["finished"] != totals["finished"] || all["success_rate"] != totals["success_rate"] {
+		t.Fatalf("totals.current = %v, IDR current = %v", all, totals)
+	}
+	if d := body["deliveries"].(map[string]any); d["success_rate"] != 0.5 || d["total"] != float64(2) || d["finished"] != float64(2) {
 		t.Fatalf("deliveries = %v", d)
 	}
 	in := body["inbound"].(map[string]any)

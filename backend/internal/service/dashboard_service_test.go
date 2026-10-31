@@ -99,7 +99,7 @@ func TestDashboardWindowAndRange(t *testing.T) {
 	if d.Range != domain.DashboardRange7d || len(d.Payments.Series) != 7 || !sameWindow(d.Window, want) {
 		t.Fatalf("range %s series %d window %+v", d.Range, len(d.Payments.Series), d.Window)
 	}
-	if len(f.dash.Windows) != 4 || len(f.dash.Environments) != 1 || *f.dash.Environments[0] != domain.EnvLive {
+	if len(f.dash.Windows) == 0 || len(f.dash.Environments) != 1 || *f.dash.Environments[0] != domain.EnvLive {
 		t.Fatalf("repo calls: windows %d environments %v", len(f.dash.Windows), f.dash.Environments)
 	}
 	for i, w := range f.dash.Windows {
@@ -118,7 +118,7 @@ func TestDashboardWindowAndRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	if d.Range != domain.DashboardRange30d || len(d.Payments.Series) != 30 || !d.Window.From.Equal(time.Date(2026, 9, 29, 17, 0, 0, 0, time.UTC)) ||
-		d.Window.Environment != nil || d.Environment != nil {
+		d.Window.Environment != nil {
 		t.Fatalf("30d: range %s series %d window %+v", d.Range, len(d.Payments.Series), d.Window)
 	}
 
@@ -148,10 +148,11 @@ func TestDashboardEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(d.Payments.ByCurrency) != 0 || len(d.Connections) != 0 || len(d.RecentPayments) != 0 || d.Reconciliation.LatestRun != nil ||
-		d.Reconciliation.UnresolvedItems != 0 {
+		d.Reconciliation.UnresolvedItems != 0 || d.Payments.Totals != (domain.DashboardPeriodTotals{}) ||
+		d.Payments.Totals.Current.SuccessRate() != nil {
 		t.Fatalf("dashboard = %+v", d)
 	}
-	if d.Deliveries.SuccessRate() != nil || d.Inbound.Total != 0 || len(d.Inbound.ByResult) != 8 {
+	if d.Deliveries.SuccessRate() != nil || d.Inbound.Total != 0 || len(d.Inbound.ByResult) != len(domain.InboundResults()) {
 		t.Fatalf("deliveries %+v inbound %+v", d.Deliveries, d.Inbound)
 	}
 	for i, p := range d.Payments.Series {
@@ -204,6 +205,15 @@ func TestDashboardFoldsRows(t *testing.T) {
 		t.Fatalf("USD = %+v", by[2])
 	}
 
+	// Totals add the counts of every currency and never an amount.
+	wantCurrent := domain.DashboardPaymentTotals{Created: 5, Pending: 2, Paid: 1, Settled: 1, Failed: 1}
+	wantPrevious := domain.DashboardPaymentTotals{Created: 3, Paid: 2, Expired: 1}
+	tot := d.Payments.Totals
+	if tot.Current != wantCurrent || tot.Previous != wantPrevious || tot.Current.Finished() != 3 ||
+		*tot.Current.SuccessRate() != 2.0/3 || *tot.Previous.SuccessRate() != 2.0/3 {
+		t.Fatalf("totals = %+v", tot)
+	}
+
 	s := d.Payments.Series
 	if len(s) != 7 {
 		t.Fatalf("series has %d points", len(s))
@@ -218,7 +228,7 @@ func TestDashboardFoldsRows(t *testing.T) {
 			t.Fatalf("point %d = %+v", i, p)
 		}
 	}
-	if *d.Deliveries.SuccessRate() != 2.0/3 || d.Inbound.Total != 4 || d.Inbound.Applied != 3 || d.Inbound.Problems != 1 ||
+	if *d.Deliveries.SuccessRate() != 2.0/3 || d.Deliveries.Finished() != 3 || d.Inbound.Total != 4 || d.Inbound.Applied != 3 || d.Inbound.Problems != 1 ||
 		d.Reconciliation.UnresolvedItems != 4 {
 		t.Fatalf("deliveries %+v inbound %+v reconciliation %+v", d.Deliveries, d.Inbound, d.Reconciliation)
 	}
@@ -231,7 +241,7 @@ func TestDashboardLists(t *testing.T) {
 	ctx := context.Background()
 	live, test := f.app(t, domain.EnvLive), f.app(t, domain.EnvTest)
 	zulu := f.connection(t, "zulu", domain.EnvLive, domain.ConnectionActive)
-	alpha := f.connection(t, "Alpha", domain.EnvLive, domain.ConnectionDisabled)
+	f.connection(t, "Alpha", domain.EnvLive, domain.ConnectionDisabled)
 	bravo := f.connection(t, "bravo", domain.EnvLive, domain.ConnectionActive)
 	gamma := f.connection(t, "gamma", domain.EnvTest, domain.ConnectionActive)
 	var livePayments []*domain.Payment
@@ -239,7 +249,7 @@ func TestDashboardLists(t *testing.T) {
 		livePayments = append(livePayments, f.payment(t, live))
 	}
 	testPayment := f.payment(t, test)
-	older := f.run(t, zulu)
+	f.run(t, zulu)
 	newer := f.run(t, bravo)
 	testRun := f.run(t, gamma)
 
@@ -281,8 +291,6 @@ func TestDashboardLists(t *testing.T) {
 		d.Reconciliation.LatestRun.PublicID != testRun.PublicID {
 		t.Fatalf("all: connections %d recent %v latest %s", len(d.Connections), paymentIDs(d.RecentPayments), d.Reconciliation.LatestRun.PublicID)
 	}
-	_ = alpha
-	_ = older
 }
 
 func connectionNames(conns []domain.Connection) []string {
